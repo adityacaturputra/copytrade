@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { calculateRisk } from "@/lib/risk-calc";
 
 // ==================== Types ====================
 
@@ -91,6 +92,13 @@ interface AccountInfo {
   currency: string;
 }
 
+interface RiskConfig {
+  riskPerTradePercent: number;
+  maxLeverage: number;
+  minLeverage: number;
+  skipNoSL: boolean;
+}
+
 interface DashboardData {
   stats: Stats;
   account: AccountInfo | null;
@@ -103,6 +111,7 @@ interface DashboardData {
   pendingDrafts: DraftTrade[];
   recentDrafts: DraftTrade[];
   tradingMode: "auto" | "manual";
+  riskConfig: RiskConfig | null;
 }
 
 // ==================== Component ====================
@@ -580,6 +589,12 @@ export default function Dashboard() {
               actingDraft={actingDraft}
               onAccept={handleDraftAction}
               onReject={handleDraftAction}
+              riskConfig={data?.riskConfig || null}
+              accountBalance={
+                data?.account?.availableBalance ||
+                data?.account?.totalBalance ||
+                0
+              }
             />
           )}
           {activeTab === "positions" && (
@@ -647,11 +662,15 @@ function DraftsTab({
   actingDraft,
   onAccept,
   onReject,
+  riskConfig,
+  accountBalance,
 }: {
   drafts: DraftTrade[];
   actingDraft: string | null;
   onAccept: (id: string, action: "accept" | "reject") => void;
   onReject: (id: string, action: "accept" | "reject") => void;
+  riskConfig: RiskConfig | null;
+  accountBalance: number;
 }) {
   if (drafts.length === 0) {
     return (
@@ -685,6 +704,8 @@ function DraftsTab({
                 acting={actingDraft === draft._id}
                 onAccept={onAccept}
                 onReject={onReject}
+                riskConfig={riskConfig}
+                accountBalance={accountBalance}
               />
             ))}
           </div>
@@ -713,13 +734,46 @@ function DraftCard({
   acting,
   onAccept,
   onReject,
+  riskConfig,
+  accountBalance,
 }: {
   draft: DraftTrade;
   acting: boolean;
   onAccept: (id: string, action: "accept" | "reject") => void;
   onReject: (id: string, action: "accept" | "reject") => void;
+  riskConfig: RiskConfig | null;
+  accountBalance: number;
 }) {
   const [showDetails, setShowDetails] = useState(false);
+
+  // Parse orderType from signalData
+  let orderType: string | null = null;
+  try {
+    const signal = JSON.parse(draft.signalData);
+    orderType = signal.orderType || null;
+  } catch {}
+
+  // Calculate risk preview — single source of truth (risk-calc.ts)
+  const hasSL = !!draft.stopLoss && draft.stopLoss > 0;
+  const canCalcRisk = hasSL && draft.entryPrice && draft.entryPrice > 0;
+  const rpt = riskConfig?.riskPerTradePercent ?? 1;
+
+  const riskResult =
+    canCalcRisk && riskConfig
+      ? calculateRisk({
+          accountBalance,
+          riskPerTradePercent: rpt,
+          entryPrice: draft.entryPrice!,
+          stopLossPrice: draft.stopLoss!,
+          minLeverage: riskConfig.minLeverage,
+          maxLeverage: riskConfig.maxLeverage,
+        })
+      : null;
+
+  const maxLossUsdt = accountBalance * (rpt / 100);
+  const slDistance = riskResult?.slDistancePercent ?? 0;
+  const riskNotional = riskResult?.notionalSize ?? 0;
+  const riskLeverage = riskResult?.leverage ?? draft.leverage;
 
   return (
     <div className="border border-amber-700/50 bg-amber-950/20 rounded-lg overflow-hidden">
@@ -737,6 +791,13 @@ function DraftCard({
                 {draft.symbol}
               </span>
               <span className="badge badge-warning">{draft.leverage}x</span>
+              {orderType && (
+                <span
+                  className={`badge ${orderType === "limit" ? "bg-purple-700/50 text-purple-300" : "bg-blue-700/50 text-blue-300"}`}
+                >
+                  {orderType === "limit" ? "📌 Limit" : "⚡ Market"}
+                </span>
+              )}
               {draft.confidence > 0 && (
                 <span className="badge badge-info">
                   {draft.confidence}% conf.
@@ -775,6 +836,68 @@ function DraftCard({
                 </div>
               )}
             </div>
+
+            {/* Risk Preview */}
+            {accountBalance > 0 && riskConfig && (
+              <div
+                className={`rounded-lg p-3 mb-3 text-xs ${
+                  !hasSL
+                    ? "bg-red-900/20 border border-red-700/50"
+                    : "bg-amber-900/20 border border-amber-700/30"
+                }`}
+              >
+                <div className="flex items-center gap-2 mb-1.5">
+                  <span className="font-semibold text-slate-300">
+                    🛡️ Risk Preview
+                  </span>
+                  <span className="badge badge-warning">
+                    RPT: {rpt}% = ${maxLossUsdt.toFixed(2)}
+                  </span>
+                  {!hasSL && riskConfig.skipNoSL && (
+                    <span className="badge badge-danger">
+                      🚫 No SL — will be skipped
+                    </span>
+                  )}
+                  {!hasSL && !riskConfig.skipNoSL && (
+                    <span className="badge badge-warning">
+                      ⚠️ No SL — original qty used
+                    </span>
+                  )}
+                </div>
+                {hasSL && draft.entryPrice ? (
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-slate-400">
+                    <div>
+                      SL Distance:{" "}
+                      <span className="text-white font-mono">
+                        {(slDistance * 100).toFixed(2)}%
+                      </span>
+                    </div>
+                    <div>
+                      Margin:{" "}
+                      <span className="text-amber-400 font-mono">
+                        ${maxLossUsdt.toFixed(2)}
+                      </span>
+                    </div>
+                    <div>
+                      Notional:{" "}
+                      <span className="text-emerald-400 font-mono">
+                        ${riskNotional.toFixed(2)}
+                      </span>
+                    </div>
+                    <div>
+                      Leverage:{" "}
+                      <span className="text-emerald-400 font-mono">
+                        {riskLeverage}x
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-slate-500">
+                    Cannot calculate — no stop loss provided.
+                  </p>
+                )}
+              </div>
+            )}
 
             {/* Reasoning */}
             {draft.reasoning && (
@@ -885,6 +1008,13 @@ function DraftCard({
 }
 
 function ResolvedDraftCard({ draft }: { draft: DraftTrade }) {
+  // Parse orderType from signalData
+  let orderType: string | null = null;
+  try {
+    const signal = JSON.parse(draft.signalData);
+    orderType = signal.orderType || null;
+  } catch {}
+
   const statusConfig: Record<string, { icon: string; class: string }> = {
     accepted: { icon: "✅", class: "border-green-900/30 bg-green-950/10" },
     rejected: { icon: "❌", class: "border-red-900/30 bg-red-950/10" },
@@ -903,6 +1033,13 @@ function ResolvedDraftCard({ draft }: { draft: DraftTrade }) {
             {draft.action}
           </span>
           <span className="font-medium">{draft.symbol}</span>
+          {orderType && (
+            <span
+              className={`text-xs px-1.5 py-0.5 rounded ${orderType === "limit" ? "bg-purple-700/50 text-purple-300" : "bg-blue-700/50 text-blue-300"}`}
+            >
+              {orderType === "limit" ? "📌 Limit" : "⚡ Market"}
+            </span>
+          )}
           <span className="text-slate-500 text-xs">by @{draft.author}</span>
         </div>
         <div className="flex items-center gap-3 text-xs text-slate-500">

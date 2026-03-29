@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB, getTradingMode, setTradingMode } from "@/lib/database";
+import { getRiskConfig, setRiskConfig } from "@/lib/risk";
 
 export const dynamic = "force-dynamic";
 
@@ -7,7 +8,8 @@ export async function GET() {
   try {
     await connectDB();
     const mode = await getTradingMode();
-    return NextResponse.json({ success: true, mode });
+    const riskConfig = await getRiskConfig();
+    return NextResponse.json({ success: true, mode, risk: riskConfig });
   } catch (error) {
     return NextResponse.json(
       {
@@ -23,17 +25,78 @@ export async function POST(request: NextRequest) {
   try {
     await connectDB();
     const body = await request.json();
-    const { mode } = body;
 
-    if (!mode || !["auto", "manual"].includes(mode)) {
-      return NextResponse.json(
-        { success: false, error: "Mode must be 'auto' or 'manual'" },
-        { status: 400 },
-      );
+    // Handle trading mode update
+    if (body.mode) {
+      if (!["auto", "manual"].includes(body.mode)) {
+        return NextResponse.json(
+          { success: false, error: "Mode must be 'auto' or 'manual'" },
+          { status: 400 },
+        );
+      }
+      await setTradingMode(body.mode as "auto" | "manual");
     }
 
-    await setTradingMode(mode as "auto" | "manual");
-    return NextResponse.json({ success: true, mode });
+    // Handle risk settings update
+    if (body.risk) {
+      const {
+        riskPerTradePercent,
+        maxPositionPercent,
+        maxLeverage,
+        minLeverage,
+        skipNoSL,
+      } = body.risk;
+
+      // Validation
+      if (
+        riskPerTradePercent !== undefined &&
+        (riskPerTradePercent < 0.1 || riskPerTradePercent > 100)
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Risk per trade must be between 0.1% and 100%",
+          },
+          { status: 400 },
+        );
+      }
+      if (
+        maxPositionPercent !== undefined &&
+        (maxPositionPercent < 1 || maxPositionPercent > 100)
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Max position percent must be between 1% and 100%",
+          },
+          { status: 400 },
+        );
+      }
+      if (maxLeverage !== undefined && (maxLeverage < 1 || maxLeverage > 125)) {
+        return NextResponse.json(
+          { success: false, error: "Max leverage must be between 1 and 125" },
+          { status: 400 },
+        );
+      }
+      if (minLeverage !== undefined && (minLeverage < 1 || minLeverage > 125)) {
+        return NextResponse.json(
+          { success: false, error: "Min leverage must be between 1 and 125" },
+          { status: 400 },
+        );
+      }
+
+      await setRiskConfig({
+        ...(riskPerTradePercent !== undefined && { riskPerTradePercent }),
+        ...(maxPositionPercent !== undefined && { maxPositionPercent }),
+        ...(maxLeverage !== undefined && { maxLeverage }),
+        ...(minLeverage !== undefined && { minLeverage }),
+        ...(skipNoSL !== undefined && { skipNoSL }),
+      });
+    }
+
+    const mode = await getTradingMode();
+    const riskConfig = await getRiskConfig();
+    return NextResponse.json({ success: true, mode, risk: riskConfig });
   } catch (error) {
     return NextResponse.json(
       {

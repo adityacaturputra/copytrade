@@ -42,6 +42,20 @@ const emptyForm: SourceFormData = {
   autoRefresh: true,
 };
 
+interface RiskConfig {
+  riskPerTradePercent: number;
+  maxLeverage: number;
+  minLeverage: number;
+  skipNoSL: boolean;
+}
+
+const defaultRiskConfig: RiskConfig = {
+  riskPerTradePercent: 1,
+  maxLeverage: 100,
+  minLeverage: 1,
+  skipNoSL: true,
+};
+
 export default function SettingsPage() {
   const [sources, setSources] = useState<DiscordSource[]>([]);
   const [loading, setLoading] = useState(true);
@@ -62,6 +76,13 @@ export default function SettingsPage() {
   const [extracting, setExtracting] = useState(false);
   const [copiedScript, setCopiedScript] = useState(false);
 
+  // Risk management state
+  const [riskConfig, setRiskConfigState] =
+    useState<RiskConfig>(defaultRiskConfig);
+  const [riskSaving, setRiskSaving] = useState(false);
+  const [riskError, setRiskError] = useState<string | null>(null);
+  const [riskSuccess, setRiskSuccess] = useState(false);
+
   const fetchSources = useCallback(async () => {
     try {
       const res = await fetch("/api/discord-sources");
@@ -79,9 +100,46 @@ export default function SettingsPage() {
     }
   }, []);
 
+  const fetchRiskConfig = useCallback(async () => {
+    try {
+      const res = await fetch("/api/settings");
+      const json = await res.json();
+      if (json.success && json.risk) {
+        setRiskConfigState(json.risk);
+      }
+    } catch {
+      // Use defaults
+    }
+  }, []);
+
   useEffect(() => {
     fetchSources();
-  }, [fetchSources]);
+    fetchRiskConfig();
+  }, [fetchSources, fetchRiskConfig]);
+
+  const handleRiskSave = async () => {
+    setRiskSaving(true);
+    setRiskError(null);
+    setRiskSuccess(false);
+    try {
+      const res = await fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ risk: riskConfig }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setRiskSuccess(true);
+        setTimeout(() => setRiskSuccess(false), 3000);
+      } else {
+        setRiskError(json.error || "Failed to save");
+      }
+    } catch (err) {
+      setRiskError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setRiskSaving(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -849,6 +907,221 @@ export default function SettingsPage() {
               </div>
             </div>
           )}
+        </div>
+
+        {/* Risk Management */}
+        <div className="card border-amber-700/50">
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-lg">🛡️</span>
+            <h3 className="text-sm font-semibold text-slate-300">
+              Risk Management
+            </h3>
+          </div>
+          <p className="text-xs text-slate-400 mb-4">
+            Margin is fixed at a % of your balance (e.g., 1% = $50 on a $5,000
+            account). Leverage is automatically derived from the Stop Loss
+            distance — the closer the SL, the higher the leverage needed to use
+            your allocated margin.
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="block text-sm text-slate-400 mb-1">
+                Margin Per Trade (% of Balance)
+              </label>
+              <div className="relative">
+                <input
+                  type="number"
+                  step="0.1"
+                  min="0.1"
+                  max="100"
+                  value={riskConfig.riskPerTradePercent}
+                  onChange={(e) =>
+                    setRiskConfigState({
+                      ...riskConfig,
+                      riskPerTradePercent: parseFloat(e.target.value) || 1,
+                    })
+                  }
+                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-amber-500 focus:outline-none pr-8"
+                />
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm">
+                  %
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-1">
+                Fixed margin per trade as % of balance. Default: 1%
+              </p>
+            </div>
+            <div className="flex items-center justify-center">
+              <div className="text-center text-xs text-slate-500 bg-slate-800/50 rounded-lg p-3 w-full border border-slate-700">
+                <p className="font-semibold text-slate-400 mb-1">
+                  💡 How it works
+                </p>
+                <p>Margin = Balance × {riskConfig.riskPerTradePercent}%</p>
+                <p>Leverage = ⌈1 / SL_distance⌉</p>
+                <p>Notional = Margin / SL_distance</p>
+              </div>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="block text-sm text-slate-400 mb-1">
+                Min Leverage
+              </label>
+              <div className="relative">
+                <input
+                  type="number"
+                  min="1"
+                  max="125"
+                  value={riskConfig.minLeverage}
+                  onChange={(e) =>
+                    setRiskConfigState({
+                      ...riskConfig,
+                      minLeverage: parseInt(e.target.value) || 1,
+                    })
+                  }
+                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-amber-500 focus:outline-none pr-8"
+                />
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm">
+                  x
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-1">
+                Minimum leverage. Default: 1x
+              </p>
+            </div>
+            <div>
+              <label className="block text-sm text-slate-400 mb-1">
+                Max Leverage
+              </label>
+              <div className="relative">
+                <input
+                  type="number"
+                  min="1"
+                  max="125"
+                  value={riskConfig.maxLeverage}
+                  onChange={(e) =>
+                    setRiskConfigState({
+                      ...riskConfig,
+                      maxLeverage: parseInt(e.target.value) || 100,
+                    })
+                  }
+                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-amber-500 focus:outline-none pr-8"
+                />
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm">
+                  x
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-1">
+                Maximum leverage cap. Default: 100x
+              </p>
+            </div>
+          </div>
+
+          {/* Skip no SL toggle */}
+          <div className="flex items-center gap-3 mb-4 bg-slate-800/50 border border-slate-700 rounded-lg p-3">
+            <input
+              type="checkbox"
+              id="skipNoSL"
+              checked={riskConfig.skipNoSL}
+              onChange={(e) =>
+                setRiskConfigState({
+                  ...riskConfig,
+                  skipNoSL: e.target.checked,
+                })
+              }
+              className="rounded border-slate-600 bg-slate-800 text-amber-600 focus:ring-amber-500 w-4 h-4"
+            />
+            <label htmlFor="skipNoSL" className="text-sm text-slate-300">
+              <span className="font-medium">
+                🚫 Skip trades without Stop Loss
+              </span>
+              <span className="block text-xs text-slate-500 mt-0.5">
+                When enabled, trades that have no SL will be automatically
+                rejected (auto mode) or shown with a warning (manual mode).
+              </span>
+            </label>
+          </div>
+
+          {/* Example calculation */}
+          <div className="bg-slate-800/50 border border-slate-700 rounded-lg p-3 mb-4">
+            <p className="text-xs text-slate-500 mb-2 font-semibold">
+              📐 Example Calculation (Balance: $5,000)
+            </p>
+            <div className="text-xs text-slate-400 space-y-1">
+              <p>
+                Margin:{" "}
+                <span className="text-amber-400">
+                  $
+                  {{ 1: 50, 2: 100, 5: 250 }[riskConfig.riskPerTradePercent] ??
+                    ((5000 * riskConfig.riskPerTradePercent) / 100).toFixed(2)}
+                </span>{" "}
+                ({riskConfig.riskPerTradePercent}% of $5,000)
+              </p>
+              <p>
+                If SL is <span className="text-white">2%</span> away → Leverage:{" "}
+                <span className="text-emerald-400">
+                  {Math.max(
+                    riskConfig.minLeverage,
+                    Math.min(riskConfig.maxLeverage, 50),
+                  )}
+                  x
+                </span>{" "}
+                → Notional:{" "}
+                <span className="text-emerald-400">
+                  $
+                  {(
+                    (5000 * riskConfig.riskPerTradePercent) /
+                    100 /
+                    0.02
+                  ).toFixed(2)}
+                </span>
+              </p>
+              <p>
+                If SL is <span className="text-white">5%</span> away → Leverage:{" "}
+                <span className="text-emerald-400">
+                  {Math.max(
+                    riskConfig.minLeverage,
+                    Math.min(riskConfig.maxLeverage, 20),
+                  )}
+                  x
+                </span>{" "}
+                → Notional:{" "}
+                <span className="text-emerald-400">
+                  $
+                  {(
+                    (5000 * riskConfig.riskPerTradePercent) /
+                    100 /
+                    0.05
+                  ).toFixed(2)}
+                </span>
+              </p>
+            </div>
+          </div>
+
+          {riskError && (
+            <div className="bg-red-900/30 border border-red-700/50 rounded-lg px-4 py-3 text-sm text-red-300 mb-3">
+              ⚠️ {riskError}
+            </div>
+          )}
+          {riskSuccess && (
+            <div className="bg-emerald-900/30 border border-emerald-700/50 rounded-lg px-4 py-3 text-sm text-emerald-300 mb-3">
+              ✅ Risk settings saved successfully!
+            </div>
+          )}
+          <button
+            onClick={handleRiskSave}
+            disabled={riskSaving}
+            className="bg-amber-600 hover:bg-amber-700 disabled:opacity-50 px-6 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2"
+          >
+            {riskSaving ? (
+              <>
+                <div className="spinner w-4 h-4 border-2" /> Saving...
+              </>
+            ) : (
+              "💾 Save Risk Settings"
+            )}
+          </button>
         </div>
 
         {/* How-to Guide */}

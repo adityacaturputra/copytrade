@@ -113,6 +113,14 @@ export interface ITradingMode extends Document {
   updatedAt: Date;
 }
 
+export interface IRiskSettings extends Document {
+  riskPerTradePercent: number; // default 1 (1% of balance as margin per trade)
+  maxLeverage: number; // default 100
+  minLeverage: number; // default 1
+  skipNoSL: boolean; // default true — skip trades without SL
+  updatedAt: Date;
+}
+
 // ─── Schemas ───────────────────────────────────────────────────────────────────
 
 const ProcessedMessageSchema = new Schema<IProcessedMessage>(
@@ -241,6 +249,16 @@ const TradingModeSchema = new Schema<ITradingMode>(
   { timestamps: { createdAt: false, updatedAt: true } },
 );
 
+const RiskSettingsSchema = new Schema<IRiskSettings>(
+  {
+    riskPerTradePercent: { type: Number, default: 1, min: 0.1, max: 100 },
+    maxLeverage: { type: Number, default: 100, min: 1, max: 125 },
+    minLeverage: { type: Number, default: 1, min: 1, max: 125 },
+    skipNoSL: { type: Boolean, default: true },
+  },
+  { timestamps: { createdAt: false, updatedAt: true } },
+);
+
 // ─── Models ────────────────────────────────────────────────────────────────────
 
 export const ProcessedMessage: Model<IProcessedMessage> =
@@ -264,6 +282,10 @@ export const TradingMode: Model<ITradingMode> =
 export const DiscordSource: Model<IDiscordSource> =
   models.DiscordSource ||
   mongoose.model<IDiscordSource>("DiscordSource", DiscordSourceSchema);
+
+export const RiskSettings: Model<IRiskSettings> =
+  models.RiskSettings ||
+  mongoose.model<IRiskSettings>("RiskSettings", RiskSettingsSchema);
 
 // ─── Helper Functions ──────────────────────────────────────────────────────────
 

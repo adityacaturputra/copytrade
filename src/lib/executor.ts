@@ -19,6 +19,7 @@ import {
 import { AIFactory } from "./ai/AIFactory";
 import { TradingSignal } from "./ai/types";
 import { ExchangeFactory } from "./exchange/ExchangeFactory";
+import { calculateRiskBasedPosition, getRiskConfig } from "./risk";
 
 export async function runSignalCheck(): Promise<{
   checked: number;
@@ -310,26 +311,120 @@ export async function executeSignal(
         return null;
       }
 
+      // Check skipNoSL — skip trades without stop loss if setting is enabled
+      if (!signal.stopLoss) {
+        const riskCfg = await getRiskConfig();
+        if (riskCfg.skipNoSL) {
+          console.warn(
+            `🚫 Skipping ${signal.action} ${signal.symbol}: no stop loss and skipNoSL is enabled`,
+          );
+          await TradeLog.create({
+            type: "signal",
+            action: "skipped_no_sl",
+            symbol: signal.symbol,
+            details: `Trade skipped: no stop loss provided and skipNoSL is enabled`,
+            result: "skipped",
+          });
+          return null;
+        }
+      }
+
+      // ─── Risk-Based Position Sizing ─────────────────────────────────
+      let orderQuantity = quantity;
+      let orderLeverage = leverage;
+
+      if (entryPrice && entryPrice > 0) {
+        const riskCalc = await calculateRiskBasedPosition(
+          entryPrice,
+          signal.stopLoss || null,
+          side,
+          quantity,
+          leverage,
+        );
+
+        if (riskCalc.applied) {
+          orderQuantity = riskCalc.quantity;
+          orderLeverage = riskCalc.leverage;
+          console.log(
+            `🛡️ Risk management applied: qty=${orderQuantity.toFixed(6)}, leverage=${orderLeverage}x (balance=$${riskCalc.accountBalance.toFixed(2)}, margin=$${riskCalc.marginUsdt.toFixed(2)}, slDist=${(riskCalc.slDistancePercent * 100).toFixed(2)}%)`,
+          );
+        } else {
+          console.warn(`⚠️ Risk management skipped: ${riskCalc.skipReason}`);
+        }
+      }
+
       // Place order via exchange
       const exchange = ExchangeFactory.getClient();
+
+      // Set leverage before placing order
+      try {
+        await exchange.setLeverage(signal.symbol, orderLeverage);
+      } catch (levErr) {
+        console.warn(
+          `⚠️ Failed to set leverage: ${levErr instanceof Error ? levErr.message : String(levErr)}`,
+        );
+      }
+
+      const orderSide = signal.action === "BUY" ? "BUY" : "SELL";
+      const closeSide = orderSide === "BUY" ? "SELL" : "BUY";
+      const orderType = signal.orderType === "limit" ? "LIMIT" : "MARKET";
+
       const orderResult = await exchange.placeOrder({
         symbol: signal.symbol,
-        side: signal.action === "BUY" ? "BUY" : "SELL",
-        type: (signal.orderType === "limit" ? "LIMIT" : "MARKET") as
-          | "LIMIT"
-          | "MARKET",
-        quantity,
+        side: orderSide,
+        type: orderType as "LIMIT" | "MARKET",
+        quantity: orderQuantity,
         price: signal.orderType === "limit" ? entryPrice : undefined,
-        leverage,
+        leverage: orderLeverage,
       });
+
+      const filledQty = orderResult.quantity || orderQuantity;
+
+      // ─── Place TP/SL via plan orders ────────────────────────────────
+      const tp = signal.takeProfitTargets?.[0];
+      const sl = signal.stopLoss;
+
+      if (tp) {
+        try {
+          const tpId = await exchange.placeTakeProfit(
+            signal.symbol,
+            tp,
+            tp,
+            closeSide,
+            filledQty,
+          );
+          console.log(`🎯 Take Profit set at ${tp} (plan order ${tpId})`);
+        } catch (tpErr) {
+          console.warn(
+            `⚠️ Failed to place TP: ${tpErr instanceof Error ? tpErr.message : String(tpErr)}`,
+          );
+        }
+      }
+
+      if (sl) {
+        try {
+          const slId = await exchange.placeStopLoss(
+            signal.symbol,
+            sl,
+            sl,
+            closeSide,
+            filledQty,
+          );
+          console.log(`🛑 Stop Loss set at ${sl} (plan order ${slId})`);
+        } catch (slErr) {
+          console.warn(
+            `⚠️ Failed to place SL: ${slErr instanceof Error ? slErr.message : String(slErr)}`,
+          );
+        }
+      }
 
       // Save position to DB
       const position = await Position.create({
         symbol: signal.symbol,
         side,
         entryPrice: entryPrice || orderResult.price || 0,
-        quantity: orderResult.quantity || quantity,
-        leverage,
+        quantity: orderResult.quantity || orderQuantity,
+        leverage: orderLeverage,
         takeProfitPrice: signal.takeProfitTargets?.[0] || undefined,
         stopLossPrice: signal.stopLoss || undefined,
         orderId: orderResult.orderId,

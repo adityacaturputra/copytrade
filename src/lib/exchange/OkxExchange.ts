@@ -523,14 +523,46 @@ export class OkxExchange implements ExchangeClient {
    *
    * Docs: https://www.okx.com/docs-v5/en/#rest-api-trade-place-order
    */
+  /**
+   * Round a quantity to the nearest lot size.
+   * OKX requires sz to be a multiple of lotSz and >= minSz.
+   */
+  private roundToLotSize(
+    quantity: number,
+    lotSz: string,
+    minSz: string,
+  ): number {
+    const lot = parseFloat(lotSz);
+    const min = parseFloat(minSz);
+    if (lot <= 0) return quantity;
+
+    // Round down to nearest lot size
+    let rounded = Math.floor(quantity / lot) * lot;
+
+    // Handle floating point precision (e.g. 0.01 * 1 = 0.010000000000000002)
+    const decimals = lotSz.includes(".") ? lotSz.split(".")[1].length : 0;
+    rounded = parseFloat(rounded.toFixed(decimals));
+
+    // Enforce minimum size
+    if (rounded < min) {
+      console.warn(
+        `[OKX] ⚠️ Rounded quantity ${rounded} is below minSz ${min}, using minSz`,
+      );
+      rounded = min;
+    }
+
+    return rounded;
+  }
+
   async placeOrder(orderParams: OrderParams): Promise<OrderResult> {
     const instId = this.toOkxSymbol(orderParams.symbol);
     const isBuy = orderParams.side === "BUY";
     const posSide = isBuy ? "long" : "short";
 
-    // Step 1: Validate instrument
+    // Step 1: Validate instrument and get lot size info
+    let instrumentInfo: Awaited<ReturnType<typeof this.validateInstrument>>;
     try {
-      await this.validateInstrument(orderParams.symbol);
+      instrumentInfo = await this.validateInstrument(orderParams.symbol);
     } catch (validationError) {
       const errMsg =
         validationError instanceof Error
@@ -540,7 +572,32 @@ export class OkxExchange implements ExchangeClient {
       throw validationError;
     }
 
-    // Step 2: Set leverage (with posSide for long_short_mode)
+    // Step 2: Convert quantity from base currency to contracts
+    // OKX swap contracts use sz = number of contracts, not base currency amount
+    // Each contract = ctVal base currency (e.g., 0.01 BTC for BTC-USDT-SWAP)
+    const ctVal = parseFloat(instrumentInfo.ctVal || "1");
+    const contracts = orderParams.quantity / ctVal;
+
+    // Step 3: Round contracts to lot size
+    const roundedQty = this.roundToLotSize(
+      contracts,
+      instrumentInfo.lotSz,
+      instrumentInfo.minSz,
+    );
+
+    if (contracts !== roundedQty) {
+      console.log(
+        `[OKX] 🔢 Quantity: ${orderParams.quantity} base → ${contracts.toFixed(4)} contracts → ${roundedQty} contracts (ctVal=${ctVal}, lotSz=${instrumentInfo.lotSz}, minSz=${instrumentInfo.minSz})`,
+      );
+    }
+
+    if (roundedQty <= 0) {
+      throw new Error(
+        `Order quantity too small: ${orderParams.quantity} base → ${contracts.toFixed(6)} contracts → ${roundedQty} after lot size rounding (ctVal=${ctVal}, lotSz=${instrumentInfo.lotSz}, minSz=${instrumentInfo.minSz})`,
+      );
+    }
+
+    // Step 4: Set leverage (with posSide for long_short_mode)
     if (orderParams.leverage) {
       await this.setLeverage(
         orderParams.symbol,
@@ -550,13 +607,13 @@ export class OkxExchange implements ExchangeClient {
       );
     }
 
-    // Step 3: Build and place order
+    // Step 5: Build and place order
     const orderBody: Record<string, string> = {
       instId,
       tdMode: "isolated",
       side: isBuy ? "buy" : "sell",
       ordType: orderParams.type === "LIMIT" ? "limit" : "market",
-      sz: String(orderParams.quantity),
+      sz: String(roundedQty),
       posSide,
     };
 
@@ -618,7 +675,7 @@ export class OkxExchange implements ExchangeClient {
         return {
           orderId: result.orderId,
           price,
-          quantity: orderParams.quantity,
+          quantity: roundedQty,
           status: "submitted",
         };
       }
@@ -627,6 +684,17 @@ export class OkxExchange implements ExchangeClient {
         `[OKX] ❌ Order rejected: sCode=${result.sCode}, sMsg=${result.sMsg}`,
       );
       throw new Error(`OKX order rejected: [${result.sCode}] ${result.sMsg}`);
+    }
+
+    // Even when top-level code !== "0", check data[0] for specific error
+    const specificError = data.data?.[0];
+    if (specificError?.sMsg) {
+      console.error(
+        `[OKX] ❌ Failed to place order: sCode=${specificError.sCode}, sMsg=${specificError.sMsg}`,
+      );
+      throw new Error(
+        `OKX order failed: [${specificError.sCode}] ${specificError.sMsg}`,
+      );
     }
 
     console.error(
@@ -840,12 +908,17 @@ export class OkxExchange implements ExchangeClient {
     quantity: number,
   ): Promise<string> {
     const instId = this.toOkxSymbol(symbol);
-    const posSide = side === "BUY" ? "long" : "short";
+
+    // `side` is the CLOSING direction passed from the executor:
+    //   SELL → closing a LONG position → posSide="long", side="sell"
+    //   BUY  → closing a SHORT position → posSide="short", side="buy"
+    const posSide = side === "SELL" ? "long" : "short";
+    const okxSide = side === "BUY" ? "buy" : "sell";
 
     const body = JSON.stringify({
       instId,
       tdMode: "isolated",
-      side: side === "BUY" ? "sell" : "buy", // SL is opposite side
+      side: okxSide,
       posSide,
       ordType: "conditional",
       sz: String(quantity),
@@ -875,12 +948,17 @@ export class OkxExchange implements ExchangeClient {
     quantity: number,
   ): Promise<string> {
     const instId = this.toOkxSymbol(symbol);
-    const posSide = side === "BUY" ? "long" : "short";
+
+    // `side` is the CLOSING direction passed from the executor:
+    //   SELL → closing a LONG position → posSide="long", side="sell"
+    //   BUY  → closing a SHORT position → posSide="short", side="buy"
+    const posSide = side === "SELL" ? "long" : "short";
+    const okxSide = side === "BUY" ? "buy" : "sell";
 
     const body = JSON.stringify({
       instId,
       tdMode: "isolated",
-      side: side === "BUY" ? "sell" : "buy", // TP is opposite side
+      side: okxSide,
       posSide,
       ordType: "conditional",
       sz: String(quantity),

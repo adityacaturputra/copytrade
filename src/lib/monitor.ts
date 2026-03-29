@@ -6,6 +6,7 @@ export async function runPositionMonitor(): Promise<{
   checked: number;
   actions: number;
   errors: string[];
+  syncedClosed: number;
 }> {
   await connectDB();
 
@@ -13,6 +14,7 @@ export async function runPositionMonitor(): Promise<{
     checked: 0,
     actions: 0,
     errors: [] as string[],
+    syncedClosed: 0,
   };
 
   try {
@@ -21,11 +23,71 @@ export async function runPositionMonitor(): Promise<{
 
     console.log(`📊 Monitoring ${openPositions.length} open positions`);
 
-    for (const position of openPositions) {
+    // ─── Sync with exchange: detect positions closed on exchange ───────
+    let exchangePositions: Map<
+      string,
+      {
+        markPrice: number;
+        unrealizedPnl: number;
+        entryPrice: number;
+        quantity: number;
+      }
+    > = new Map();
+    try {
+      const exchange = ExchangeFactory.getClient();
+      const exPositions = await exchange.getOpenPositions();
+      for (const ep of exPositions) {
+        exchangePositions.set(ep.symbol, {
+          markPrice: ep.markPrice,
+          unrealizedPnl: ep.unrealizedPnl,
+          entryPrice: ep.entryPrice,
+          quantity: ep.quantity,
+        });
+      }
+      console.log(`📊 Exchange has ${exchangePositions.size} open positions`);
+
+      // Find DB positions that are no longer on the exchange
+      for (const position of openPositions) {
+        if (!exchangePositions.has(position.symbol)) {
+          console.log(
+            `🔄 Sync: ${position.symbol} ${position.side} not found on exchange — marking as closed`,
+          );
+          position.status = "closed";
+          position.closedAt = new Date();
+          position.closeReason = "Closed on Exchange (external)";
+          await position.save();
+
+          await TradeLog.create({
+            type: "monitor",
+            action: "sync_close",
+            symbol: position.symbol,
+            details: `Position ${position.side} ${position.symbol} was closed on the exchange externally. Marked as closed in DB.`,
+            result: "success",
+          });
+
+          result.syncedClosed++;
+        }
+      }
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.warn(`⚠️ Failed to fetch exchange positions for sync: ${errMsg}`);
+      // Continue with price-based monitoring even if sync fails
+    }
+
+    // Re-fetch open positions after sync (some may have been closed)
+    const activePositions = await Position.find({ status: "open" });
+
+    for (const position of activePositions) {
       try {
-        // Get current price from exchange
-        const exchange = ExchangeFactory.getClient();
-        const currentPrice = await exchange.getTickerPrice(position.symbol);
+        // Use exchange position data if available, otherwise fetch ticker
+        const exPos = exchangePositions.get(position.symbol);
+        let currentPrice: number;
+        if (exPos?.markPrice) {
+          currentPrice = exPos.markPrice;
+        } else {
+          const exchange = ExchangeFactory.getClient();
+          currentPrice = await exchange.getTickerPrice(position.symbol);
+        }
         position.currentPrice = currentPrice;
 
         // Calculate PNL
