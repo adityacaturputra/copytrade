@@ -240,6 +240,7 @@ async function createDraft(
     content: string;
     messageUrl: string;
     imageUrls: string[];
+    timestamp?: Date;
   },
 ): Promise<void> {
   const side = signal.action === "SELL" ? "SHORT" : "LONG";
@@ -266,10 +267,11 @@ async function createDraft(
     confidence: signal.confidence || 0,
     reasoning: signal.reasoning || "",
     status: "pending",
+    discordTimestamp: msg.timestamp || null,
   });
 
   console.log(
-    `📝 Created draft: ${signal.action} ${signal.symbol} (manual mode)`,
+    `📝 Created draft: ${signal.action} ${signal.symbol} (manual mode) — discordTimestamp: ${msg.timestamp}`,
   );
 }
 

@@ -88,6 +88,7 @@ export interface IDraftTrade extends Document {
   reasoning: string;
   status: "pending" | "accepted" | "rejected" | "expired";
   positionId?: string;
+  discordTimestamp?: Date;
   createdAt: Date;
   resolvedAt?: Date;
 }
@@ -206,6 +207,7 @@ const DraftTradeSchema = new Schema<IDraftTrade>(
       default: "pending",
     },
     positionId: { type: String, default: null },
+    discordTimestamp: { type: Date, default: null },
     resolvedAt: { type: Date, default: null },
   },
   { timestamps: { createdAt: "createdAt", updatedAt: false } },
@@ -326,9 +328,11 @@ export function getAllPositions(limit: number = 50) {
 }
 
 export function getPendingDrafts() {
-  return DraftTrade.find({ status: "pending" }).sort({ createdAt: -1 }).lean();
+  return DraftTrade.find({ status: "pending" })
+    .sort({ discordTimestamp: -1 })
+    .lean();
 }
 
 export function getRecentDrafts(limit: number = 50) {
-  return DraftTrade.find().sort({ createdAt: -1 }).limit(limit).lean();
+  return DraftTrade.find().sort({ discordTimestamp: -1 }).limit(limit).lean();
 }

@@ -72,6 +72,7 @@ interface DraftTrade {
   reasoning: string;
   status: "pending" | "accepted" | "rejected" | "expired";
   positionId?: string;
+  discordTimestamp?: string;
   createdAt: string;
   resolvedAt?: string;
 }
@@ -696,7 +697,15 @@ function DraftCard({
             {/* Author & Time */}
             <div className="flex items-center gap-3 text-xs text-slate-500">
               <span>👤 @{draft.author}</span>
-              <span>🕐 {new Date(draft.createdAt).toLocaleString()}</span>
+              {draft.discordTimestamp ? (
+                <span className="text-blue-400">
+                  💬 Discord:{" "}
+                  {new Date(draft.discordTimestamp).toLocaleString()}
+                </span>
+              ) : null}
+              <span>
+                🕐 Drafted: {new Date(draft.createdAt).toLocaleString()}
+              </span>
               {draft.messageUrl && (
                 <a
                   href={draft.messageUrl}
@@ -819,9 +828,11 @@ function ResolvedDraftCard({ draft }: { draft: DraftTrade }) {
             </a>
           )}
           <span>
-            {draft.resolvedAt
-              ? new Date(draft.resolvedAt).toLocaleString()
-              : new Date(draft.createdAt).toLocaleString()}
+            {draft.discordTimestamp
+              ? `💬 ${new Date(draft.discordTimestamp).toLocaleString()}`
+              : draft.resolvedAt
+                ? new Date(draft.resolvedAt).toLocaleString()
+                : new Date(draft.createdAt).toLocaleString()}
           </span>
         </div>
       </div>
