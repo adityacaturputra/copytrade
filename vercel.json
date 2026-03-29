@@ -1,0 +1,12 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/signal-check",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/position-monitor",
+      "schedule": "*/30 * * * *"
+    }
+  ]
+}
