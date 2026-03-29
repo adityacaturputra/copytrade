@@ -100,6 +100,7 @@ export interface ExchangeClient {
     symbol: string,
     leverage: number,
     marginType?: "isolated" | "cross",
+    side?: "BUY" | "SELL",
   ): Promise<void>;
 
   // ─── Stop Loss / Take Profit ────────────────────────────────────────

@@ -14,41 +14,48 @@ interface Stats {
 }
 
 interface Position {
-  id: number;
+  _id?: string;
+  id?: number;
   symbol: string;
   side: string;
-  entry_price: number;
-  current_price?: number;
+  entryPrice: number;
+  currentPrice?: number;
   quantity: number;
   leverage: number;
-  take_profit_price?: number;
-  stop_loss_price?: number;
+  takeProfitPrice?: number;
+  stopLossPrice?: number;
   pnl: number;
   status: string;
-  opened_at: string;
-  closed_at?: string;
-  close_reason?: string;
+  openedAt: string;
+  closedAt?: string;
+  closeReason?: string;
 }
 
 interface Message {
-  id: number;
-  message_id: string;
+  _id?: string;
+  id?: number;
+  messageId?: string;
+  message_id?: string;
   author: string;
   content: string;
+  signalType?: string;
   signal_type?: string;
   status: string;
-  created_at: string;
+  createdAt?: string;
+  created_at?: string;
 }
 
 interface Log {
-  id: number;
+  _id?: string;
+  id?: number;
   type: string;
   action: string;
   symbol?: string;
   details?: string;
   result?: string;
   error?: string;
-  created_at: string;
+  createdAt?: string;
+  created_at?: string;
 }
 
 interface DraftTrade {
@@ -77,8 +84,18 @@ interface DraftTrade {
   resolvedAt?: string;
 }
 
+interface AccountInfo {
+  totalBalance: number;
+  availableBalance: number;
+  unrealizedPnl: number;
+  currency: string;
+}
+
 interface DashboardData {
   stats: Stats;
+  account: AccountInfo | null;
+  exchangeProvider: string | null;
+  exchangeError: string | null;
   openPositions: Position[];
   recentMessages: Message[];
   recentLogs: Log[];
@@ -343,6 +360,74 @@ export default function Dashboard() {
           </div>
         )}
 
+        {/* Exchange Connection Status */}
+        <div
+          className={`rounded-lg px-4 py-3 flex items-center gap-3 ${
+            data?.account
+              ? "bg-slate-800/50 border border-slate-700"
+              : "bg-red-900/30 border border-red-700/50"
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <span
+              className={`w-3 h-3 rounded-full ${data?.account ? "bg-green-500 pulse-dot" : "bg-red-500 animate-pulse"}`}
+            />
+            <span className="text-sm font-medium">
+              Exchange:{" "}
+              <span className="text-white uppercase">
+                {data?.exchangeProvider || "unknown"}
+              </span>
+            </span>
+          </div>
+          {data?.account ? (
+            <div className="flex items-center gap-4 ml-4 text-sm">
+              <span>
+                Balance:{" "}
+                <span className="text-white font-mono font-bold">
+                  {data.account.totalBalance?.toFixed(2)}{" "}
+                  {data.account.currency}
+                </span>
+              </span>
+              <span>
+                Available:{" "}
+                <span className="text-white font-mono">
+                  {data.account.availableBalance?.toFixed(2)}
+                </span>
+              </span>
+              {data.account.unrealizedPnl !== 0 && (
+                <span
+                  className={
+                    data.account.unrealizedPnl >= 0
+                      ? "text-success"
+                      : "text-danger"
+                  }
+                >
+                  PnL: {data.account.unrealizedPnl >= 0 ? "+" : ""}
+                  {data.account.unrealizedPnl?.toFixed(2)}
+                </span>
+              )}
+            </div>
+          ) : (
+            <div className="ml-4 text-sm">
+              <span className="text-red-300">
+                ⚠️{" "}
+                {data?.exchangeError?.toLowerCase().includes("ip whitelist")
+                  ? `Your IP is not in the OKX API key whitelist. Go to OKX → Profile → API Management → Edit your key → Add your current IP or disable IP restriction.`
+                  : data?.exchangeError?.toLowerCase().includes("enotfound") ||
+                      data?.exchangeError
+                        ?.toLowerCase()
+                        .includes("econnrefused")
+                    ? `OKX servers are unreachable from your network (ISP blocking). Enable VPN to connect.`
+                    : data?.exchangeError ||
+                      "Check your API keys and network connection."}
+              </span>
+            </div>
+          )}
+          {data?.exchangeProvider === "okx" && (
+            <span className="ml-auto badge badge-warning">DEMO MODE</span>
+          )}
+        </div>
+
         {/* Stats Cards */}
         <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
           <StatCard
@@ -403,7 +488,7 @@ export default function Dashboard() {
                 </thead>
                 <tbody>
                   {data.openPositions.map((pos) => (
-                    <tr key={pos.id}>
+                    <tr key={pos._id || pos.id}>
                       <td className="font-medium">{pos.symbol}</td>
                       <td>
                         <span
@@ -412,14 +497,14 @@ export default function Dashboard() {
                           {pos.side}
                         </span>
                       </td>
-                      <td>{pos.entry_price?.toFixed(2)}</td>
-                      <td>{pos.current_price?.toFixed(2) || "-"}</td>
+                      <td>{pos.entryPrice?.toFixed(2)}</td>
+                      <td>{pos.currentPrice?.toFixed(2) || "-"}</td>
                       <td>{pos.leverage}x</td>
                       <td className="text-success">
-                        {pos.take_profit_price?.toFixed(2) || "-"}
+                        {pos.takeProfitPrice?.toFixed(2) || "-"}
                       </td>
                       <td className="text-danger">
-                        {pos.stop_loss_price?.toFixed(2) || "-"}
+                        {pos.stopLossPrice?.toFixed(2) || "-"}
                       </td>
                       <td
                         className={`font-mono ${(pos.pnl || 0) >= 0 ? "text-success" : "text-danger"}`}
@@ -428,7 +513,7 @@ export default function Dashboard() {
                         {pos.pnl?.toFixed(2) || "0.00"}
                       </td>
                       <td className="text-slate-400 text-xs">
-                        {new Date(pos.opened_at).toLocaleString()}
+                        {new Date(pos.openedAt).toLocaleString()}
                       </td>
                     </tr>
                   ))}
@@ -510,11 +595,15 @@ export default function Dashboard() {
       {/* Footer */}
       <footer className="border-t border-slate-700 mt-8 py-4 text-center text-xs text-slate-500">
         <p>
-          CopyTrade — Automated AI Trading Signal Copier • Discord → AI → MEXC
+          CopyTrade — Automated AI Trading Signal Copier • Discord → AI →{" "}
+          {(data?.exchangeProvider || "mexc").toUpperCase()}
         </p>
         <p className="mt-1">
-          Mode: {tradingMode === "auto" ? "🤖 Auto" : "👆 Manual"} • Cron:
-          Signal Check every 5 min • Position Monitor every 30 min
+          Mode: {tradingMode === "auto" ? "🤖 Auto" : "👆 Manual"} • Exchange:{" "}
+          {data?.exchangeProvider === "okx"
+            ? "OKX Demo"
+            : (data?.exchangeProvider || "mexc").toUpperCase()}{" "}
+          • Cron: Signal Check every 5 min • Position Monitor every 30 min
         </p>
       </footer>
     </div>
@@ -869,7 +958,7 @@ function PositionsTab({ positions }: { positions: Position[] }) {
         </thead>
         <tbody>
           {positions.map((pos) => (
-            <tr key={pos.id}>
+            <tr key={pos._id || pos.id}>
               <td className="font-medium">{pos.symbol}</td>
               <td>
                 <span
@@ -878,8 +967,8 @@ function PositionsTab({ positions }: { positions: Position[] }) {
                   {pos.side}
                 </span>
               </td>
-              <td>{pos.entry_price?.toFixed(4)}</td>
-              <td>{pos.current_price?.toFixed(4) || "-"}</td>
+              <td>{pos.entryPrice?.toFixed(4)}</td>
+              <td>{pos.currentPrice?.toFixed(4) || "-"}</td>
               <td>{pos.quantity}</td>
               <td>{pos.leverage}x</td>
               <td
@@ -892,10 +981,10 @@ function PositionsTab({ positions }: { positions: Position[] }) {
                 <StatusBadge status={pos.status} />
               </td>
               <td className="text-xs text-slate-400">
-                {pos.close_reason || "-"}
+                {pos.closeReason || "-"}
               </td>
               <td className="text-xs text-slate-400">
-                {new Date(pos.opened_at).toLocaleString()}
+                {new Date(pos.openedAt).toLocaleString()}
               </td>
             </tr>
           ))}
@@ -919,23 +1008,24 @@ function SignalsTab({ messages }: { messages: Message[] }) {
     <div className="space-y-3">
       {messages.map((msg) => (
         <div
-          key={msg.id}
+          key={msg._id || msg.id}
           className="border border-slate-700 rounded-lg p-4 hover:border-slate-600 transition"
         >
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium">@{msg.author}</span>
-              {msg.signal_type && msg.signal_type !== "none" && (
-                <span
-                  className={`badge ${msg.signal_type === "LONG" || msg.signal_type === "BUY" ? "badge-success" : "badge-danger"}`}
-                >
-                  {msg.signal_type}
-                </span>
-              )}
+              {(msg.signalType || msg.signal_type) &&
+                (msg.signalType || msg.signal_type) !== "none" && (
+                  <span
+                    className={`badge ${(msg.signalType || msg.signal_type) === "LONG" || (msg.signalType || msg.signal_type) === "BUY" ? "badge-success" : "badge-danger"}`}
+                  >
+                    {msg.signalType || msg.signal_type}
+                  </span>
+                )}
               <StatusBadge status={msg.status} />
             </div>
             <span className="text-xs text-slate-500">
-              {new Date(msg.created_at).toLocaleString()}
+              {new Date(msg.createdAt || msg.created_at || "").toLocaleString()}
             </span>
           </div>
           <p className="text-sm text-slate-300 whitespace-pre-wrap">
@@ -961,7 +1051,7 @@ function LogsTab({ logs }: { logs: Log[] }) {
     <div className="space-y-2 max-h-[500px] overflow-y-auto">
       {logs.map((log) => (
         <div
-          key={log.id}
+          key={log._id || log.id}
           className={`border rounded-lg p-3 text-sm ${log.error ? "border-red-900/50 bg-red-950/20" : "border-slate-700"}`}
         >
           <div className="flex items-center justify-between mb-1">
@@ -982,7 +1072,7 @@ function LogsTab({ logs }: { logs: Log[] }) {
               )}
             </div>
             <span className="text-xs text-slate-500">
-              {new Date(log.created_at).toLocaleString()}
+              {new Date(log.createdAt || log.created_at || "").toLocaleString()}
             </span>
           </div>
           {log.details && (

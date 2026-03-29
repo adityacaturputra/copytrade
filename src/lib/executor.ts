@@ -18,7 +18,7 @@ import {
 } from "./discord";
 import { AIFactory } from "./ai/AIFactory";
 import { TradingSignal } from "./ai/types";
-import { mexcPlaceOrder } from "./mexc-api";
+import { ExchangeFactory } from "./exchange/ExchangeFactory";
 
 export async function runSignalCheck(): Promise<{
   checked: number;
@@ -310,11 +310,14 @@ export async function executeSignal(
         return null;
       }
 
-      // Place order on MEXC
-      const orderResult = await mexcPlaceOrder({
+      // Place order via exchange
+      const exchange = ExchangeFactory.getClient();
+      const orderResult = await exchange.placeOrder({
         symbol: signal.symbol,
         side: signal.action === "BUY" ? "BUY" : "SELL",
-        type: signal.orderType || "market",
+        type: (signal.orderType === "limit" ? "LIMIT" : "MARKET") as
+          | "LIMIT"
+          | "MARKET",
         quantity,
         price: signal.orderType === "limit" ? entryPrice : undefined,
         leverage,
@@ -347,14 +350,9 @@ export async function executeSignal(
         status: "open",
       });
 
+      const exchange = ExchangeFactory.getClient();
       for (const pos of positions) {
-        const closeSide = pos.side === "LONG" ? "SELL" : "BUY";
-        await mexcPlaceOrder({
-          symbol: pos.symbol,
-          side: closeSide,
-          type: "market",
-          quantity: pos.quantity,
-        });
+        await exchange.closePosition(pos.symbol, pos.orderId, pos.quantity);
 
         pos.status = "closed";
         pos.closedAt = new Date();

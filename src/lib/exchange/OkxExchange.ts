@@ -11,16 +11,19 @@ import {
 
 // ==================== OKX Exchange Adapter ====================
 
-const BASE_URL = "https://www.okx.com";
+const BASE_URL = process.env.OKX_BASE_URL || "https://www.okx.com";
 
 /**
  * OKX V5 API — ExchangeClient implementation.
  *
  * Auth docs: https://www.okx.com/docs-v5/en/#rest-api-authentication
+ * Trade docs: https://www.okx.com/docs-v5/en/#rest-api-trade
+ * Account docs: https://www.okx.com/docs-v5/en/#rest-api-account
  *
  * Env vars used:
  *   OKX_API_KEY, OKX_SECRET_KEY, OKX_PASSPHRASE
  *   OKX_SIMULATED (optional, set to "true" for demo/testnet)
+ *   OKX_BASE_URL (optional, e.g. https://aws.okx.com)
  */
 export class OkxExchange implements ExchangeClient {
   readonly name = "okx";
@@ -48,6 +51,34 @@ export class OkxExchange implements ExchangeClient {
         "Content-Type": "application/json",
       },
     });
+
+    // ─── Error-only request/response logging ──────────────────────────
+    this.client.interceptors.response.use(
+      (response) => {
+        // Check if OKX returned a business-level error (code !== "0")
+        const data = response.data;
+        if (data && data.code !== undefined && data.code !== "0") {
+          const method = (response.config.method || "GET").toUpperCase();
+          console.error(
+            `[OKX] ❌ ${method} ${response.config.url}\n` +
+              `       ➡️  Request body: ${response.config.data || "(no body)"}\n` +
+              `       ⬅️  Response (${response.status}): ${JSON.stringify(data)}`,
+          );
+        }
+        return response;
+      },
+      (error) => {
+        if (axios.isAxiosError(error) && error.response) {
+          const method = (error.config?.method || "GET").toUpperCase();
+          console.error(
+            `[OKX] ❌ ${method} ${error.config?.url} — HTTP ${error.response.status}\n` +
+              `       ➡️  Request body: ${error.config?.data || "(no body)"}\n` +
+              `       ⬅️  Response body: ${JSON.stringify(error.response.data)}`,
+          );
+        }
+        return Promise.reject(error);
+      },
+    );
   }
 
   // ─── Auth helpers ──────────────────────────────────────────────────
@@ -115,6 +146,190 @@ export class OkxExchange implements ExchangeClient {
     return instId.replace(/-/g, "").replace("SWAP", "");
   }
 
+  /**
+   * Validate that an instrument exists on OKX and get its details.
+   * Returns the instrument info or throws if not found.
+   *
+   * Docs: https://www.okx.com/docs-v5/en/#rest-api-public-data-get-instruments
+   */
+  async validateInstrument(symbol: string): Promise<{
+    instId: string;
+    baseCcy: string;
+    quoteCcy: string;
+    ctVal: string;
+    ctValCcy: string;
+    ctMult: string;
+    ctType: string;
+    lotSz: string;
+    minSz: string;
+    tickSz: string;
+    state: string;
+    instType: string;
+  }> {
+    const instId = this.toOkxSymbol(symbol);
+    const path = `/api/v5/public/instruments?instType=SWAP&instId=${instId}`;
+
+    console.log(`[OKX] 🔍 Validating instrument: ${instId}...`);
+
+    try {
+      const response = await this.client.get(path);
+      const data = response.data;
+
+      if (data.code === "0" && data.data?.[0]) {
+        const inst = data.data[0];
+        console.log(
+          `[OKX] ✅ Instrument validated: ${instId} (state=${inst.state}, ctVal=${inst.ctVal}, lotSz=${inst.lotSz}, minSz=${inst.minSz})`,
+        );
+        return inst;
+      }
+
+      // Instrument not found — try to suggest alternatives
+      console.warn(
+        `[OKX] ⚠️ Instrument ${instId} not found. Searching for alternatives...`,
+      );
+
+      // Search by underlying
+      const baseCcy = instId.split("-")[0];
+      const searchPath = `/api/v5/public/instruments?instType=SWAP`;
+      const searchResp = await this.client.get(searchPath);
+      const searchData = searchResp.data;
+
+      if (searchData.code === "0" && searchData.data) {
+        const matches = searchData.data.filter(
+          (i: { baseCcy: string; quoteCcy: string; state: string }) =>
+            i.baseCcy === baseCcy && i.state === "live",
+        );
+        if (matches.length > 0) {
+          const suggestions = matches
+            .map(
+              (m: { instId: string; quoteCcy: string }) =>
+                `${m.instId} (${m.quoteCcy})`,
+            )
+            .join(", ");
+          throw new Error(
+            `Instrument "${instId}" not found. Did you mean one of: ${suggestions}?`,
+          );
+        }
+      }
+
+      throw new Error(
+        `Instrument "${instId}" not found on OKX. No alternatives available for ${baseCcy}.`,
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("not found")) {
+        throw error;
+      }
+      const errMsg = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to validate instrument ${instId}: ${errMsg}`);
+    }
+  }
+
+  // ─── Account Configuration ──────────────────────────────────────────
+
+  /**
+   * Set OKX account mode.
+   * 1 = Simple (cash), 2 = Single-currency margin, 3 = Multi-currency margin, 4 = Portfolio margin
+   * Futures/swap trading requires mode 2+.
+   *
+   * Docs: https://www.okx.com/docs-v5/en/#rest-api-account-set-account-mode
+   */
+  async setAccountMode(
+    accountMode: "1" | "2" | "3" | "4" = "2",
+  ): Promise<void> {
+    const path = "/api/v5/account/set-account-mode";
+    const body = JSON.stringify({ acctMode: accountMode });
+    const headers = this.authHeaders("POST", path, body);
+
+    console.log(
+      `[OKX] Setting account mode to ${accountMode} (${accountMode === "2" ? "Single-currency margin" : accountMode === "3" ? "Multi-currency margin" : "mode " + accountMode})...`,
+    );
+
+    try {
+      const response = await this.client.post(path, body, { headers });
+      const data = response.data;
+
+      if (data.code === "0") {
+        console.log(`[OKX] ✅ Account mode set to ${accountMode}`);
+        return;
+      }
+
+      console.error(
+        `[OKX] ❌ Failed to set account mode: code=${data.code}, msg=${data.msg}`,
+      );
+      throw new Error(
+        `Failed to set OKX account mode: ${data.msg || "Unknown error"} (code: ${data.code})`,
+      );
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 404) {
+        console.warn(
+          `[OKX] ⚠️ set-account-mode endpoint returned 404 — this is normal for simulated trading or when account mode is already correct`,
+        );
+        throw new Error(
+          "set-account-mode not available (simulated trading or already configured)",
+        );
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Set position mode for an instrument.
+   * "long_short_mode" = hedged (supports posSide: long/short)
+   * "net_mode" = net position (no posSide needed)
+   *
+   * Docs: https://www.okx.com/docs-v5/en/#rest-api-account-set-position-mode
+   */
+  async setPositionMode(
+    symbol: string,
+    positionMode: "long_short_mode" | "net_mode" = "long_short_mode",
+  ): Promise<void> {
+    const path = "/api/v5/account/set-position-mode";
+    const body = JSON.stringify({ posMode: positionMode });
+    const headers = this.authHeaders("POST", path, body);
+
+    console.log(`[OKX] Setting position mode to "${positionMode}"...`);
+
+    const response = await this.client.post(path, body, { headers });
+    const data = response.data;
+
+    if (data.code === "0") {
+      console.log(`[OKX] ✅ Position mode set to ${positionMode}`);
+    } else {
+      console.error(
+        `[OKX] ❌ Failed to set position mode: code=${data.code}, msg=${data.msg}`,
+      );
+      throw new Error(
+        `Failed to set OKX position mode: ${data.msg || "Unknown error"} (code: ${data.code})`,
+      );
+    }
+  }
+
+  /**
+   * Ensure the account is configured correctly for futures/swap trading.
+   * Sets account mode to Single-currency margin and position mode to long_short_mode.
+   */
+  async ensureAccountConfigured(symbol: string): Promise<void> {
+    // Try to set account mode (may fail gracefully for simulated trading)
+    try {
+      await this.setAccountMode("2");
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[OKX] ⚠️ Could not set account mode (may already be correct): ${errMsg}`,
+      );
+    }
+
+    // Try to set position mode to long_short_mode
+    try {
+      await this.setPositionMode(symbol, "long_short_mode");
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[OKX] ⚠️ Could not set position mode (may already be correct): ${errMsg}`,
+      );
+    }
+  }
+
   // ─── Account ────────────────────────────────────────────────────────
 
   async getAccountInfo(): Promise<AccountInfo> {
@@ -130,12 +345,12 @@ export class OkxExchange implements ExchangeClient {
         (d: { ccy: string }) => d.ccy === "USDT",
       );
       return {
-        totalBalance: parseFloat(usdtDetail?.eq || account.totalEq || "0"),
+        totalBalance: parseFloat(account.totalEq || "0"),
         availableBalance: parseFloat(
           usdtDetail?.availBal || usdtDetail?.cashBal || "0",
         ),
         unrealizedPnl: parseFloat(usdtDetail?.upl || "0"),
-        currency: "USDT",
+        currency: "USD",
       };
     }
     throw new Error(`OKX API error: ${data.msg || "Unknown error"}`);
@@ -230,47 +445,119 @@ export class OkxExchange implements ExchangeClient {
 
   // ─── Leverage ───────────────────────────────────────────────────────
 
+  /**
+   * Set leverage for a symbol.
+   *
+   * IMPORTANT: When account is in long_short_mode (hedged), OKX requires
+   * posSide parameter. We set leverage for BOTH long and short sides.
+   *
+   * Docs: https://www.okx.com/docs-v5/en/#rest-api-account-set-leverage
+   */
   async setLeverage(
     symbol: string,
     leverage: number,
     marginType: "isolated" | "cross" = "isolated",
+    side?: "BUY" | "SELL",
   ): Promise<void> {
     const instId = this.toOkxSymbol(symbol);
     const path = "/api/v5/account/set-leverage";
-    const body = JSON.stringify({
-      instId,
-      lever: String(leverage),
-      mgnMode: marginType,
-    });
 
-    const headers = this.authHeaders("POST", path, body);
+    // In long_short_mode, we need to set leverage for each posSide separately
+    // If side is specified, set for that side only; otherwise set for both
+    const sides: Array<{ posSide: string; label: string }> =
+      side === "BUY"
+        ? [{ posSide: "long", label: "long" }]
+        : side === "SELL"
+          ? [{ posSide: "short", label: "short" }]
+          : [
+              { posSide: "long", label: "long" },
+              { posSide: "short", label: "short" },
+            ];
 
-    const response = await this.client.post(path, body, { headers });
-    const data = response.data;
+    for (const { posSide, label } of sides) {
+      const body = JSON.stringify({
+        instId,
+        lever: String(leverage),
+        mgnMode: marginType,
+        posSide,
+      });
 
-    if (data.code !== "0") {
-      console.warn(`Failed to set leverage for ${symbol}: ${data.msg}`);
+      const headers = this.authHeaders("POST", path, body);
+
+      console.log(
+        `[OKX] 🔧 Setting leverage for ${instId} ${label}: ${leverage}x (${marginType})...`,
+      );
+
+      try {
+        const response = await this.client.post(path, body, { headers });
+        const data = response.data;
+
+        if (data.code !== "0") {
+          console.warn(
+            `[OKX] ⚠️ Failed to set leverage for ${instId} ${label}: code=${data.code}, msg=${data.msg}`,
+          );
+        } else {
+          console.log(
+            `[OKX] ✅ Leverage set for ${instId} ${label}: ${leverage}x`,
+          );
+        }
+      } catch (error) {
+        const errMsg = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `[OKX] ⚠️ Error setting leverage for ${instId} ${label}: ${errMsg}`,
+        );
+      }
     }
   }
 
   // ─── Orders ─────────────────────────────────────────────────────────
 
+  /**
+   * Place an order on OKX.
+   *
+   * Flow:
+   *   1. Validate the instrument exists on OKX
+   *   2. Set leverage for the position side
+   *   3. Place the order
+   *   4. Auto-retry with account fix if error 51010
+   *
+   * Docs: https://www.okx.com/docs-v5/en/#rest-api-trade-place-order
+   */
   async placeOrder(orderParams: OrderParams): Promise<OrderResult> {
     const instId = this.toOkxSymbol(orderParams.symbol);
     const isBuy = orderParams.side === "BUY";
+    const posSide = isBuy ? "long" : "short";
 
-    // Set leverage first
-    if (orderParams.leverage) {
-      await this.setLeverage(orderParams.symbol, orderParams.leverage);
+    // Step 1: Validate instrument
+    try {
+      await this.validateInstrument(orderParams.symbol);
+    } catch (validationError) {
+      const errMsg =
+        validationError instanceof Error
+          ? validationError.message
+          : String(validationError);
+      console.error(`[OKX] ❌ Instrument validation failed: ${errMsg}`);
+      throw validationError;
     }
 
+    // Step 2: Set leverage (with posSide for long_short_mode)
+    if (orderParams.leverage) {
+      await this.setLeverage(
+        orderParams.symbol,
+        orderParams.leverage,
+        "isolated",
+        orderParams.side,
+      );
+    }
+
+    // Step 3: Build and place order
     const orderBody: Record<string, string> = {
       instId,
-      tdMode: "isolated", // isolated margin
+      tdMode: "isolated",
       side: isBuy ? "buy" : "sell",
       ordType: orderParams.type === "LIMIT" ? "limit" : "market",
       sz: String(orderParams.quantity),
-      posSide: isBuy ? "long" : "short",
+      posSide,
     };
 
     if (orderParams.type === "LIMIT" && orderParams.price) {
@@ -281,14 +568,53 @@ export class OkxExchange implements ExchangeClient {
     const path = "/api/v5/trade/order";
     const headers = this.authHeaders("POST", path, body);
 
-    const response = await this.client.post(path, body, { headers });
+    console.log(
+      `[OKX] 📤 Placing order: ${isBuy ? "BUY" : "SELL"} ${orderParams.quantity} ${instId} (posSide=${posSide})...`,
+    );
+
+    let response;
+    try {
+      response = await this.client.post(path, body, { headers });
+    } catch (axiosError) {
+      // Axios-level error (network, 4xx, 5xx)
+      const errMsg =
+        axiosError instanceof Error ? axiosError.message : String(axiosError);
+      console.error(`[OKX] ❌ Order request failed: ${errMsg}`);
+
+      if (axios.isAxiosError(axiosError) && axiosError.response?.data) {
+        const errorData = axiosError.response.data;
+        console.error(
+          `[OKX] 📄 Response body:`,
+          JSON.stringify(errorData, null, 2),
+        );
+
+        // Check for 51010 in axios error
+        const sCode = errorData?.data?.[0]?.sCode;
+        if (sCode === "51010" || errorData?.code === "51010") {
+          return await this.handle51010AndRetry(orderBody, orderParams, path);
+        }
+      }
+      throw axiosError;
+    }
+
     const data = response.data;
+
+    // Check for error 51010 in ANY response (can come with data.code "0" or "1")
+    if (data.data?.[0]?.sCode === "51010") {
+      console.warn(
+        `[OKX] ⚠️ Detected error 51010 in order response — account mode incompatible`,
+      );
+      return await this.handle51010AndRetry(orderBody, orderParams, path);
+    }
 
     if (data.code === "0" && data.data?.[0]) {
       const result = data.data[0];
       if (result.sCode === "0") {
         const price =
           orderParams.price || (await this.getTickerPrice(orderParams.symbol));
+        console.log(
+          `[OKX] ✅ Order placed: orderId=${result.orderId}, price=${price}`,
+        );
         return {
           orderId: result.orderId,
           price,
@@ -296,11 +622,94 @@ export class OkxExchange implements ExchangeClient {
           status: "submitted",
         };
       }
-      throw new Error(`OKX order rejected: ${result.sMsg}`);
+
+      console.error(
+        `[OKX] ❌ Order rejected: sCode=${result.sCode}, sMsg=${result.sMsg}`,
+      );
+      throw new Error(`OKX order rejected: [${result.sCode}] ${result.sMsg}`);
     }
-    throw new Error(
-      `Failed to place OKX order: ${data.msg || "Unknown error"}`,
+
+    console.error(
+      `[OKX] ❌ Failed to place order: code=${data.code}, msg=${data.msg}`,
     );
+    throw new Error(
+      `Failed to place OKX order: [${data.code}] ${data.msg || "Unknown error"}`,
+    );
+  }
+
+  /**
+   * Handle error 51010: auto-fix account configuration and retry the order.
+   */
+  private async handle51010AndRetry(
+    orderBody: Record<string, string>,
+    orderParams: OrderParams,
+    path: string,
+  ): Promise<OrderResult> {
+    console.warn(
+      `[OKX] ⚠️ Error 51010: Account mode incompatible. Auto-fixing account configuration...`,
+    );
+    await this.ensureAccountConfigured(orderParams.symbol);
+
+    // Re-set leverage with posSide after account fix
+    if (orderParams.leverage) {
+      await this.setLeverage(
+        orderParams.symbol,
+        orderParams.leverage,
+        "isolated",
+        orderParams.side,
+      );
+    }
+
+    // Retry the order
+    console.log(`[OKX] 🔄 Retrying order after account fix...`);
+    const retryBody = JSON.stringify(orderBody);
+    const retryHeaders = this.authHeaders("POST", path, retryBody);
+
+    try {
+      const retryResponse = await this.client.post(path, retryBody, {
+        headers: retryHeaders,
+      });
+      const retryData = retryResponse.data;
+
+      if (
+        retryData.code === "0" &&
+        retryData.data?.[0] &&
+        retryData.data[0].sCode === "0"
+      ) {
+        const retryResult = retryData.data[0];
+        const price =
+          orderParams.price || (await this.getTickerPrice(orderParams.symbol));
+        console.log(
+          `[OKX] ✅ Order succeeded after auto-fix: orderId=${retryResult.orderId}`,
+        );
+        return {
+          orderId: retryResult.orderId,
+          price,
+          quantity: orderParams.quantity,
+          status: "submitted",
+        };
+      }
+
+      // Retry also failed — log full details
+      console.error(
+        `[OKX] ❌ Order still failed after auto-fix:`,
+        JSON.stringify(retryData, null, 2),
+      );
+      const retryErrMsg =
+        retryData.data?.[0]?.sMsg || retryData.msg || "Unknown error";
+      const retryErrCode = retryData.data?.[0]?.sCode || retryData.code;
+      throw new Error(
+        `OKX order failed after auto-fix: [${retryErrCode}] ${retryErrMsg}`,
+      );
+    } catch (retryError) {
+      if (axios.isAxiosError(retryError) && retryError.response?.data) {
+        console.error(
+          `[OKX] ❌ Retry request failed with status ${retryError.response.status}:`,
+          JSON.stringify(retryError.response.data, null, 2),
+        );
+      }
+      throw retryError;
+    }
   }
 
   async closePosition(
@@ -320,55 +729,79 @@ export class OkxExchange implements ExchangeClient {
       throw new Error(`No open position found for ${symbol}`);
     }
 
-    const body = JSON.stringify({
+    const posSide = pos.side === "LONG" ? "long" : "short";
+
+    // Try close-position endpoint first
+    const closeBody = JSON.stringify({
       instId,
       mgnMode: "isolated",
-      posSide: pos.side === "LONG" ? "long" : "short",
+      posSide,
       type: "market",
       sz: String(quantity || pos.quantity),
       side: pos.side === "LONG" ? "sell" : "buy",
       tdMode: "isolated",
     });
 
-    const path = "/api/v5/trade/close-position";
-    const headers = this.authHeaders("POST", path, body);
+    const closePath = "/api/v5/trade/close-position";
+    const closeHeaders = this.authHeaders("POST", closePath, closeBody);
 
-    // Try close-position endpoint first
-    const response = await this.client.post(path, body, { headers });
-    const data = response.data;
+    console.log(
+      `[OKX] 📤 Closing position: ${instId} ${posSide} qty=${quantity || pos.quantity}...`,
+    );
 
-    if (data.code === "0" && data.data?.[0]?.sCode === "0") {
-      return;
+    try {
+      const response = await this.client.post(closePath, closeBody, {
+        headers: closeHeaders,
+      });
+      const data = response.data;
+
+      if (data.code === "0" && data.data?.[0]?.sCode === "0") {
+        console.log(`[OKX] ✅ Position closed: ${instId}`);
+        return;
+      }
+
+      console.warn(
+        `[OKX] ⚠️ close-position failed: code=${data.code}, msg=${data.msg}. Trying opposite order...`,
+      );
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[OKX] ⚠️ close-position request failed: ${errMsg}. Trying opposite order...`,
+      );
     }
 
     // Fallback: place opposite order
-    console.warn(
-      `OKX close-position failed (${data.msg}), trying opposite order...`,
-    );
-
     const fallbackBody = JSON.stringify({
       instId,
       tdMode: "isolated",
       side: pos.side === "LONG" ? "sell" : "buy",
-      posSide: pos.side === "LONG" ? "long" : "short",
+      posSide,
       ordType: "market",
       sz: String(quantity || pos.quantity),
       reduceOnly: "true",
     });
 
-    const fallbackHeaders = this.authHeaders("POST", path, fallbackBody);
-    const fallbackResp = await this.client.post(
-      "/api/v5/trade/order",
-      fallbackBody,
-      { headers: fallbackHeaders },
-    );
+    const orderPath = "/api/v5/trade/order";
+    const fallbackHeaders = this.authHeaders("POST", orderPath, fallbackBody);
+
+    console.log(`[OKX] 📤 Placing opposite order to close: ${instId}...`);
+
+    const fallbackResp = await this.client.post(orderPath, fallbackBody, {
+      headers: fallbackHeaders,
+    });
 
     const fallbackData = fallbackResp.data;
     if (fallbackData.code !== "0" || fallbackData.data?.[0]?.sCode !== "0") {
+      console.error(
+        `[OKX] ❌ Failed to close position:`,
+        JSON.stringify(fallbackData, null, 2),
+      );
       throw new Error(
         `Failed to close OKX position: ${fallbackData.msg || fallbackData.data?.[0]?.sMsg || "Unknown error"}`,
       );
     }
+
+    console.log(`[OKX] ✅ Position closed via opposite order: ${instId}`);
   }
 
   async closeAllPositions(): Promise<{ closed: string[]; errors: string[] }> {

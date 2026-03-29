@@ -6,11 +6,11 @@ import { PaperExchange } from "./PaperExchange";
 export type ExchangeProvider = "mexc" | "okx" | "paper";
 
 /**
- * ExchangeFactory — singleton factory for exchange clients.
+ * ExchangeFactory — dynamic factory for exchange clients.
  *
  * Mirrors the AIFactory pattern:
  *   - Reads EXCHANGE_PROVIDER from env (default: "mexc")
- *   - Lazy-initialises the correct adapter
+ *   - Creates a fresh adapter on every call (no stale caching)
  *   - Consumers call ExchangeFactory.getClient() and get a typed ExchangeClient
  *
  * To add a new exchange:
@@ -20,23 +20,11 @@ export type ExchangeProvider = "mexc" | "okx" | "paper";
  *   4. Add env vars to .env.example
  */
 export class ExchangeFactory {
-  private static instance: ExchangeClient | null = null;
-
   static getClient(provider?: ExchangeProvider): ExchangeClient {
     const selectedProvider =
       provider || (process.env.EXCHANGE_PROVIDER as ExchangeProvider) || "mexc";
 
-    // Re-create if provider changed
-    if (
-      ExchangeFactory.instance &&
-      ExchangeFactory.instance.name === selectedProvider
-    ) {
-      return ExchangeFactory.instance;
-    }
-
-    const client = ExchangeFactory.createClient(selectedProvider);
-    ExchangeFactory.instance = client;
-    return client;
+    return ExchangeFactory.createClient(selectedProvider);
   }
 
   private static createClient(provider: ExchangeProvider): ExchangeClient {
@@ -72,10 +60,8 @@ export class ExchangeFactory {
     }
   }
 
-  /** Force re-initialisation (e.g. after env change) */
-  static reset(): void {
-    ExchangeFactory.instance = null;
-  }
+  /** No-op — factory now always reads env dynamically */
+  static reset(): void {}
 
   /** Get the currently configured provider name */
   static getProviderName(): ExchangeProvider {

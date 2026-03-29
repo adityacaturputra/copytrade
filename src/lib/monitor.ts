@@ -1,10 +1,6 @@
 import { connectDB, Position, TradeLog } from "./database";
 import { AIFactory } from "./ai/AIFactory";
-import {
-  getMexcClient,
-  mexcGetTickerPrice,
-  mexcClosePosition,
-} from "./mexc-api";
+import { ExchangeFactory } from "./exchange/ExchangeFactory";
 
 export async function runPositionMonitor(): Promise<{
   checked: number;
@@ -27,8 +23,9 @@ export async function runPositionMonitor(): Promise<{
 
     for (const position of openPositions) {
       try {
-        // Get current price from MEXC
-        const currentPrice = await mexcGetTickerPrice(position.symbol);
+        // Get current price from exchange
+        const exchange = ExchangeFactory.getClient();
+        const currentPrice = await exchange.getTickerPrice(position.symbol);
         position.currentPrice = currentPrice;
 
         // Calculate PNL
@@ -131,8 +128,12 @@ export async function runPositionMonitor(): Promise<{
                   : position.quantity / 2;
 
               try {
-                const mexc = getMexcClient();
-                await mexc.closePosition(position.symbol);
+                const ex = ExchangeFactory.getClient();
+                await ex.closePosition(
+                  position.symbol,
+                  position.orderId,
+                  closeQty,
+                );
 
                 // Update position with remaining quantity
                 const remaining = position.quantity - closeQty;
@@ -218,7 +219,12 @@ async function closePosition(
   reason: string,
 ): Promise<void> {
   try {
-    await mexcClosePosition(position.symbol);
+    const exchange = ExchangeFactory.getClient();
+    await exchange.closePosition(
+      position.symbol,
+      position.orderId,
+      position.quantity,
+    );
   } catch (err) {
     console.warn(
       `MEXC close failed for ${position.symbol}, marking as closed in DB:`,

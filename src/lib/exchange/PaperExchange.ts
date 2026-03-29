@@ -262,6 +262,7 @@ export class PaperExchange implements ExchangeClient {
     symbol: string,
     leverage: number,
     _marginType?: "isolated" | "cross",
+    _side?: "BUY" | "SELL",
   ): Promise<void> {
     console.log(`📊 [PAPER] Set leverage for ${symbol}: ${leverage}x`);
     // Update existing position if any

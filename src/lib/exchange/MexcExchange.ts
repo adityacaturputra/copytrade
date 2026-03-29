@@ -164,6 +164,7 @@ export class MexcExchange implements ExchangeClient {
     symbol: string,
     leverage: number,
     marginType: "isolated" | "cross" = "isolated",
+    _side?: "BUY" | "SELL",
   ): Promise<void> {
     const params = this.buildAuthParams();
     params["symbol"] = symbol;
