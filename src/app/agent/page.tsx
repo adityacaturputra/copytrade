@@ -138,28 +138,16 @@ export default function AgentChatPage() {
 
               if (currentEvent === "step") {
                 const step = parsed as AgentStep;
-
-                if (step.type === "response") {
-                  // Final response — set full content
-                  setMessages((prev) =>
-                    prev.map((m) =>
-                      m.id === assistantId
-                        ? { ...m, content: step.content }
-                        : m,
-                    ),
-                  );
-                } else {
-                  // Tool call or result — add to steps
-                  setMessages((prev) =>
-                    prev.map((m) =>
-                      m.id === assistantId
-                        ? { ...m, steps: [...(m.steps || []), step] }
-                        : m,
-                    ),
-                  );
-                }
+                // Tool call or result — add to steps
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === assistantId
+                      ? { ...m, steps: [...(m.steps || []), step] }
+                      : m,
+                  ),
+                );
               } else if (currentEvent === "token") {
-                // Word-by-word streaming
+                // Word-by-word streaming — append each token
                 setMessages((prev) =>
                   prev.map((m) =>
                     m.id === assistantId
@@ -168,9 +156,17 @@ export default function AgentChatPage() {
                   ),
                 );
               } else if (currentEvent === "done") {
+                // Finalize — use the full response from done event
+                // to ensure completeness (in case any tokens were missed)
                 setMessages((prev) =>
                   prev.map((m) =>
-                    m.id === assistantId ? { ...m, streaming: false } : m,
+                    m.id === assistantId
+                      ? {
+                          ...m,
+                          content: parsed.response || m.content,
+                          streaming: false,
+                        }
+                      : m,
                   ),
                 );
                 // Auto-expand steps

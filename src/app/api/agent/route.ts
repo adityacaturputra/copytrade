@@ -61,18 +61,19 @@ export async function POST(request: NextRequest) {
               toolCallCount++;
             }
 
-            // Send each step as it happens
-            sendEvent("step", step);
-
-            // For the final response, also stream tokens word by word
             if (step.type === "response") {
+              // Don't send the response as a step event —
+              // only stream it as tokens to avoid duplication in the UI
               fullResponse = step.content;
 
-              // Stream the response character by character with small chunks
+              // Stream the response word by word
               const words = step.content.split(/(\s+)/);
               for (const word of words) {
                 sendEvent("token", { token: word });
               }
+            } else {
+              // Tool calls and results — send as step events
+              sendEvent("step", step);
             }
           }
 
