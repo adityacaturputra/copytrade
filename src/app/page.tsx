@@ -317,6 +317,12 @@ export default function Dashboard() {
                 Monitor
               </button>
               <a
+                href="/agent"
+                className="bg-purple-700 hover:bg-purple-600 px-3 py-2 rounded-lg text-sm transition flex items-center gap-1"
+              >
+                🤖 Agent
+              </a>
+              <a
                 href="/settings"
                 className="bg-slate-700 hover:bg-slate-600 px-3 py-2 rounded-lg text-sm transition"
               >
