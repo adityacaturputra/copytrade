@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 // ==================== Types ====================
 
@@ -342,12 +344,20 @@ export default function AgentChatPage() {
                       : "bg-slate-800 border border-slate-700 text-slate-200 rounded-bl-md"
                   }`}
                 >
-                  <div className="whitespace-pre-wrap text-sm leading-relaxed prose-sm">
-                    {msg.content}
-                    {msg.streaming && msg.role === "assistant" && (
-                      <span className="inline-block w-1.5 h-4 bg-primary-400 animate-pulse ml-0.5 align-text-bottom" />
-                    )}
-                  </div>
+                  {msg.role === "assistant" ? (
+                    <div className="agent-markdown text-sm leading-relaxed">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {msg.content}
+                      </ReactMarkdown>
+                      {msg.streaming && (
+                        <span className="inline-block w-1.5 h-4 bg-primary-400 animate-pulse ml-0.5 align-text-bottom" />
+                      )}
+                    </div>
+                  ) : (
+                    <div className="whitespace-pre-wrap text-sm leading-relaxed">
+                      {msg.content}
+                    </div>
+                  )}
                 </div>
 
                 {/* Agent steps — show in real-time */}
