@@ -307,6 +307,11 @@ export async function* runAgentLoop(
 }
 
 /**
+ * Streaming alias — same as runAgentLoop but with a clearer name for the SSE route.
+ */
+export const runAgentLoopStreaming = runAgentLoop;
+
+/**
  * Non-streaming version: runs the loop and returns the final response
  * along with all intermediate steps.
  */

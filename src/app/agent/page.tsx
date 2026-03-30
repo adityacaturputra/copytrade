@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 
 // ==================== Types ====================
 
@@ -18,6 +18,7 @@ interface ChatMessage {
   content: string;
   steps?: AgentStep[];
   timestamp: Date;
+  streaming?: boolean; // still receiving tokens
 }
 
 // ==================== Component ====================
@@ -39,82 +40,9 @@ export default function AgentChatPage() {
     scrollToBottom();
   }, [messages]);
 
-  // Focus input on load
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
-
-  const sendMessage = async () => {
-    const trimmed = input.trim();
-    if (!trimmed || loading) return;
-
-    setError(null);
-    const userMsg: ChatMessage = {
-      id: `user-${Date.now()}`,
-      role: "user",
-      content: trimmed,
-      timestamp: new Date(),
-    };
-
-    setMessages((prev) => [...prev, userMsg]);
-    setInput("");
-    setLoading(true);
-
-    try {
-      // Build history from existing messages
-      const history = messages.map((m) => ({
-        role: m.role,
-        content: m.content,
-      }));
-
-      const res = await fetch("/api/agent", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: trimmed,
-          history,
-        }),
-      });
-
-      const data = await res.json();
-
-      if (!data.success) {
-        setError(data.error || "Failed to get response");
-        return;
-      }
-
-      const assistantMsg: ChatMessage = {
-        id: `assistant-${Date.now()}`,
-        role: "assistant",
-        content: data.response,
-        steps: data.steps || [],
-        timestamp: new Date(),
-      };
-
-      setMessages((prev) => [...prev, assistantMsg]);
-
-      // Auto-expand the latest steps
-      if (data.steps?.length > 0) {
-        setExpandedSteps((prev) => {
-          const next = new Set(prev);
-          next.add(assistantMsg.id);
-          return next;
-        });
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Network error");
-    } finally {
-      setLoading(false);
-      inputRef.current?.focus();
-    }
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
-  };
 
   const toggleSteps = (msgId: string) => {
     setExpandedSteps((prev) => {
@@ -126,6 +54,170 @@ export default function AgentChatPage() {
       }
       return next;
     });
+  };
+
+  const sendMessage = useCallback(async () => {
+    const trimmed = input.trim();
+    if (!trimmed || loading) return;
+
+    setError(null);
+    const userMsg: ChatMessage = {
+      id: `user-${Date.now()}`,
+      role: "user",
+      content: trimmed,
+      timestamp: new Date(),
+    };
+
+    const assistantId = `assistant-${Date.now()}`;
+    const assistantMsg: ChatMessage = {
+      id: assistantId,
+      role: "assistant",
+      content: "",
+      steps: [],
+      timestamp: new Date(),
+      streaming: true,
+    };
+
+    setMessages((prev) => [...prev, userMsg, assistantMsg]);
+    setInput("");
+    setLoading(true);
+
+    try {
+      const history = messages.map((m) => ({
+        role: m.role,
+        content: m.content,
+      }));
+
+      const res = await fetch("/api/agent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: trimmed, history }),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json();
+        setError(errData.error || `HTTP ${res.status}`);
+        setMessages((prev) => prev.filter((m) => m.id !== assistantId));
+        return;
+      }
+
+      // Read SSE stream
+      const reader = res.body?.getReader();
+      if (!reader) {
+        setError("No response stream");
+        return;
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // Parse SSE events from buffer
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || ""; // Keep incomplete line in buffer
+
+        let currentEvent = "";
+        let currentData = "";
+
+        for (const line of lines) {
+          if (line.startsWith("event: ")) {
+            currentEvent = line.slice(7).trim();
+          } else if (line.startsWith("data: ")) {
+            currentData = line.slice(6);
+          } else if (line === "" && currentEvent && currentData) {
+            // Empty line = end of event
+            try {
+              const parsed = JSON.parse(currentData);
+
+              if (currentEvent === "step") {
+                const step = parsed as AgentStep;
+
+                if (step.type === "response") {
+                  // Final response — set full content
+                  setMessages((prev) =>
+                    prev.map((m) =>
+                      m.id === assistantId
+                        ? { ...m, content: step.content }
+                        : m,
+                    ),
+                  );
+                } else {
+                  // Tool call or result — add to steps
+                  setMessages((prev) =>
+                    prev.map((m) =>
+                      m.id === assistantId
+                        ? { ...m, steps: [...(m.steps || []), step] }
+                        : m,
+                    ),
+                  );
+                }
+              } else if (currentEvent === "token") {
+                // Word-by-word streaming
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === assistantId
+                      ? { ...m, content: m.content + (parsed.token || "") }
+                      : m,
+                  ),
+                );
+              } else if (currentEvent === "done") {
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === assistantId ? { ...m, streaming: false } : m,
+                  ),
+                );
+                // Auto-expand steps
+                setExpandedSteps((prev) => {
+                  const next = new Set(prev);
+                  next.add(assistantId);
+                  return next;
+                });
+              } else if (currentEvent === "error") {
+                setError(parsed.error || "Unknown error");
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === assistantId
+                      ? {
+                          ...m,
+                          content: `❌ ${parsed.error}`,
+                          streaming: false,
+                        }
+                      : m,
+                  ),
+                );
+              }
+            } catch {
+              // Ignore parse errors
+            }
+
+            currentEvent = "";
+            currentData = "";
+          }
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Network error");
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId ? { ...m, streaming: false } : m,
+        ),
+      );
+    } finally {
+      setLoading(false);
+      inputRef.current?.focus();
+    }
+  }, [input, loading, messages]);
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
   };
 
   const clearChat = () => {
@@ -141,6 +233,9 @@ export default function AgentChatPage() {
     "⚙️ What are my current settings?",
     "📊 Show recent activity logs",
   ];
+
+  // Get current streaming assistant message
+  const streamingMsg = messages.find((m) => m.streaming);
 
   return (
     <div className="flex flex-col h-screen">
@@ -159,7 +254,7 @@ export default function AgentChatPage() {
                   AI Trading Agent
                 </h1>
                 <p className="text-xs text-slate-400">
-                  Agentic AI with real-time exchange access
+                  Real-time streaming • Agentic AI with exchange access
                 </p>
               </div>
             </div>
@@ -170,12 +265,14 @@ export default function AgentChatPage() {
                 onClick={clearChat}
                 className="text-xs text-slate-400 hover:text-white bg-slate-800 px-3 py-1.5 rounded-lg transition"
               >
-                🗑️ Clear Chat
+                🗑️ Clear
               </button>
             )}
-            <span className="badge badge-info text-xs">
-              {messages.length} messages
-            </span>
+            {loading && (
+              <span className="badge badge-success text-xs animate-pulse">
+                ● Live
+              </span>
+            )}
           </div>
         </div>
       </header>
@@ -183,7 +280,7 @@ export default function AgentChatPage() {
       {/* Messages Area */}
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
-          {/* Welcome message when empty */}
+          {/* Welcome */}
           {messages.length === 0 && !loading && (
             <div className="text-center py-12">
               <div className="text-6xl mb-4">🤖</div>
@@ -191,9 +288,8 @@ export default function AgentChatPage() {
                 AI Trading Agent
               </h2>
               <p className="text-slate-400 mb-8 max-w-md mx-auto">
-                I can check your portfolio, view positions, manage drafts, place
-                orders, and more. I have real-time access to your exchange and
-                database.
+                Real-time streaming responses. I can check your portfolio, view
+                positions, manage drafts, place orders, and more.
               </p>
               <div className="grid grid-cols-2 md:grid-cols-3 gap-3 max-w-2xl mx-auto">
                 {quickPrompts.map((prompt) => (
@@ -231,6 +327,11 @@ export default function AgentChatPage() {
                   <span className="text-xs text-slate-600">
                     {msg.timestamp.toLocaleTimeString()}
                   </span>
+                  {msg.streaming && (
+                    <span className="text-xs text-primary-400 animate-pulse">
+                      ● streaming
+                    </span>
+                  )}
                 </div>
 
                 {/* Message bubble */}
@@ -243,10 +344,13 @@ export default function AgentChatPage() {
                 >
                   <div className="whitespace-pre-wrap text-sm leading-relaxed prose-sm">
                     {msg.content}
+                    {msg.streaming && msg.role === "assistant" && (
+                      <span className="inline-block w-1.5 h-4 bg-primary-400 animate-pulse ml-0.5 align-text-bottom" />
+                    )}
                   </div>
                 </div>
 
-                {/* Agent steps (tool calls) */}
+                {/* Agent steps — show in real-time */}
                 {msg.role === "assistant" &&
                   msg.steps &&
                   msg.steps.length > 0 && (
@@ -283,38 +387,43 @@ export default function AgentChatPage() {
             </div>
           ))}
 
-          {/* Loading indicator */}
-          {loading && (
-            <div className="flex justify-start">
-              <div>
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-xs text-slate-500">🤖 Agent</span>
-                  <span className="text-xs text-slate-600">thinking...</span>
-                </div>
-                <div className="bg-slate-800 border border-slate-700 rounded-2xl rounded-bl-md px-4 py-3">
-                  <div className="flex items-center gap-2">
-                    <div className="flex gap-1">
-                      <div
-                        className="w-2 h-2 bg-primary-400 rounded-full animate-bounce"
-                        style={{ animationDelay: "0ms" }}
-                      />
-                      <div
-                        className="w-2 h-2 bg-primary-400 rounded-full animate-bounce"
-                        style={{ animationDelay: "150ms" }}
-                      />
-                      <div
-                        className="w-2 h-2 bg-primary-400 rounded-full animate-bounce"
-                        style={{ animationDelay: "300ms" }}
-                      />
-                    </div>
-                    <span className="text-sm text-slate-400">
-                      Analyzing & executing tools...
+          {/* Loading indicator — only show when no streaming message yet */}
+          {loading &&
+            (!streamingMsg ||
+              (!streamingMsg.content &&
+                (!streamingMsg.steps || streamingMsg.steps.length === 0))) && (
+              <div className="flex justify-start">
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-xs text-slate-500">🤖 Agent</span>
+                    <span className="text-xs text-slate-600">
+                      connecting...
                     </span>
+                  </div>
+                  <div className="bg-slate-800 border border-slate-700 rounded-2xl rounded-bl-md px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <div className="flex gap-1">
+                        <div
+                          className="w-2 h-2 bg-primary-400 rounded-full animate-bounce"
+                          style={{ animationDelay: "0ms" }}
+                        />
+                        <div
+                          className="w-2 h-2 bg-primary-400 rounded-full animate-bounce"
+                          style={{ animationDelay: "150ms" }}
+                        />
+                        <div
+                          className="w-2 h-2 bg-primary-400 rounded-full animate-bounce"
+                          style={{ animationDelay: "300ms" }}
+                        />
+                      </div>
+                      <span className="text-sm text-slate-400">
+                        Thinking & connecting...
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          )}
+            )}
 
           {/* Error */}
           {error && (
@@ -361,8 +470,8 @@ export default function AgentChatPage() {
             </button>
           </div>
           <p className="text-xs text-slate-600 mt-2 text-center">
-            The agent has access to your exchange account, positions, drafts,
-            and settings. Use with caution for trading operations.
+            Real-time streaming • The agent has access to your exchange account,
+            positions, drafts, and settings.
           </p>
         </div>
       </div>
@@ -382,7 +491,7 @@ function StepCard({ step }: { step: AgentStep }) {
             {step.toolName}
           </span>
           {step.toolArgs && (
-            <span className="text-xs text-slate-500">
+            <span className="text-xs text-slate-500 truncate">
               {Object.entries(step.toolArgs)
                 .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
                 .join(", ")}

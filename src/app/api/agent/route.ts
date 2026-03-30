@@ -1,13 +1,22 @@
 /**
- * Agent Chat API — handles agentic AI conversations.
+ * Agent Chat API — streaming SSE version.
  *
  * POST /api/agent
  *   Body: { message: string, history: Array<{role, content}>, provider?: string }
- *   Response: { response: string, steps: AgentStep[] }
+ *   Response: Server-Sent Events stream with real-time steps
+ *
+ * Events:
+ *   event: step        → { type, content, toolName?, toolArgs?, duration? }
+ *   event: token       → { token: string }  (word-by-word AI response)
+ *   event: done        → { response: string }
+ *   event: error       → { error: string }
  */
 
-import { NextRequest, NextResponse } from "next/server";
-import { runAgentFull } from "@/lib/agent/loop";
+import { NextRequest } from "next/server";
+import { runAgentLoopStreaming } from "@/lib/agent/loop";
+
+export const dynamic = "force-dynamic";
+export const maxDuration = 60; // Allow up to 60s for long agentic runs
 
 export async function POST(request: NextRequest) {
   try {
@@ -15,41 +24,92 @@ export async function POST(request: NextRequest) {
     const { message, history = [], provider } = body;
 
     if (!message || typeof message !== "string") {
-      return NextResponse.json(
-        { error: "Message is required" },
-        { status: 400 },
-      );
+      return new Response(JSON.stringify({ error: "Message is required" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      });
     }
 
-    // Use the configured AI provider or default
-    const aiProvider = provider || process.env.AI_PROVIDER || "openai";
+    const aiProvider = provider || process.env.AI_PROVIDER || "glm";
 
     console.log(
       `[Agent] 🤖 Processing: "${message.slice(0, 80)}..." (provider: ${aiProvider})`,
     );
 
-    const { response, steps } = await runAgentFull(
-      message,
-      history,
-      aiProvider,
-    );
+    // Create a ReadableStream that yields SSE events
+    const encoder = new TextEncoder();
+    let fullResponse = "";
+    let stepCount = 0;
+    let toolCallCount = 0;
 
-    console.log(
-      `[Agent] ✅ Completed in ${steps.length} steps (${steps.filter((s) => s.type === "tool_call").length} tool calls)`,
-    );
+    const stream = new ReadableStream({
+      async start(controller) {
+        const sendEvent = (event: string, data: unknown) => {
+          const chunk = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+          controller.enqueue(encoder.encode(chunk));
+        };
 
-    return NextResponse.json({
-      success: true,
-      response,
-      steps,
+        try {
+          for await (const step of runAgentLoopStreaming(
+            message,
+            history,
+            aiProvider,
+          )) {
+            stepCount++;
+
+            if (step.type === "tool_call") {
+              toolCallCount++;
+            }
+
+            // Send each step as it happens
+            sendEvent("step", step);
+
+            // For the final response, also stream tokens word by word
+            if (step.type === "response") {
+              fullResponse = step.content;
+
+              // Stream the response character by character with small chunks
+              const words = step.content.split(/(\s+)/);
+              for (const word of words) {
+                sendEvent("token", { token: word });
+              }
+            }
+          }
+
+          sendEvent("done", {
+            response: fullResponse,
+            steps: stepCount,
+            toolCalls: toolCallCount,
+          });
+
+          console.log(
+            `[Agent] ✅ Completed in ${stepCount} steps (${toolCallCount} tool calls)`,
+          );
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : "Unknown error";
+          console.error("[Agent] ❌ Stream error:", errorMsg);
+          sendEvent("error", { error: errorMsg });
+        } finally {
+          controller.close();
+        }
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no", // Disable nginx buffering
+      },
     });
   } catch (err) {
     console.error("[Agent] ❌ Error:", err);
-    return NextResponse.json(
-      {
+    return new Response(
+      JSON.stringify({
         error: err instanceof Error ? err.message : "Unknown error",
-      },
-      { status: 500 },
+      }),
+      { status: 500, headers: { "Content-Type": "application/json" } },
     );
   }
 }
