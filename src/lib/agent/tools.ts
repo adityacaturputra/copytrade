@@ -40,7 +40,7 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "get_account_info",
       description:
-        "Get exchange account info: total balance, available balance, unrealized PnL, and which exchange is active (OKX/MEXC/Paper).",
+        "Get exchange account info. Returns JSON: { provider: string ('okx'|'mexc'|'paper'), totalBalance: number (total equity in USDT), availableBalance: number (free margin in USDT), unrealizedPnl: number (unrealized profit/loss) }. Use this first to understand the account state before trading.",
       parameters: { type: "object", properties: {}, required: [] },
     },
   },
@@ -49,13 +49,14 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "get_ticker_price",
       description:
-        "Get the current price of a trading pair. Symbol must be in exchange format (e.g., BTC-USDT-SWAP for OKX, BTCUSDT for MEXC).",
+        "Get the current mark price of a trading pair. Symbol MUST be in exchange-specific format: for OKX use 'BTC-USDT-SWAP' (instrument ID with dashes), for MEXC use 'BTCUSDT' (no dashes).",
       parameters: {
         type: "object",
         properties: {
           symbol: {
             type: "string",
-            description: "Trading pair symbol (exchange format)",
+            description:
+              "Trading pair in exchange format. OKX examples: 'BTC-USDT-SWAP', 'ETH-USDT-SWAP'. MEXC examples: 'BTCUSDT', 'ETHUSDT'.",
           },
         },
         required: ["symbol"],
@@ -67,7 +68,7 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "get_open_positions",
       description:
-        "Get all currently open positions from both the exchange and the database. Returns symbol, side, entry, PnL, leverage, TP/SL.",
+        "Get all currently open positions from the DATABASE. Returns JSON array: [{ _id: string (MongoDB ObjectId), symbol: string (e.g., 'BTC-USDT-SWAP'), side: string ('LONG'|'SHORT'), entryPrice: number, currentPrice: number, quantity: number, leverage: number, takeProfitPrice: number|null, stopLossPrice: number|null, pnl: number|null, status: string ('open'), openedAt: date }]. Use this to see what positions are tracked in the system.",
       parameters: { type: "object", properties: {}, required: [] },
     },
   },
@@ -76,7 +77,7 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "get_exchange_positions",
       description:
-        "Get real-time positions directly from the exchange API (not database). Useful for verifying actual exchange state.",
+        "Get real-time positions directly from the EXCHANGE API (not database). Returns JSON array: [{ symbol: string (e.g., 'BTC-USDT-SWAP'), side: string ('LONG'|'SHORT'), entryPrice: number, quantity: number, leverage: number, margin: number (margin used in USDT), unrealizedPnl: number (unrealized profit/loss in USDT), liquidationPrice: number|null, markPrice: number }]. Use this to verify the actual exchange state — may differ from database.",
       parameters: { type: "object", properties: {}, required: [] },
     },
   },
@@ -87,33 +88,41 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "place_order",
       description:
-        "Place a market or limit order on the exchange. IMPORTANT: Use with caution — this executes real trades! The exchange is determined by EXCHANGE_PROVIDER env var.",
+        "Place a market or limit order on the exchange. ⚠️ EXECUTES REAL TRADES — use with caution! Always check account balance and current positions first. The exchange is determined by EXCHANGE_PROVIDER env var (OKX/MEXC/Paper).",
       parameters: {
         type: "object",
         properties: {
           symbol: {
             type: "string",
             description:
-              "Symbol in exchange format (e.g., BTC-USDT-SWAP for OKX)",
+              "Trading pair in exchange format. OKX: 'BTC-USDT-SWAP', MEXC: 'BTCUSDT'",
           },
           side: {
             type: "string",
             enum: ["BUY", "SELL"],
-            description: "Order side: BUY for long, SELL for short",
+            description:
+              "Order side: BUY to open long or close short, SELL to open short or close long",
           },
           type: {
             type: "string",
             enum: ["MARKET", "LIMIT"],
-            description: "Order type",
+            description:
+              "MARKET fills immediately at current price. LIMIT requires a 'price' parameter.",
           },
-          quantity: { type: "number", description: "Position size/quantity" },
+          quantity: {
+            type: "number",
+            description:
+              "Position size in contracts or base units. For OKX swaps this is in contracts (e.g., 1.68 contracts). Use calculate_risk_preview to determine the right size.",
+          },
           price: {
             type: "number",
-            description: "Limit price (required for LIMIT orders)",
+            description:
+              "Required for LIMIT orders only. The limit price at which the order should fill.",
           },
           leverage: {
             type: "number",
-            description: "Leverage (e.g., 10 for 10x)",
+            description:
+              "Optional leverage (e.g., 10 for 10x, 20 for 20x). Will be set before placing the order.",
           },
         },
         required: ["symbol", "side", "type", "quantity"],
@@ -125,14 +134,19 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "close_position",
       description:
-        "Close a specific position on the exchange by symbol. This executes a real close order!",
+        "Close a specific open position on the exchange by symbol. ⚠️ EXECUTES REAL CLOSE ORDER! Places a market order in the opposite direction to close the position.",
       parameters: {
         type: "object",
         properties: {
-          symbol: { type: "string", description: "Symbol to close" },
+          symbol: {
+            type: "string",
+            description:
+              "The symbol of the position to close (e.g., 'BTC-USDT-SWAP')",
+          },
           quantity: {
             type: "number",
-            description: "Quantity to close (optional, defaults to full)",
+            description:
+              "Quantity to close. If omitted, closes the entire position.",
           },
         },
         required: ["symbol"],
@@ -144,7 +158,7 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "close_all_positions",
       description:
-        "Close ALL open positions on the exchange. Use with extreme caution!",
+        "Close ALL open positions on the exchange at once. Returns JSON: { results: [{ symbol, side, success, error? }] }. ⚠️ EXTREME CAUTION — this closes every position with market orders!",
       parameters: { type: "object", properties: {}, required: [] },
     },
   },
@@ -152,14 +166,20 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "set_leverage",
-      description: "Set leverage for a symbol on the exchange.",
+      description:
+        "Set the leverage for a specific trading pair on the exchange. Must be called before placing an order if you want non-default leverage.",
       parameters: {
         type: "object",
         properties: {
-          symbol: { type: "string", description: "Trading pair symbol" },
+          symbol: {
+            type: "string",
+            description:
+              "Trading pair in exchange format (e.g., 'BTC-USDT-SWAP')",
+          },
           leverage: {
             type: "number",
-            description: "Leverage value (e.g., 20 for 20x)",
+            description:
+              "Leverage multiplier (e.g., 1 for 1x, 10 for 10x, 50 for 50x)",
           },
         },
         required: ["symbol", "leverage"],
@@ -171,25 +191,36 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "set_stop_loss",
       description:
-        "Place a stop-loss order for a position. Side should be the CLOSING direction (SELL for LONG, BUY for SHORT).",
+        "Place a stop-loss (SL) order for an open position. This creates a conditional order that triggers when the price hits 'triggerPrice' and executes at 'executePrice'. IMPORTANT: 'side' must be the CLOSING direction — use SELL for a LONG position, BUY for a SHORT position. For LONG: SL trigger must be BELOW current price. For SHORT: SL trigger must be ABOVE current price.",
       parameters: {
         type: "object",
         properties: {
-          symbol: { type: "string", description: "Trading pair symbol" },
+          symbol: {
+            type: "string",
+            description:
+              "Trading pair in exchange format (e.g., 'BTC-USDT-SWAP')",
+          },
           triggerPrice: {
             type: "number",
-            description: "Price that triggers the SL",
+            description:
+              "The price that triggers the stop-loss. For LONG this is below entry, for SHORT above entry.",
           },
           executePrice: {
             type: "number",
-            description: "Price to execute the SL order",
+            description:
+              "The price at which the SL order executes. Usually same as triggerPrice for market-like fill, or slightly worse to ensure fill.",
           },
           side: {
             type: "string",
             enum: ["BUY", "SELL"],
-            description: "Closing direction",
+            description:
+              "CLOSING direction: SELL to close a LONG, BUY to close a SHORT",
           },
-          quantity: { type: "number", description: "Quantity" },
+          quantity: {
+            type: "number",
+            description:
+              "Quantity to close. Should match the position size. Get from get_exchange_positions.",
+          },
         },
         required: [
           "symbol",
@@ -206,25 +237,36 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "set_take_profit",
       description:
-        "Place a take-profit order for a position. Side should be the CLOSING direction.",
+        "Place a take-profit (TP) order for an open position. This creates a conditional order that triggers when price hits 'triggerPrice' and executes at 'executePrice'. IMPORTANT: 'side' must be the CLOSING direction — use SELL for a LONG position, BUY for a SHORT position. For LONG: TP trigger must be ABOVE current price. For SHORT: TP trigger must be BELOW current price.",
       parameters: {
         type: "object",
         properties: {
-          symbol: { type: "string", description: "Trading pair symbol" },
+          symbol: {
+            type: "string",
+            description:
+              "Trading pair in exchange format (e.g., 'BTC-USDT-SWAP')",
+          },
           triggerPrice: {
             type: "number",
-            description: "Price that triggers the TP",
+            description:
+              "The price that triggers the take-profit. For LONG this is above entry, for SHORT below entry.",
           },
           executePrice: {
             type: "number",
-            description: "Price to execute the TP order",
+            description:
+              "The price at which the TP order executes. Usually same as triggerPrice for market-like fill, or slightly worse to ensure fill.",
           },
           side: {
             type: "string",
             enum: ["BUY", "SELL"],
-            description: "Closing direction",
+            description:
+              "CLOSING direction: SELL to close a LONG, BUY to close a SHORT",
           },
-          quantity: { type: "number", description: "Quantity" },
+          quantity: {
+            type: "number",
+            description:
+              "Quantity to close. Should match the position size. Get from get_exchange_positions.",
+          },
         },
         required: [
           "symbol",
@@ -243,7 +285,7 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "get_pending_drafts",
       description:
-        "Get all pending draft trades waiting for review. Includes signal details, symbol, side, entry, TP/SL, confidence.",
+        "Get all pending draft trades waiting for review. Returns JSON array: [{ _id: string (24-char MongoDB ObjectId — USE THIS as draftId for accept/reject), action: string ('BUY'|'SELL'), symbol: string (e.g., 'BTC-USDT-SWAP'), side: string ('LONG'|'SHORT'), entryPrice: number, takeProfitTargets: number[]|null, stopLoss: number|null, leverage: number|null, quantity: number|null, confidence: number (0-1), reasoning: string (AI explanation), author: string (signal source), status: string ('pending'), originalContent: string (raw Discord message), createdAt: date }]. IMPORTANT: Use the _id field exactly as-is when calling accept_draft or reject_draft.",
       parameters: { type: "object", properties: {}, required: [] },
     },
   },
@@ -252,13 +294,14 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "accept_draft",
       description:
-        "Accept a pending draft trade, which executes the order on the exchange.",
+        "Accept a pending draft trade, which executes the order on the exchange. IMPORTANT: draftId MUST be the exact _id string from get_pending_drafts (a 24-char MongoDB ObjectId like '6810a1b2c3d4e5f6a7b8c9d0'). Do NOT use numeric indices like '1' or '2'.",
       parameters: {
         type: "object",
         properties: {
           draftId: {
             type: "string",
-            description: "The draft trade ID to accept",
+            description:
+              "The exact MongoDB _id string from get_pending_drafts (e.g., '6810a1b2c3d4e5f6a7b8c9d0')",
           },
         },
         required: ["draftId"],
@@ -269,17 +312,37 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "reject_draft",
-      description: "Reject a pending draft trade.",
+      description:
+        "Reject a pending draft trade. IMPORTANT: draftId MUST be the exact _id string from get_pending_drafts (a 24-char MongoDB ObjectId like '6810a1b2c3d4e5f6a7b8c9d0'). Do NOT use numeric indices like '1' or '2'.",
       parameters: {
         type: "object",
         properties: {
           draftId: {
             type: "string",
-            description: "The draft trade ID to reject",
+            description:
+              "The exact MongoDB _id string from get_pending_drafts (e.g., '6810a1b2c3d4e5f6a7b8c9d0')",
           },
         },
         required: ["draftId"],
       },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "accept_all_drafts",
+      description:
+        "Accept ALL pending draft trades at once, executing each on the exchange. Returns JSON: { success: boolean, total: number, accepted: number (succeeded), failed: number, results: [{ id: string, success: boolean, error?: string }] }. Use this when the user wants to accept everything without reviewing individually.",
+      parameters: { type: "object", properties: {}, required: [] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "reject_all_drafts",
+      description:
+        "Reject ALL pending draft trades at once. Returns JSON: { success: boolean, total: number, rejected: number (succeeded), failed: number, results: [{ id: string, success: boolean, error?: string }] }. Use this when the user wants to reject everything without reviewing individually.",
+      parameters: { type: "object", properties: {}, required: [] },
     },
   },
 
@@ -289,7 +352,7 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "get_discord_sources",
       description:
-        "Get all configured Discord sources (bot/user) with their status, channels, and health.",
+        "Get all configured Discord signal sources. Returns JSON array: [{ name: string (source name), method: string ('bot'|'user'), channelIds: string[] (Discord channel IDs), isActive: boolean, lastFetchedAt: date|null, lastError: string|null, autoRefresh: boolean }]. Use to check if Discord monitoring is healthy.",
       parameters: { type: "object", properties: {}, required: [] },
     },
   },
@@ -298,7 +361,7 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "check_signal_now",
       description:
-        "Trigger a manual signal check — fetches latest Discord messages, runs AI analysis, and creates drafts or executes trades depending on trading mode.",
+        "Manually trigger a signal check cycle: fetches latest Discord messages from all active sources, runs AI analysis to detect trading signals, then either creates draft trades (manual mode) or executes trades directly (auto mode). Returns JSON: { checked: number, signals: number, executed: number, drafts: number, errors: string[] }.",
       parameters: { type: "object", properties: {}, required: [] },
     },
   },
@@ -309,7 +372,7 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "get_stats",
       description:
-        "Get system statistics: total messages, executed signals, open/closed positions, pending drafts, total logs.",
+        "Get system overview statistics. Returns JSON: { totalMessages: number, totalSignals: number, openPositions: number, closedPositions: number, pendingDrafts: number, totalLogs: number }. Use for a quick system health overview.",
       parameters: { type: "object", properties: {}, required: [] },
     },
   },
@@ -318,13 +381,14 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "get_recent_logs",
       description:
-        "Get recent activity logs including signal processing, trade execution, errors.",
+        "Get recent activity logs from the system. Returns entries with type (signal/trade/error), action, symbol, details, result, error messages, and timestamp. Useful for debugging issues or seeing what the system has been doing.",
       parameters: {
         type: "object",
         properties: {
           limit: {
             type: "number",
-            description: "Number of logs to return (default 20)",
+            description:
+              "Max number of log entries to return. Default 20, max 100.",
           },
         },
       },
@@ -335,13 +399,14 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "get_recent_signals",
       description:
-        "Get recently processed Discord messages/signals with their parse status.",
+        "Get recently processed Discord messages/signals. Returns the raw message content, parsed signal data (symbol, side, entry, TP/SL), parse status (success/failed/skipped), and timestamp. Use to see what signals the system has received.",
       parameters: {
         type: "object",
         properties: {
           limit: {
             type: "number",
-            description: "Number of signals to return (default 20)",
+            description:
+              "Max number of signals to return. Default 20, max 100.",
           },
         },
       },
@@ -352,13 +417,14 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "get_all_positions_history",
       description:
-        "Get position history (both open and closed) from the database.",
+        "Get position history from the database — both open and closed positions. Returns symbol, side, entryPrice, quantity, leverage, PnL, status (open/closed), closeReason, openedAt, closedAt. Use for performance analysis and trade history review.",
       parameters: {
         type: "object",
         properties: {
           limit: {
             type: "number",
-            description: "Number of positions to return (default 50)",
+            description:
+              "Max number of positions to return. Default 50, max 200.",
           },
         },
       },
@@ -371,7 +437,7 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "get_trading_mode",
       description:
-        "Get the current trading mode: 'auto' (signals execute immediately) or 'manual' (signals become drafts for review).",
+        "Get the current trading mode. Returns JSON: { mode: string ('auto'|'manual') }. 'auto' = signals execute immediately on exchange. 'manual' = signals become draft trades requiring accept_draft/reject_draft.",
       parameters: { type: "object", properties: {}, required: [] },
     },
   },
@@ -380,14 +446,15 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "set_trading_mode",
       description:
-        "Switch between 'auto' and 'manual' trading mode. In auto mode, signals are executed immediately. In manual mode, signals become drafts.",
+        "Change the trading mode. 'auto': signals execute immediately on exchange (risky, no review). 'manual': signals become pending drafts that must be individually accepted or rejected (safer, recommended).",
       parameters: {
         type: "object",
         properties: {
           mode: {
             type: "string",
             enum: ["auto", "manual"],
-            description: "Trading mode to set",
+            description:
+              "'auto' for immediate execution, 'manual' for draft review workflow",
           },
         },
         required: ["mode"],
@@ -399,7 +466,7 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "get_risk_settings",
       description:
-        "Get current risk management settings: risk per trade %, max/min leverage, skip-no-SL setting.",
+        "Get current risk management configuration. Returns JSON: { riskPerTradePercent: number (e.g., 2 = 2% of balance risked per trade), minLeverage: number (minimum allowed leverage), maxLeverage: number (maximum allowed leverage), skipNoSL: boolean (skip signals without stop-loss) }. These settings control position sizing via calculate_risk_preview.",
       parameters: { type: "object", properties: {}, required: [] },
     },
   },
@@ -408,16 +475,25 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "calculate_risk_preview",
       description:
-        "Calculate risk for a potential trade: margin needed, leverage, notional size, quantity based on current risk settings.",
+        "Calculate position sizing and risk for a potential trade BEFORE placing it. Returns: suggested quantity (contracts), required margin, notional value, leverage needed, and risk amount in USD. Uses current account balance and risk settings. ALWAYS call this before place_order to determine the correct quantity.",
       parameters: {
         type: "object",
         properties: {
-          entryPrice: { type: "number", description: "Entry price" },
-          stopLossPrice: { type: "number", description: "Stop loss price" },
+          entryPrice: {
+            type: "number",
+            description:
+              "Planned entry price for the trade (e.g., 65000 for BTC at $65,000)",
+          },
+          stopLossPrice: {
+            type: "number",
+            description:
+              "Planned stop-loss price (e.g., 62000 for BTC LONG). The difference between entry and SL determines risk.",
+          },
           side: {
             type: "string",
             enum: ["LONG", "SHORT"],
-            description: "Trade direction",
+            description:
+              "Trade direction: LONG (buy, profit from price increase) or SHORT (sell, profit from price decrease)",
           },
         },
         required: ["entryPrice", "stopLossPrice", "side"],
@@ -618,6 +694,15 @@ export const toolImplementations: Record<string, ToolExecutor> = {
 
   accept_draft: async (args) => {
     const { draftId } = args as { draftId: string };
+
+    // Validate MongoDB ObjectId format (24 hex chars)
+    if (!/^[0-9a-fA-F]{24}$/.test(draftId)) {
+      return JSON.stringify({
+        success: false,
+        error: `Invalid draft ID '${draftId}'. You MUST use the exact _id string from get_pending_drafts (24-char hex string like '6810a1b2c3d4e5f6a7b8c9d0'). Call get_pending_drafts first to get the correct IDs.`,
+      });
+    }
+
     const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
     const res = await fetch(`${baseUrl}/api/drafts/${draftId}/accept`, {
       method: "POST",
@@ -628,12 +713,111 @@ export const toolImplementations: Record<string, ToolExecutor> = {
 
   reject_draft: async (args) => {
     const { draftId } = args as { draftId: string };
+
+    // Validate MongoDB ObjectId format (24 hex chars)
+    if (!/^[0-9a-fA-F]{24}$/.test(draftId)) {
+      return JSON.stringify({
+        success: false,
+        error: `Invalid draft ID '${draftId}'. You MUST use the exact _id string from get_pending_drafts (24-char hex string like '6810a1b2c3d4e5f6a7b8c9d0'). Call get_pending_drafts first to get the correct IDs.`,
+      });
+    }
+
     const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
     const res = await fetch(`${baseUrl}/api/drafts/${draftId}/reject`, {
       method: "POST",
     });
     const data = await res.json();
     return JSON.stringify(data);
+  },
+
+  accept_all_drafts: async () => {
+    await connectDB();
+    const drafts = await getPendingDrafts();
+    if (drafts.length === 0) {
+      return JSON.stringify({
+        success: true,
+        message: "No pending drafts to accept.",
+        accepted: 0,
+      });
+    }
+
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
+    const results: { id: string; success: boolean; error?: string }[] = [];
+
+    for (const draft of drafts) {
+      try {
+        const res = await fetch(`${baseUrl}/api/drafts/${draft._id}/accept`, {
+          method: "POST",
+        });
+        const data = await res.json();
+        results.push({
+          id: String(draft._id),
+          success: res.ok,
+          error: data.error,
+        });
+      } catch (err) {
+        results.push({
+          id: String(draft._id),
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    const succeeded = results.filter((r) => r.success).length;
+    const failed = results.filter((r) => !r.success).length;
+    return JSON.stringify({
+      success: true,
+      total: drafts.length,
+      accepted: succeeded,
+      failed,
+      results,
+    });
+  },
+
+  reject_all_drafts: async () => {
+    await connectDB();
+    const drafts = await getPendingDrafts();
+    if (drafts.length === 0) {
+      return JSON.stringify({
+        success: true,
+        message: "No pending drafts to reject.",
+        rejected: 0,
+      });
+    }
+
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
+    const results: { id: string; success: boolean; error?: string }[] = [];
+
+    for (const draft of drafts) {
+      try {
+        const res = await fetch(`${baseUrl}/api/drafts/${draft._id}/reject`, {
+          method: "POST",
+        });
+        const data = await res.json();
+        results.push({
+          id: String(draft._id),
+          success: res.ok,
+          error: data.error,
+        });
+      } catch (err) {
+        results.push({
+          id: String(draft._id),
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    const succeeded = results.filter((r) => r.success).length;
+    const failed = results.filter((r) => !r.success).length;
+    return JSON.stringify({
+      success: true,
+      total: drafts.length,
+      rejected: succeeded,
+      failed,
+      results,
+    });
   },
 
   // ─── Discord ───────────────────────────────────────────────────
