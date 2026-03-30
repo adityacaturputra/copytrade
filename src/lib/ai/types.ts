@@ -3,6 +3,7 @@ export interface TradingSignal {
     | "BUY"
     | "SELL"
     | "CLOSE"
+    | "CANCEL"
     | "HOLD"
     | "TP"
     | "SL"

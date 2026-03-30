@@ -6,9 +6,11 @@ export interface DiscordMessage {
   channelId: string;
   author: string;
   content: string;
+  originalContent?: string; // full content before quote stripping
   timestamp: Date;
   messageUrl: string;
   imageUrls: string[];
+  isReply?: boolean;
   sourceId?: string;
   sourceName?: string;
 }
@@ -230,14 +232,21 @@ async function fetchViaBot(
   for (const [, msg] of fetched) {
     // Include bot messages — trading signals often come from mirror/relay bots
     const imageUrls = extractImageUrls(msg.attachments, msg.embeds);
+
+    // Strip Discord reply quote blocks
+    const isReply = msg.content.includes("> ");
+    const stripped = stripDiscordQuotes(msg.content);
+
     messages.push({
       messageId: msg.id,
       channelId: msg.channelId,
       author: msg.author.username,
-      content: msg.content,
+      content: stripped,
+      originalContent: stripped !== msg.content ? msg.content : undefined,
       timestamp: msg.createdAt,
       messageUrl: msg.url,
       imageUrls,
+      isReply,
     });
   }
 
@@ -309,14 +318,22 @@ async function fetchViaUserToken(
       if (embed.thumbnail?.url) imageUrls.push(embed.thumbnail.url);
     }
 
+    // Strip Discord reply quote blocks (lines starting with "> ")
+    // These are quoted portions of the message being replied to,
+    // not the actual new content from the author.
+    const isReply = msg.content.includes("> ");
+    const stripped = stripDiscordQuotes(msg.content);
+
     messages.push({
       messageId: msg.id,
       channelId: msg.channel_id,
       author: msg.author.username,
-      content: msg.content,
+      content: stripped,
+      originalContent: stripped !== msg.content ? msg.content : undefined,
       timestamp: new Date(msg.timestamp),
       messageUrl: `https://discord.com/channels/@me/${msg.channel_id}/${msg.id}`,
       imageUrls,
+      isReply,
     });
   }
 
@@ -334,6 +351,28 @@ async function fetchViaUserToken(
 }
 
 // ==================== Helpers ====================
+
+/**
+ * Strip Discord reply quote blocks from message content.
+ * Discord reply quotes appear as lines starting with "> " (often with a link).
+ * We remove these quoted lines and keep only the author's actual new text.
+ */
+function stripDiscordQuotes(content: string): string {
+  const lines = content.split("\n");
+  const stripped: string[] = [];
+
+  for (const line of lines) {
+    // Skip lines that are Discord reply quotes: "> text" or "> [text](url)"
+    if (/^>\s/.test(line)) continue;
+    stripped.push(line);
+  }
+
+  // Trim and collapse multiple blank lines that may result from stripping
+  return stripped
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
 
 function extractImageUrls(
   attachments:

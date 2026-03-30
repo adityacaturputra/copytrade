@@ -150,15 +150,90 @@ export async function runSignalCheck(): Promise<{
           status: "pending",
         });
 
-        // 5. Parse with AI
+        // 5. Parse with AI — use original content for replies so AI sees the quoted signal
         const analyzer = AIFactory.getAnalyzer();
-        const signal = await analyzer.parseSignal(msg.content);
+        const aiContent = msg.originalContent || msg.content;
+        const signal = await analyzer.parseSignal(aiContent);
 
         if (!signal || !signal.action || signal.action === "HOLD") {
           await ProcessedMessage.updateOne(
             { messageId: msg.messageId },
             { status: "ignored", processedAt: new Date() },
           );
+          continue;
+        }
+
+        // Check for cancel requests on previously drafted signals
+        if (signal.action === "CANCEL" && signal.symbol) {
+          console.log(
+            `🚫 Cancel request detected for ${signal.symbol} from ${msg.author}`,
+          );
+
+          // Find and reject any pending drafts for this symbol
+          const cancelledDrafts = await DraftTrade.updateMany(
+            { symbol: signal.symbol, status: "pending" },
+            { status: "rejected", resolvedAt: new Date() },
+          );
+
+          if (cancelledDrafts.modifiedCount > 0) {
+            console.log(
+              `🚫 Cancelled ${cancelledDrafts.modifiedCount} pending draft(s) for ${signal.symbol}`,
+            );
+          }
+
+          await ProcessedMessage.updateOne(
+            { messageId: msg.messageId },
+            {
+              signalType: "CANCEL",
+              parsedSignal: JSON.stringify(signal),
+              status: "processed",
+              processedAt: new Date(),
+            },
+          );
+
+          await TradeLog.create({
+            type: "signal",
+            action: "cancel_request",
+            symbol: signal.symbol,
+            details: `Cancel request from ${msg.author}: ${signal.reasoning || "no reason provided"}. ${cancelledDrafts.modifiedCount} draft(s) cancelled.`,
+            result:
+              cancelledDrafts.modifiedCount > 0
+                ? "cancelled_drafts"
+                : "no_pending_drafts",
+          });
+
+          // In auto mode, also close open positions if requested
+          if (mode === "auto") {
+            const openPositions = await Position.find({
+              symbol: signal.symbol,
+              status: "open",
+            });
+
+            if (openPositions.length > 0) {
+              const exchange = ExchangeFactory.getClient();
+              for (const pos of openPositions) {
+                try {
+                  await exchange.closePosition(
+                    pos.symbol,
+                    pos.orderId,
+                    pos.quantity,
+                  );
+                  pos.status = "closed";
+                  pos.closedAt = new Date();
+                  pos.closeReason = `Cancel request by ${msg.author}: ${signal.reasoning || "signal author requested cancellation"}`;
+                  await pos.save();
+                  console.log(
+                    `🚫 Auto-cancelled position: ${pos.symbol} ${pos.side}`,
+                  );
+                } catch (closeErr) {
+                  console.warn(
+                    `⚠️ Failed to auto-close ${pos.symbol}: ${closeErr instanceof Error ? closeErr.message : String(closeErr)}`,
+                  );
+                }
+              }
+            }
+          }
+
           continue;
         }
 

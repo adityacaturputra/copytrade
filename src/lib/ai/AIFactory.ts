@@ -15,7 +15,7 @@ export function buildSignalParserPrompt(): string {
 Return a JSON object with this exact structure. If the message is NOT a trading signal, return null.
 
 {
-  "action": "BUY" | "SELL" | "CLOSE" | "HOLD" | "TP" | "SL" | "UPDATE_SL" | "UPDATE_TP",
+  "action": "BUY" | "SELL" | "CLOSE" | "CANCEL" | "HOLD" | "TP" | "SL" | "UPDATE_SL" | "UPDATE_TP",
   "symbol": "BTCUSDT" (always uppercase with USDT suffix, e.g. ETHUSDT, SOLUSDT),
   "entryPrice": number or null,
   "takeProfitTargets": [number] or null,
@@ -38,6 +38,17 @@ Important rules:
 - If the message mentions "spot" explicitly, set leverage to 1
 - Handle abbreviations: BTC=BTCUSDT, ETH=ETHUSDT, SOL=SOLUSDT, etc.
 - Entry zones expressed as ranges should use the midpoint as entryPrice
+
+IMPORTANT — Detect cancel/close requests in reply messages:
+- If someone replies to a signal saying they want to cancel, close, or invalidate it (e.g., "lupa cancel", "close aja", "bisa sl+ atau close posisi", "should be cancelled"), return action: "CANCEL" with the symbol from the quoted signal
+- Phrases indicating cancellation intent: "lupa cancel", "cancel aja", "close posisi", "bisa close", "should cancel", "forget to cancel", "jangan masuk", "skip aja"
+- Set confidence based on how clear the cancel request is
+- Copy the symbol from the quoted signal into the symbol field
+
+CRITICAL — Ignore these types of messages (return null):
+- Replies that are purely casual conversation with NO reference to trading actions (e.g., just chatting, saying thanks, asking questions)
+- Messages that are ONLY commentary or personal updates without any actionable request
+- Messages containing ONLY role pings (<@&...>) without any signal or cancel request
 
 OUTPUT ONLY THE RAW JSON OBJECT. No markdown, no backticks, no explanations.`;
 }
