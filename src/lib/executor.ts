@@ -373,17 +373,88 @@ export async function executeSignal(
       });
 
       if (existingPos) {
+        // Compare entry, TP, and SL to decide: skip or update TP/SL only
+        const newTP = signal.takeProfitTargets?.[0] ?? null;
+        const newSL = signal.stopLoss ?? null;
+        const existingTP = existingPos.takeProfitPrice ?? null;
+        const existingSL = existingPos.stopLossPrice ?? null;
+        const existingEntry = existingPos.entryPrice ?? null;
+        const newEntry = entryPrice ?? null;
+
+        // Helper: compare two numbers with tolerance for floating point
+        const numEqual = (a: number | null, b: number | null) => {
+          if (a === null && b === null) return true;
+          if (a === null || b === null) return false;
+          return Math.abs(a - b) < 0.01;
+        };
+
+        const entryMatch = numEqual(newEntry, existingEntry);
+        const tpMatch = numEqual(newTP, existingTP);
+        const slMatch = numEqual(newSL, existingSL);
+
+        if (entryMatch && tpMatch && slMatch) {
+          // Exact duplicate: same symbol, side, entry, TP, SL — skip entirely
+          console.log(
+            `⚠️ Duplicate ${side} ${signal.symbol}: same entry=${existingEntry}, TP=${existingTP}, SL=${existingSL} — skipping`,
+          );
+          await TradeLog.create({
+            type: "signal",
+            action: "skipped_duplicate",
+            symbol: signal.symbol,
+            details: `Exact duplicate: open ${side} position exists with same entry=${existingEntry}, TP=${existingTP}, SL=${existingSL}`,
+            result: "skipped",
+          });
+          return null;
+        }
+
+        // Entry matches but TP or SL changed — update only the TP/SL
+        if (entryMatch) {
+          let updated = false;
+          const updates: string[] = [];
+
+          if (!tpMatch && newTP !== null) {
+            existingPos.takeProfitPrice = newTP;
+            updates.push(`TP: ${existingTP} → ${newTP}`);
+            updated = true;
+          }
+          if (!slMatch && newSL !== null) {
+            existingPos.stopLossPrice = newSL;
+            updates.push(`SL: ${existingSL} → ${newSL}`);
+            updated = true;
+          }
+
+          if (updated) {
+            await existingPos.save();
+            console.log(
+              `🔄 Updated ${side} ${signal.symbol} TP/SL: ${updates.join(", ")}`,
+            );
+            await TradeLog.create({
+              type: "signal",
+              action: "updated_tp_sl",
+              symbol: signal.symbol,
+              details: `Existing position TP/SL updated instead of opening duplicate: ${updates.join(", ")}`,
+              result: "updated",
+            });
+          } else {
+            console.log(
+              `⚠️ Duplicate ${side} ${signal.symbol}: entry matches but no new TP/SL values to update — skipping`,
+            );
+            await TradeLog.create({
+              type: "signal",
+              action: "skipped_duplicate",
+              symbol: signal.symbol,
+              details: `Open ${side} position exists with same entry but no valid TP/SL update provided`,
+              result: "skipped",
+            });
+          }
+          return null;
+        }
+
+        // Different entry price — this is a genuinely new signal, don't block it
+        // (the exchange may reject it anyway if hedging is not enabled)
         console.log(
-          `⚠️ Already have open ${side} position for ${signal.symbol}, skipping`,
+          `⚠️ Open ${side} ${signal.symbol} exists (entry=${existingEntry}) but new signal has different entry=${newEntry} — proceeding as new order`,
         );
-        await TradeLog.create({
-          type: "signal",
-          action: "skipped_duplicate",
-          symbol: signal.symbol,
-          details: `Already have open ${side} position`,
-          result: "skipped",
-        });
-        return null;
       }
 
       // Check skipNoSL — skip trades without stop loss if setting is enabled

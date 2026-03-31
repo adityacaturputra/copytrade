@@ -117,7 +117,7 @@ export async function POST(
           `[${requestId}] 📊 Processing ${draft.action} order for ${draft.symbol}...`,
         );
 
-        // Check for duplicate
+        // Check for duplicate — compare entry, TP, SL with existing open position
         const existingPos = await Position.findOne({
           symbol: draft.symbol,
           side,
@@ -125,15 +125,116 @@ export async function POST(
         });
 
         if (existingPos) {
-          console.warn(
-            `[${requestId}] ⚠️ Duplicate position found: ${side} ${draft.symbol} (positionId=${existingPos._id})`,
-          );
-          return NextResponse.json(
-            {
-              success: false,
-              error: `Already have open ${side} position for ${draft.symbol}`,
-            },
-            { status: 400 },
+          const newTP = draft.takeProfitTargets?.[0] ?? null;
+          const newSL = draft.stopLoss ?? null;
+          const existingTP = existingPos.takeProfitPrice ?? null;
+          const existingSL = existingPos.stopLossPrice ?? null;
+          const existingEntry = existingPos.entryPrice ?? null;
+          const newEntry = draft.entryPrice ?? null;
+
+          // Helper: compare two numbers with tolerance for floating point
+          const numEqual = (a: number | null, b: number | null) => {
+            if (a === null && b === null) return true;
+            if (a === null || b === null) return false;
+            return Math.abs(a - b) < 0.01;
+          };
+
+          const entryMatch = numEqual(newEntry, existingEntry);
+          const tpMatch = numEqual(newTP, existingTP);
+          const slMatch = numEqual(newSL, existingSL);
+
+          if (entryMatch && tpMatch && slMatch) {
+            // Exact duplicate: same symbol, side, entry, TP, SL — reject
+            console.warn(
+              `[${requestId}] ⚠️ Duplicate position: ${side} ${draft.symbol} with same entry=${existingEntry}, TP=${existingTP}, SL=${existingSL} (positionId=${existingPos._id})`,
+            );
+            draft.status = "rejected";
+            draft.resolvedAt = new Date();
+            await draft.save();
+            await TradeLog.create({
+              type: "draft",
+              action: "rejected_duplicate",
+              symbol: draft.symbol,
+              details: `Exact duplicate: open ${side} position exists with same entry=${existingEntry}, TP=${existingTP}, SL=${existingSL}`,
+              result: "rejected",
+            });
+            return NextResponse.json(
+              {
+                success: false,
+                error: `Already have open ${side} position for ${draft.symbol} with same entry, TP, and SL`,
+              },
+              { status: 400 },
+            );
+          }
+
+          // Entry matches but TP or SL changed — update only the TP/SL
+          if (entryMatch) {
+            let updated = false;
+            const updates: string[] = [];
+
+            if (!tpMatch && newTP !== null) {
+              existingPos.takeProfitPrice = newTP;
+              updates.push(`TP: ${existingTP} → ${newTP}`);
+              updated = true;
+            }
+            if (!slMatch && newSL !== null) {
+              existingPos.stopLossPrice = newSL;
+              updates.push(`SL: ${existingSL} → ${newSL}`);
+              updated = true;
+            }
+
+            if (updated) {
+              await existingPos.save();
+              console.log(
+                `[${requestId}] 🔄 Updated ${side} ${draft.symbol} TP/SL instead of opening duplicate: ${updates.join(", ")}`,
+              );
+              draft.status = "accepted";
+              draft.resolvedAt = new Date();
+              draft.positionId = existingPos._id.toString();
+              await draft.save();
+              await TradeLog.create({
+                type: "draft",
+                action: "accepted_updated_tp_sl",
+                symbol: draft.symbol,
+                details: `Existing position TP/SL updated instead of opening duplicate: ${updates.join(", ")}`,
+                result: "updated",
+              });
+              return NextResponse.json({
+                success: true,
+                data: {
+                  draft,
+                  position: existingPos,
+                  message: `Updated TP/SL on existing position instead of opening duplicate: ${updates.join(", ")}`,
+                },
+              });
+            }
+
+            // Entry matches but no new TP/SL to update
+            console.warn(
+              `[${requestId}] ⚠️ Duplicate position: ${side} ${draft.symbol} with same entry but no valid TP/SL update (positionId=${existingPos._id})`,
+            );
+            draft.status = "rejected";
+            draft.resolvedAt = new Date();
+            await draft.save();
+            await TradeLog.create({
+              type: "draft",
+              action: "rejected_duplicate",
+              symbol: draft.symbol,
+              details: `Open ${side} position exists with same entry but no valid TP/SL update provided`,
+              result: "rejected",
+            });
+            return NextResponse.json(
+              {
+                success: false,
+                error: `Already have open ${side} position for ${draft.symbol} with same entry and no new TP/SL to update`,
+              },
+              { status: 400 },
+            );
+          }
+
+          // Different entry price — this is a genuinely new signal, proceed
+          console.log(
+            `[${requestId}] ⚠️ Open ${side} ${draft.symbol} exists (entry=${existingEntry}) but draft has different entry=${newEntry} — proceeding as new order`,
           );
         }
 
