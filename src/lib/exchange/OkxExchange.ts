@@ -787,7 +787,7 @@ export class OkxExchange implements ExchangeClient {
   ): Promise<void> {
     const instId = this.toOkxSymbol(symbol);
 
-    // First get the position to know the side
+    // First get the position to know the side and margin mode
     const positions = await this.getOpenPositions();
     const pos = positions.find(
       (p) => p.symbol === symbol || p.positionId === positionId,
@@ -798,23 +798,24 @@ export class OkxExchange implements ExchangeClient {
     }
 
     const posSide = pos.side === "LONG" ? "long" : "short";
+    const mgnMode = pos.marginType || "isolated";
 
     // Try close-position endpoint first
     const closeBody = JSON.stringify({
       instId,
-      mgnMode: "isolated",
+      mgnMode,
       posSide,
       type: "market",
       sz: String(quantity || pos.quantity),
       side: pos.side === "LONG" ? "sell" : "buy",
-      tdMode: "isolated",
+      tdMode: mgnMode,
     });
 
     const closePath = "/api/v5/trade/close-position";
     const closeHeaders = this.authHeaders("POST", closePath, closeBody);
 
     console.log(
-      `[OKX] 📤 Closing position: ${instId} ${posSide} qty=${quantity || pos.quantity}...`,
+      `[OKX] 📤 Closing position: ${instId} ${posSide} (${mgnMode}) qty=${quantity || pos.quantity}...`,
     );
 
     try {
@@ -829,7 +830,7 @@ export class OkxExchange implements ExchangeClient {
       }
 
       console.warn(
-        `[OKX] ⚠️ close-position failed: code=${data.code}, msg=${data.msg}. Trying opposite order...`,
+        `[OKX] ⚠️ close-position failed (${mgnMode}): code=${data.code}, msg=${data.msg}. Trying opposite order...`,
       );
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
@@ -841,7 +842,7 @@ export class OkxExchange implements ExchangeClient {
     // Fallback: place opposite order
     const fallbackBody = JSON.stringify({
       instId,
-      tdMode: "isolated",
+      tdMode: mgnMode,
       side: pos.side === "LONG" ? "sell" : "buy",
       posSide,
       ordType: "market",
@@ -852,7 +853,7 @@ export class OkxExchange implements ExchangeClient {
     const orderPath = "/api/v5/trade/order";
     const fallbackHeaders = this.authHeaders("POST", orderPath, fallbackBody);
 
-    console.log(`[OKX] 📤 Placing opposite order to close: ${instId}...`);
+    console.log(`[OKX] 📤 Placing opposite order to close: ${instId} (${mgnMode})...`);
 
     const fallbackResp = await this.client.post(orderPath, fallbackBody, {
       headers: fallbackHeaders,

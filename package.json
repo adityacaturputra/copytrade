@@ -6,7 +6,13 @@
     "dev": "next dev",
     "build": "next build --turbopack",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "reset": "tsx scripts/reset-all.ts",
+    "reset:db": "tsx scripts/reset-all.ts --skip-exchange",
+    "reset:exchange": "tsx scripts/reset-all.ts --skip-db",
+    "reset:dry": "tsx scripts/reset-all.ts --dry-run",
+    "reset:funds": "tsx scripts/reset-all.ts --reset-funds-only",
+    "reset:all": "tsx scripts/reset-all.ts --reset-funds"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
@@ -28,8 +34,10 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "autoprefixer": "^10.4.20",
+    "dotenv": "^17.3.1",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.16",
+    "tsx": "^4.21.0",
     "typescript": "^5.7.0"
   }
 }
