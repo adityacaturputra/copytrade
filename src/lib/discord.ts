@@ -112,24 +112,73 @@ export async function checkTokenHealth(
  * Fetch messages from a specific Discord source (token + channels).
  * This is the primary method used by the executor.
  */
+/**
+ * Fetch messages from a Discord source with pagination.
+ *
+ * `fetchLimit` is the **page size** per Discord API call. We keep paginating
+ * backwards (older messages) until one of these stop conditions is met:
+ *   1. A message ID is found in `processedMessageIds` (already saved to DB)
+ *   2. A message timestamp is older than `timeWindowHours`
+ *   3. No more messages returned by Discord
+ *
+ * Returns messages sorted DESCENDING (newest first).
+ */
 export async function fetchMessagesFromSource(
   source: DiscordSourceConfig,
-  limit: number = 10,
+  fetchLimit: number = 10,
+  timeWindowHours?: number,
+  processedMessageIds?: Set<string>,
 ): Promise<DiscordMessage[]> {
   const allMessages: DiscordMessage[] = [];
+  const cutoffTime = timeWindowHours
+    ? new Date(Date.now() - timeWindowHours * 60 * 60 * 1000)
+    : null;
+  const knownIds = processedMessageIds || new Set<string>();
 
   for (const channelId of source.channelIds) {
     try {
-      const messages =
-        source.method === "user"
-          ? await fetchViaUserToken(source.token, channelId, limit)
-          : await fetchViaBot(source.token, channelId, limit);
+      let cursor: string | undefined = undefined; // snowflake ID for "before" param
+      let channelDone = false;
 
-      // Tag messages with source info
-      for (const msg of messages) {
-        msg.sourceId = source._id;
-        msg.sourceName = source.name;
-        allMessages.push(msg);
+      while (!channelDone) {
+        const messages: DiscordMessage[] =
+          source.method === "user"
+            ? await fetchViaUserToken(
+                source.token,
+                channelId,
+                fetchLimit,
+                cursor,
+              )
+            : await fetchViaBot(source.token, channelId, fetchLimit, cursor);
+
+        if (messages.length === 0) {
+          channelDone = true;
+          break;
+        }
+
+        for (const msg of messages) {
+          msg.sourceId = source._id;
+          msg.sourceName = source.name;
+
+          // Stop condition 1: message already in DB
+          if (knownIds.has(msg.messageId)) {
+            channelDone = true;
+            break;
+          }
+
+          // Stop condition 2: message outside time window
+          if (cutoffTime && msg.timestamp < cutoffTime) {
+            channelDone = true;
+            break;
+          }
+
+          allMessages.push(msg);
+        }
+
+        // Set cursor to oldest message for next page
+        if (!channelDone && messages.length > 0) {
+          cursor = messages[messages.length - 1].messageId;
+        }
       }
     } catch (error) {
       console.error(
@@ -140,6 +189,14 @@ export async function fetchMessagesFromSource(
       throw error;
     }
   }
+
+  // Sort DESCENDING by channelId + messageId (newest first) for display
+  // Discord message IDs are snowflakes that are chronologically sortable
+  allMessages.sort((a, b) => {
+    const channelCompare = a.channelId.localeCompare(b.channelId);
+    if (channelCompare !== 0) return -channelCompare; // descending channel
+    return b.messageId.localeCompare(a.messageId); // descending messageId (newest first)
+  });
 
   return allMessages;
 }
@@ -210,6 +267,7 @@ async function fetchViaBot(
   token: string,
   channelId: string,
   limit: number,
+  before?: string,
 ): Promise<DiscordMessage[]> {
   const client = getBotClient(token);
 
@@ -227,7 +285,10 @@ async function fetchViaBot(
   }
 
   const messages: DiscordMessage[] = [];
-  const fetched = await channel.messages.fetch({ limit });
+  const fetched = await channel.messages.fetch({
+    limit,
+    ...(before ? { before } : {}),
+  });
 
   for (const [, msg] of fetched) {
     // Include bot messages — trading signals often come from mirror/relay bots
@@ -278,13 +339,15 @@ async function fetchViaUserToken(
   token: string,
   channelId: string,
   limit: number,
+  before?: string,
 ): Promise<DiscordMessage[]> {
   console.log(
     `📨 Fetching messages via user token for channel ${channelId} (limit: ${limit})...`,
   );
 
+  const beforeParam = before ? `&before=${before}` : "";
   const response = await axios.get(
-    `https://discord.com/api/v9/channels/${channelId}/messages?limit=${limit}`,
+    `https://discord.com/api/v9/channels/${channelId}/messages?limit=${limit}${beforeParam}`,
     {
       headers: {
         Authorization: token,

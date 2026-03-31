@@ -115,6 +115,11 @@ interface CronRunStatus {
   completedAt: string | null;
 }
 
+interface SignalConfig {
+  fetchLimit: number;
+  timeWindowHours: number;
+}
+
 interface DashboardData {
   stats: Stats;
   account: AccountInfo | null;
@@ -128,6 +133,7 @@ interface DashboardData {
   recentDrafts: DraftTrade[];
   tradingMode: "auto" | "manual";
   riskConfig: RiskConfig | null;
+  signalConfig: SignalConfig | null;
 }
 
 // ==================== Component ====================

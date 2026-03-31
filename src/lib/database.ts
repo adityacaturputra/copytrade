@@ -121,6 +121,12 @@ export interface IRiskSettings extends Document {
   updatedAt: Date;
 }
 
+export interface ISignalConfig extends Document {
+  fetchLimit: number; // default 10 — how many messages to fetch per channel
+  timeWindowHours: number; // default 24 — only process messages within this many hours
+  updatedAt: Date;
+}
+
 // ─── Schemas ───────────────────────────────────────────────────────────────────
 
 const ProcessedMessageSchema = new Schema<IProcessedMessage>(
@@ -259,6 +265,14 @@ const RiskSettingsSchema = new Schema<IRiskSettings>(
   { timestamps: { createdAt: false, updatedAt: true } },
 );
 
+const SignalConfigSchema = new Schema<ISignalConfig>(
+  {
+    fetchLimit: { type: Number, default: 10, min: 1, max: 100 },
+    timeWindowHours: { type: Number, default: 24, min: 1, max: 720 },
+  },
+  { timestamps: { createdAt: false, updatedAt: true } },
+);
+
 // ─── Models ────────────────────────────────────────────────────────────────────
 
 export const ProcessedMessage: Model<IProcessedMessage> =
@@ -286,6 +300,10 @@ export const DiscordSource: Model<IDiscordSource> =
 export const RiskSettings: Model<IRiskSettings> =
   models.RiskSettings ||
   mongoose.model<IRiskSettings>("RiskSettings", RiskSettingsSchema);
+
+export const SignalConfig: Model<ISignalConfig> =
+  models.SignalConfig ||
+  mongoose.model<ISignalConfig>("SignalConfig", SignalConfigSchema);
 
 // ─── Helper Functions ──────────────────────────────────────────────────────────
 

@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB, getTradingMode, setTradingMode } from "@/lib/database";
 import { getRiskConfig, setRiskConfig } from "@/lib/risk";
+import {
+  getSignalConfig,
+  setSignalConfig,
+  SignalConfigType,
+} from "@/lib/signal-config";
 
 export const dynamic = "force-dynamic";
 
@@ -9,7 +14,13 @@ export async function GET() {
     await connectDB();
     const mode = await getTradingMode();
     const riskConfig = await getRiskConfig();
-    return NextResponse.json({ success: true, mode, risk: riskConfig });
+    const signalCfg = await getSignalConfig();
+    return NextResponse.json({
+      success: true,
+      mode,
+      risk: riskConfig,
+      signal: signalCfg,
+    });
   } catch (error) {
     return NextResponse.json(
       {
@@ -94,9 +105,47 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    // Handle signal config update
+    if (body.signal) {
+      const { fetchLimit, timeWindowHours } = body.signal;
+
+      if (fetchLimit !== undefined && (fetchLimit < 1 || fetchLimit > 100)) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Fetch limit must be between 1 and 100",
+          },
+          { status: 400 },
+        );
+      }
+      if (
+        timeWindowHours !== undefined &&
+        (timeWindowHours < 1 || timeWindowHours > 720)
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Time window must be between 1 and 720 hours",
+          },
+          { status: 400 },
+        );
+      }
+
+      await setSignalConfig({
+        ...(fetchLimit !== undefined && { fetchLimit }),
+        ...(timeWindowHours !== undefined && { timeWindowHours }),
+      });
+    }
+
     const mode = await getTradingMode();
     const riskConfig = await getRiskConfig();
-    return NextResponse.json({ success: true, mode, risk: riskConfig });
+    const signalCfg = await getSignalConfig();
+    return NextResponse.json({
+      success: true,
+      mode,
+      risk: riskConfig,
+      signal: signalCfg,
+    });
   } catch (error) {
     return NextResponse.json(
       {

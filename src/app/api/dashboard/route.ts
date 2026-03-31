@@ -14,6 +14,7 @@ import {
 } from "@/lib/database";
 import { ExchangeFactory } from "@/lib/exchange/ExchangeFactory";
 import { getRiskConfig } from "@/lib/risk";
+import { getSignalConfig } from "@/lib/signal-config";
 
 export const dynamic = "force-dynamic";
 
@@ -45,6 +46,7 @@ export async function GET() {
       recentDrafts,
       tradingMode,
       riskConfig,
+      signalConfig,
     ] = await Promise.all([
       getStats(),
       getOpenPositions(),
@@ -55,6 +57,7 @@ export async function GET() {
       getRecentDrafts(50),
       getTradingMode(),
       getRiskConfig(),
+      getSignalConfig(),
     ]);
 
     // Enrich open positions with real-time exchange data (current price, PnL)
@@ -159,6 +162,7 @@ export async function GET() {
         recentDrafts,
         tradingMode,
         riskConfig,
+        signalConfig,
       },
     });
   } catch (error) {

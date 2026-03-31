@@ -20,6 +20,7 @@ import { AIFactory } from "./ai/AIFactory";
 import { TradingSignal } from "./ai/types";
 import { ExchangeFactory } from "./exchange/ExchangeFactory";
 import { calculateRiskBasedPosition, getRiskConfig } from "./risk";
+import { getSignalConfig } from "./signal-config";
 
 export async function runSignalCheck(): Promise<{
   checked: number;
@@ -45,7 +46,23 @@ export async function runSignalCheck(): Promise<{
     const mode = await getTradingMode();
     console.log(`🔧 Trading mode: ${mode}`);
 
-    // 2. Get Discord sources (DB first, fallback to env)
+    // 2. Get signal config (fetchLimit = page size, timeWindowHours)
+    const signalConfig = await getSignalConfig();
+    console.log(
+      `🔧 Signal config: pageSize=${signalConfig.fetchLimit}, timeWindowHours=${signalConfig.timeWindowHours}`,
+    );
+
+    // 3. Load all processed message IDs from DB (for pagination stop condition)
+    const processedDocs = await ProcessedMessage.find(
+      {},
+      { messageId: 1 },
+    ).lean();
+    const processedMessageIds = new Set(processedDocs.map((d) => d.messageId));
+    console.log(
+      `📦 Found ${processedMessageIds.size} previously processed messages in DB`,
+    );
+
+    // 4. Get Discord sources (DB first, fallback to env)
     const dbSources = await getActiveDiscordSources();
     let allMessages: DiscordMessage[] = [];
 
@@ -87,7 +104,12 @@ export async function runSignalCheck(): Promise<{
             }
           }
 
-          const messages = await fetchMessagesFromSource(sourceConfig);
+          const messages = await fetchMessagesFromSource(
+            sourceConfig,
+            signalConfig.fetchLimit,
+            signalConfig.timeWindowHours,
+            processedMessageIds,
+          );
           allMessages = allMessages.concat(messages);
 
           // Update source health
@@ -130,6 +152,15 @@ export async function runSignalCheck(): Promise<{
 
     result.checked = allMessages.length;
     console.log(`📡 Total messages fetched: ${allMessages.length}`);
+
+    // Sort ASCENDING (oldest first) for processing — so signals are
+    // handled in chronological order.  Discord snowflake IDs are
+    // lexicographically sortable by time.
+    allMessages.sort((a, b) => {
+      const channelCompare = a.channelId.localeCompare(b.channelId);
+      if (channelCompare !== 0) return channelCompare;
+      return a.messageId.localeCompare(b.messageId);
+    });
 
     for (const msg of allMessages) {
       try {

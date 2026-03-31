@@ -56,6 +56,16 @@ const defaultRiskConfig: RiskConfig = {
   skipNoSL: true,
 };
 
+interface SignalConfigType {
+  fetchLimit: number;
+  timeWindowHours: number;
+}
+
+const defaultSignalConfig: SignalConfigType = {
+  fetchLimit: 10,
+  timeWindowHours: 24,
+};
+
 export default function SettingsPage() {
   const [sources, setSources] = useState<DiscordSource[]>([]);
   const [loading, setLoading] = useState(true);
@@ -83,6 +93,15 @@ export default function SettingsPage() {
   const [riskError, setRiskError] = useState<string | null>(null);
   const [riskSuccess, setRiskSuccess] = useState(false);
 
+  // Signal config state
+  const [signalCfg, setSignalCfg] = useState({
+    fetchLimit: 10,
+    timeWindowHours: 24,
+  });
+  const [signalSaving, setSignalSaving] = useState(false);
+  const [signalError, setSignalError] = useState<string | null>(null);
+  const [signalSuccess, setSignalSuccess] = useState(false);
+
   const fetchSources = useCallback(async () => {
     try {
       const res = await fetch("/api/discord-sources");
@@ -100,12 +119,17 @@ export default function SettingsPage() {
     }
   }, []);
 
-  const fetchRiskConfig = useCallback(async () => {
+  const fetchSettings = useCallback(async () => {
     try {
       const res = await fetch("/api/settings");
       const json = await res.json();
-      if (json.success && json.risk) {
-        setRiskConfigState(json.risk);
+      if (json.success) {
+        if (json.risk) setRiskConfigState(json.risk);
+        if (json.signal)
+          setSignalCfg({
+            fetchLimit: json.signal.fetchLimit,
+            timeWindowHours: json.signal.timeWindowHours,
+          });
       }
     } catch {
       // Use defaults
@@ -114,8 +138,32 @@ export default function SettingsPage() {
 
   useEffect(() => {
     fetchSources();
-    fetchRiskConfig();
-  }, [fetchSources, fetchRiskConfig]);
+    fetchSettings();
+  }, [fetchSources, fetchSettings]);
+
+  const handleSignalSave = async () => {
+    setSignalSaving(true);
+    setSignalError(null);
+    setSignalSuccess(false);
+    try {
+      const res = await fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ signal: signalCfg }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setSignalSuccess(true);
+        setTimeout(() => setSignalSuccess(false), 3000);
+      } else {
+        setSignalError(json.error || "Failed to save");
+      }
+    } catch (err) {
+      setSignalError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setSignalSaving(false);
+    }
+  };
 
   const handleRiskSave = async () => {
     setRiskSaving(true);
@@ -1120,6 +1168,91 @@ export default function SettingsPage() {
               </>
             ) : (
               "💾 Save Risk Settings"
+            )}
+          </button>
+        </div>
+
+        {/* Signal Fetch Settings */}
+        <div className="card border-blue-700/50">
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-lg">📡</span>
+            <h3 className="text-sm font-semibold text-slate-300">
+              Signal Fetch Settings
+            </h3>
+          </div>
+          <p className="text-xs text-slate-400 mb-4">
+            Messages are fetched page-by-page (newest → oldest) until a{" "}
+            <strong className="text-slate-300">stop condition</strong> is met:
+            either a message already in the DB is found, or a message falls
+            outside the time window. They are then processed oldest-first for
+            correct trade execution order.
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="block text-sm text-slate-400 mb-1">
+                Page Size (per API call)
+              </label>
+              <input
+                type="number"
+                min="1"
+                max="100"
+                value={signalCfg.fetchLimit}
+                onChange={(e) =>
+                  setSignalCfg({
+                    ...signalCfg,
+                    fetchLimit: parseInt(e.target.value) || 10,
+                  })
+                }
+                className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none"
+              />
+              <p className="text-xs text-slate-500 mt-1">
+                Messages per Discord API page request. Pagination continues
+                until a stop condition. Default: 10
+              </p>
+            </div>
+            <div>
+              <label className="block text-sm text-slate-400 mb-1">
+                Time Window (hours)
+              </label>
+              <input
+                type="number"
+                min="1"
+                max="720"
+                value={signalCfg.timeWindowHours}
+                onChange={(e) =>
+                  setSignalCfg({
+                    ...signalCfg,
+                    timeWindowHours: parseInt(e.target.value) || 24,
+                  })
+                }
+                className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none"
+              />
+              <p className="text-xs text-slate-500 mt-1">
+                Stop fetching when a message is older than this. Default: 24h
+              </p>
+            </div>
+          </div>
+          {signalError && (
+            <div className="bg-red-900/30 border border-red-700/50 rounded-lg px-4 py-3 text-sm text-red-300 mb-3">
+              ⚠️ {signalError}
+            </div>
+          )}
+          {signalSuccess && (
+            <div className="bg-emerald-900/30 border border-emerald-700/50 rounded-lg px-4 py-3 text-sm text-emerald-300 mb-3">
+              ✅ Signal settings saved successfully!
+            </div>
+          )}
+          <button
+            onClick={handleSignalSave}
+            disabled={signalSaving}
+            className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 px-6 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2"
+          >
+            {signalSaving ? (
+              <>
+                <div className="spinner w-4 h-4 border-2" /> Saving...
+              </>
+            ) : (
+              "💾 Save Signal Settings"
             )}
           </button>
         </div>
