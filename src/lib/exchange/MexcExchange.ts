@@ -11,7 +11,7 @@ import {
 
 // ==================== MEXC Exchange Adapter ====================
 
-const BASE_URL = "https://contract.mexc.com";
+const BASE_URL = process.env.MEXC_PROXY_URL || "https://contract.mexc.com";
 
 export class MexcExchange implements ExchangeClient {
   readonly name = "mexc";

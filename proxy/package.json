@@ -1,0 +1,13 @@
+{
+  "name": "copytrade-proxy",
+  "version": "1.0.0",
+  "description": "Reverse proxy for OKX/MEXC API — provides static outbound IP for Vercel",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "http-proxy": "^1.18.1"
+  }
+}

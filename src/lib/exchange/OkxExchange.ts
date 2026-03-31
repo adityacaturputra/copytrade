@@ -11,7 +11,7 @@ import {
 
 // ==================== OKX Exchange Adapter ====================
 
-const BASE_URL = process.env.OKX_BASE_URL || "https://www.okx.com";
+const BASE_URL = process.env.OKX_PROXY_URL || process.env.OKX_BASE_URL || "https://www.okx.com";
 
 /**
  * OKX V5 API — ExchangeClient implementation.
