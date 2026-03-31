@@ -99,6 +99,22 @@ interface RiskConfig {
   skipNoSL: boolean;
 }
 
+interface CronStep {
+  message: string;
+  timestamp: string;
+  type: "info" | "success" | "warning" | "error";
+}
+
+interface CronRunStatus {
+  running: boolean;
+  startedAt: string | null;
+  progress: string;
+  steps: CronStep[];
+  result: "success" | "error" | null;
+  error: string | null;
+  completedAt: string | null;
+}
+
 interface DashboardData {
   stats: Stats;
   account: AccountInfo | null;
@@ -126,6 +142,11 @@ export default function Dashboard() {
   const [triggeringCron, setTriggeringCron] = useState<string | null>(null);
   const [switchingMode, setSwitchingMode] = useState(false);
   const [actingDraft, setActingDraft] = useState<string | null>(null);
+  const [cronStatus, setCronStatus] = useState<Record<
+    string,
+    CronRunStatus
+  > | null>(null);
+  const [expandedCron, setExpandedCron] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
@@ -144,11 +165,27 @@ export default function Dashboard() {
     }
   }, []);
 
+  // Poll cron status
+  const fetchCronStatus = useCallback(async () => {
+    try {
+      const res = await fetch("/api/cron/status");
+      const json = await res.json();
+      if (json.success) {
+        setCronStatus(json.cronStatus);
+      }
+    } catch {}
+  }, []);
+
   useEffect(() => {
     fetchData();
+    fetchCronStatus();
     const interval = setInterval(fetchData, 30000);
-    return () => clearInterval(interval);
-  }, [fetchData]);
+    const cronInterval = setInterval(fetchCronStatus, 2000);
+    return () => {
+      clearInterval(interval);
+      clearInterval(cronInterval);
+    };
+  }, [fetchData, fetchCronStatus]);
 
   const triggerCron = async (type: "signal-check" | "position-monitor") => {
     setTriggeringCron(type);
@@ -156,9 +193,8 @@ export default function Dashboard() {
       const res = await fetch(`/api/cron/${type}`, { method: "POST" });
       const json = await res.json();
       if (json.success) {
-        alert(
-          `${type} completed successfully!\n${JSON.stringify(json, null, 2)}`,
-        );
+        // Fire-and-forget — poll status to see progress
+        fetchCronStatus();
       } else {
         alert(`${type} failed: ${json.error}`);
       }
@@ -442,6 +478,15 @@ export default function Dashboard() {
             <span className="ml-auto badge badge-warning">DEMO MODE</span>
           )}
         </div>
+
+        {/* Cron Status Panel */}
+        {cronStatus && (
+          <CronStatusPanel
+            cronStatus={cronStatus}
+            expandedCron={expandedCron}
+            onToggle={setExpandedCron}
+          />
+        )}
 
         {/* Stats Cards */}
         <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
@@ -1226,6 +1271,107 @@ function LogsTab({ logs }: { logs: Log[] }) {
           )}
         </div>
       ))}
+    </div>
+  );
+}
+
+function CronStatusPanel({
+  cronStatus,
+  expandedCron,
+  onToggle,
+}: {
+  cronStatus: Record<string, CronRunStatus>;
+  expandedCron: string | null;
+  onToggle: (name: string | null) => void;
+}) {
+  const anyRunning = Object.values(cronStatus).some((s) => s.running);
+  if (!anyRunning && Object.values(cronStatus).every((s) => !s.result)) {
+    return null; // Nothing to show yet
+  }
+
+  const labels: Record<string, string> = {
+    "signal-check": "🔍 Signal Check",
+    "position-monitor": "📊 Position Monitor",
+  };
+
+  return (
+    <div className="space-y-2">
+      {Object.entries(cronStatus).map(([name, status]) => {
+        if (!status.running && !status.result) return null;
+        const isExpanded = expandedCron === name;
+        return (
+          <div
+            key={name}
+            className={`rounded-lg border overflow-hidden ${
+              status.running
+                ? "border-blue-700/50 bg-blue-950/20"
+                : status.result === "success"
+                  ? "border-green-700/50 bg-green-950/20"
+                  : "border-red-700/50 bg-red-950/20"
+            }`}
+          >
+            <button
+              onClick={() => onToggle(isExpanded ? null : name)}
+              className="w-full px-4 py-2 flex items-center justify-between text-sm"
+            >
+              <div className="flex items-center gap-2">
+                {status.running ? (
+                  <div className="spinner w-3 h-3 border-2 border-blue-400" />
+                ) : status.result === "success" ? (
+                  <span className="text-green-400">✅</span>
+                ) : (
+                  <span className="text-red-400">❌</span>
+                )}
+                <span className="font-medium text-white">
+                  {labels[name] || name}
+                </span>
+                <span className="text-slate-400 text-xs">
+                  {status.progress}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                {status.running && (
+                  <span className="text-xs text-blue-400 animate-pulse">
+                    Running...
+                  </span>
+                )}
+                {status.startedAt && (
+                  <span className="text-xs text-slate-500">
+                    {new Date(status.startedAt).toLocaleTimeString()}
+                  </span>
+                )}
+                <span className="text-slate-500 text-xs">
+                  {isExpanded ? "▲" : "▼"}
+                </span>
+              </div>
+            </button>
+            {isExpanded && status.steps.length > 0 && (
+              <div className="border-t border-slate-700/50 px-4 py-2 bg-slate-900/30 max-h-48 overflow-y-auto">
+                {status.steps.map((step, i) => (
+                  <div key={i} className="flex items-start gap-2 text-xs py-1">
+                    <span className="text-slate-500 shrink-0">
+                      {new Date(step.timestamp).toLocaleTimeString()}
+                    </span>
+                    <span
+                      className={
+                        step.type === "error"
+                          ? "text-red-400"
+                          : step.type === "success"
+                            ? "text-green-400"
+                            : step.type === "warning"
+                              ? "text-amber-400"
+                              : "text-slate-300"
+                      }
+                    >
+                      {step.message}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
