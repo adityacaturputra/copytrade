@@ -220,6 +220,9 @@ async function cancelOkxAlgoOrders() {
     const secretKey = process.env.OKX_SECRET_KEY;
     const passphrase = process.env.OKX_PASSPHRASE;
     if (!apiKey || !secretKey || !passphrase) { warn("  OKX credentials not configured, skipping"); return; }
+    const sk: string = secretKey;
+    const ak: string = apiKey;
+    const pp: string = passphrase;
 
     const simulated = process.env.OKX_SIMULATED === "true";
     const baseUrl = process.env.OKX_BASE_URL || "https://www.okx.com";
@@ -228,13 +231,13 @@ async function cancelOkxAlgoOrders() {
     const requestPath = "/api/v5/trade/cancel-algos";
     const body = JSON.stringify({ ordType: "conditional" });
     const message = timestamp + method + requestPath + body;
-    const sign = CryptoJS.HmacSHA256(message, secretKey).toString(CryptoJS.enc.Base64);
+    const sign = CryptoJS.HmacSHA256(message, sk).toString(CryptoJS.enc.Base64);
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
-      "OK-ACCESS-KEY": apiKey,
+      "OK-ACCESS-KEY": ak,
       "OK-ACCESS-SIGN": sign,
       "OK-ACCESS-TIMESTAMP": timestamp,
-      "OK-ACCESS-PASSPHRASE": passphrase,
+      "OK-ACCESS-PASSPHRASE": pp,
     };
     if (simulated) headers["x-simulated-trading"] = "1";
 
@@ -260,10 +263,13 @@ async function resetOkxDemoFunds() {
     const passphrase = process.env.OKX_PASSPHRASE;
     const baseUrl = process.env.OKX_BASE_URL || "https://www.okx.com";
     if (!apiKey || !secretKey || !passphrase) { error("  OKX credentials not configured"); return; }
+    const sk: string = secretKey;
+    const ak: string = apiKey;
+    const pp: string = passphrase;
 
     function sign(ts: string, m: string, rp: string, b?: string): string {
       const message = ts + m + rp + (b || "");
-      return CryptoJS.HmacSHA256(message, secretKey).toString(CryptoJS.enc.Base64);
+      return CryptoJS.HmacSHA256(message, sk).toString(CryptoJS.enc.Base64);
     }
     function getTimestamp(): string {
       return new Date().toISOString().replace(/\.\d{3}Z$/, ".000Z");
@@ -272,10 +278,10 @@ async function resetOkxDemoFunds() {
       const ts = getTimestamp();
       return {
         "Content-Type": "application/json",
-        "OK-ACCESS-KEY": apiKey,
+        "OK-ACCESS-KEY": ak,
         "OK-ACCESS-SIGN": sign(ts, method, requestPath, body),
         "OK-ACCESS-TIMESTAMP": ts,
-        "OK-ACCESS-PASSPHRASE": passphrase,
+        "OK-ACCESS-PASSPHRASE": pp,
         "x-simulated-trading": "1",
       };
     }
