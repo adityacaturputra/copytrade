@@ -120,6 +120,13 @@ interface SignalConfig {
   timeWindowHours: number;
 }
 
+interface DiscordSourceInfo {
+  _id: string;
+  name: string;
+  channelIds: string[];
+  isActive: boolean;
+}
+
 interface DashboardData {
   stats: Stats;
   account: AccountInfo | null;
@@ -134,6 +141,7 @@ interface DashboardData {
   tradingMode: "auto" | "manual";
   riskConfig: RiskConfig | null;
   signalConfig: SignalConfig | null;
+  discordSources: DiscordSourceInfo[];
 }
 
 // ==================== Component ====================
@@ -308,6 +316,16 @@ export default function Dashboard() {
     if ((m as any).channelId) allChannelIds.add((m as any).channelId);
   }
   const channelIdArray = Array.from(allChannelIds).sort();
+
+  // ─── Build channelId → source name mapping ──────────────────────────
+  const channelNameMap = new Map<string, string>();
+  for (const source of data?.discordSources || []) {
+    for (const chId of source.channelIds || []) {
+      if (!channelNameMap.has(chId)) {
+        channelNameMap.set(chId, source.name);
+      }
+    }
+  }
 
   // Filter helper
   const filterByChannel = <T extends Record<string, any>>(
@@ -646,19 +664,31 @@ export default function Dashboard() {
                 >
                   All Channels
                 </button>
-                {channelIdArray.map((chId) => (
-                  <button
-                    key={chId}
-                    onClick={() => setSelectedChannelId(chId)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-mono font-medium transition ${
-                      selectedChannelId === chId
-                        ? "bg-primary-600 text-white"
-                        : "bg-slate-700 text-slate-300 hover:bg-slate-600"
-                    }`}
-                  >
-                    {chId}
-                  </button>
-                ))}
+                {channelIdArray.map((chId) => {
+                  const sourceName = channelNameMap.get(chId);
+                  const shortId = chId.length > 8 ? `...${chId.slice(-6)}` : chId;
+                  return (
+                    <button
+                      key={chId}
+                      onClick={() => setSelectedChannelId(chId)}
+                      title={chId}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+                        selectedChannelId === chId
+                          ? "bg-primary-600 text-white"
+                          : "bg-slate-700 text-slate-300 hover:bg-slate-600"
+                      }`}
+                    >
+                      {sourceName ? (
+                        <span className="flex items-center gap-1.5">
+                          <span>{sourceName}</span>
+                          <span className="text-[10px] opacity-50 font-mono">{shortId}</span>
+                        </span>
+                      ) : (
+                        <span className="font-mono">{chId}</span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}

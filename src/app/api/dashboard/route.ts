@@ -11,6 +11,7 @@ import {
   getTradingMode,
   Position,
   TradeLog,
+  getAllDiscordSources,
 } from "@/lib/database";
 import { ExchangeFactory } from "@/lib/exchange/ExchangeFactory";
 import { getRiskConfig } from "@/lib/risk";
@@ -50,6 +51,7 @@ export async function GET(request: NextRequest) {
       tradingMode,
       riskConfig,
       signalConfig,
+      discordSources,
     ] = await Promise.all([
       getStats(),
       getOpenPositions(),
@@ -61,6 +63,7 @@ export async function GET(request: NextRequest) {
       getTradingMode(),
       getRiskConfig(),
       getSignalConfig(),
+      getAllDiscordSources(),
     ]);
 
     // Enrich open positions with real-time exchange data (current price, PnL)
@@ -184,6 +187,7 @@ export async function GET(request: NextRequest) {
         tradingMode,
         riskConfig,
         signalConfig,
+        discordSources,
       },
     });
   } catch (error) {
