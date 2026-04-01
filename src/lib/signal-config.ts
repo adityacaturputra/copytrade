@@ -5,6 +5,7 @@ import { connectDB, SignalConfig as SignalConfigModel } from "./database";
 export interface SignalConfigType {
   fetchLimit: number; // how many messages to fetch per channel (default 10)
   timeWindowHours: number; // only process messages within this window (default 24)
+  batchSize: number; // how many messages to send to AI per bulk request (default 5)
 }
 
 // ─── Defaults ─────────────────────────────────────────────────────────────────
@@ -12,6 +13,7 @@ export interface SignalConfigType {
 const DEFAULT_SIGNAL_CONFIG: SignalConfigType = {
   fetchLimit: 10,
   timeWindowHours: 24,
+  batchSize: 5,
 };
 
 // ─── DB Helpers ───────────────────────────────────────────────────────────────
@@ -26,6 +28,7 @@ export async function getSignalConfig(): Promise<SignalConfigType> {
       return {
         fetchLimit: settings.fetchLimit,
         timeWindowHours: settings.timeWindowHours,
+        batchSize: settings.batchSize,
       };
     }
   } catch (err) {
@@ -48,6 +51,9 @@ export async function setSignalConfig(
   if (config.timeWindowHours !== undefined) {
     update.timeWindowHours = config.timeWindowHours;
   }
+  if (config.batchSize !== undefined) {
+    update.batchSize = config.batchSize;
+  }
   const doc = await SignalConfigModel.findOneAndUpdate({}, update, {
     upsert: true,
     new: true,
@@ -55,5 +61,6 @@ export async function setSignalConfig(
   return {
     fetchLimit: doc.fetchLimit,
     timeWindowHours: doc.timeWindowHours,
+    batchSize: doc.batchSize,
   };
 }

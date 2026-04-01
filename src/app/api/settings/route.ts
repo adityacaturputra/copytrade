@@ -107,7 +107,7 @@ export async function POST(request: NextRequest) {
 
     // Handle signal config update
     if (body.signal) {
-      const { fetchLimit, timeWindowHours } = body.signal;
+      const { fetchLimit, timeWindowHours, batchSize } = body.signal;
 
       if (fetchLimit !== undefined && (fetchLimit < 1 || fetchLimit > 100)) {
         return NextResponse.json(
@@ -130,10 +130,20 @@ export async function POST(request: NextRequest) {
           { status: 400 },
         );
       }
+      if (batchSize !== undefined && (batchSize < 1 || batchSize > 20)) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Batch size must be between 1 and 20",
+          },
+          { status: 400 },
+        );
+      }
 
       await setSignalConfig({
         ...(fetchLimit !== undefined && { fetchLimit }),
         ...(timeWindowHours !== undefined && { timeWindowHours }),
+        ...(batchSize !== undefined && { batchSize }),
       });
     }
 

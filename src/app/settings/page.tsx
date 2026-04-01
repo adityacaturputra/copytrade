@@ -97,6 +97,7 @@ export default function SettingsPage() {
   const [signalCfg, setSignalCfg] = useState({
     fetchLimit: 10,
     timeWindowHours: 24,
+    batchSize: 5,
   });
   const [signalSaving, setSignalSaving] = useState(false);
   const [signalError, setSignalError] = useState<string | null>(null);
@@ -129,6 +130,7 @@ export default function SettingsPage() {
           setSignalCfg({
             fetchLimit: json.signal.fetchLimit,
             timeWindowHours: json.signal.timeWindowHours,
+            batchSize: json.signal.batchSize || 5,
           });
       }
     } catch {
@@ -1187,7 +1189,7 @@ export default function SettingsPage() {
             outside the time window. They are then processed oldest-first for
             correct trade execution order.
           </p>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
             <div>
               <label className="block text-sm text-slate-400 mb-1">
                 Page Size (per API call)
@@ -1206,8 +1208,7 @@ export default function SettingsPage() {
                 className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none"
               />
               <p className="text-xs text-slate-500 mt-1">
-                Messages per Discord API page request. Pagination continues
-                until a stop condition. Default: 10
+                Messages per Discord API page request. Default: 10
               </p>
             </div>
             <div>
@@ -1228,7 +1229,28 @@ export default function SettingsPage() {
                 className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none"
               />
               <p className="text-xs text-slate-500 mt-1">
-                Stop fetching when a message is older than this. Default: 24h
+                Stop fetching when older than this. Default: 24h
+              </p>
+            </div>
+            <div>
+              <label className="block text-sm text-slate-400 mb-1">
+                AI Batch Size
+              </label>
+              <input
+                type="number"
+                min="1"
+                max="20"
+                value={signalCfg.batchSize}
+                onChange={(e) =>
+                  setSignalCfg({
+                    ...signalCfg,
+                    batchSize: parseInt(e.target.value) || 5,
+                  })
+                }
+                className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none"
+              />
+              <p className="text-xs text-slate-500 mt-1">
+                Messages per AI parse call (bulk). Default: 5
               </p>
             </div>
           </div>

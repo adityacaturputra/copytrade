@@ -20,7 +20,16 @@ export interface TradingSignal {
   timeframe?: string;
   confidence?: number;
   reasoning?: string;
-  rawSignal: string;
+  /** Set by executor after mapping — not returned by AI */
+  rawSignal?: string;
+  /** Discord messageId mapped by executor */
+  messageId?: string;
+}
+
+/** Input for bulk AI parsing — pairs a Discord messageId with its content */
+export interface BulkMessageInput {
+  messageId: string;
+  content: string;
 }
 
 export interface PositionAnalysis {
@@ -34,8 +43,14 @@ export interface PositionAnalysis {
   currentMarketCondition: string;
 }
 
+export interface BulkSignalResult {
+  messageId: string; // maps back to BulkMessageInput.messageId
+  signal: TradingSignal | null;
+}
+
 export interface AISignalAnalyzer {
   parseSignal(message: string): Promise<TradingSignal | null>;
+  parseBulkSignals(messages: BulkMessageInput[]): Promise<BulkSignalResult[]>;
   analyzePosition(
     symbol: string,
     side: string,

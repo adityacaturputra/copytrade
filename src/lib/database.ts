@@ -135,6 +135,7 @@ export interface IRiskSettings extends Document {
 export interface ISignalConfig extends Document {
   fetchLimit: number; // default 10 — how many messages to fetch per channel
   timeWindowHours: number; // default 24 — only process messages within this many hours
+  batchSize: number; // default 5 — how many messages to send to AI per bulk request
   updatedAt: Date;
 }
 
@@ -296,6 +297,7 @@ const SignalConfigSchema = new Schema<ISignalConfig>(
   {
     fetchLimit: { type: Number, default: 10, min: 1, max: 100 },
     timeWindowHours: { type: Number, default: 24, min: 1, max: 720 },
+    batchSize: { type: Number, default: 5, min: 1, max: 50 },
   },
   { timestamps: { createdAt: false, updatedAt: true } },
 );

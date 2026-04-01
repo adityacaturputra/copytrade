@@ -1,4 +1,4 @@
-import { AISignalAnalyzer } from "./types";
+import { AISignalAnalyzer, BulkSignalResult, TradingSignal } from "./types";
 import { GLMAnalyzer } from "./GLMAnalyzer";
 import { KimiAnalyzer } from "./KimiAnalyzer";
 import { OpenAIAnalyzer } from "./OpenAIAnalyzer";
@@ -53,6 +53,53 @@ CRITICAL — Ignore these types of messages (return null):
 - Messages containing ONLY role pings (<@&...>) without any signal or cancel request
 
 OUTPUT ONLY THE RAW JSON OBJECT. No markdown, no backticks, no explanations.`;
+}
+
+/**
+ * Build the system prompt for BULK signal parsing (multiple messages at once).
+ */
+export function buildBulkSignalParserPrompt(): string {
+  return `You are an expert crypto trading signal analyzer. You will receive MULTIPLE Discord messages in a single batch. Parse EACH message and extract trading signal information.
+
+The user message will contain messages in this format:
+---MESSAGE [messageId]---
+[content]
+---END MESSAGE [messageId]---
+
+Each message has a unique messageId. You MUST include the messageId in each parsed result so results can be mapped back.
+
+Return a JSON ARRAY where each element has "messageId" and either a parsed signal or null.
+
+Example response:
+[
+  {"messageId":"msg001","signal":{"action":"BUY","symbol":"BTCUSDT","entryPrice":95000,"takeProfitTargets":[96000,97000,98000],"stopLoss":94000,"leverage":10,"confidence":90,"reasoning":"Clear long signal"}},
+  {"messageId":"msg002","signal":null},
+  {"messageId":"msg003","signal":{"action":"UPDATE_SL","symbol":"ETHUSDT","stopLoss":3200,"confidence":85,"reasoning":"SL update"}}
+]
+
+Rules for each signal object:
+- Symbol MUST end with USDT (e.g., BTC → BTCUSDT, ETH → ETHUSDT)
+- If multiple TP targets, list them all in takeProfitTargets array
+- Distinguish between UPDATE_TP (replacing/modifying an existing TP) and ADD_TP (adding a new TP level)
+- Leverage: use x notation (default 10x if not mentioned)
+- Confidence: how certain you are this is a valid trading signal (0-100)
+- For non-signal messages (chat, casual conversation, role pings only), set signal to null
+- If "spot" is mentioned, set leverage to 1
+- Handle abbreviations: BTC=BTCUSDT, ETH=ETHUSDT, SOL=SOLUSDT
+- Entry zones expressed as ranges should use midpoint
+
+CRITICAL — Detect cancel/close requests in reply messages:
+- Phrases like "lupa cancel", "close aja", "bisa sl+ atau close posisi" → action: "CANCEL"
+- Copy the symbol from the quoted/referenced signal
+
+CRITICAL — Ignore these messages (set signal to null):
+- Purely casual conversation with NO reference to trading actions
+- Only commentary or personal updates without actionable request
+- Messages containing ONLY role pings without any signal or cancel request
+
+The array length MUST match the number of messages provided.
+Every element MUST include the correct messageId from the input.
+OUTPUT ONLY THE RAW JSON ARRAY. No markdown, no backticks, no explanations.`;
 }
 
 export function buildPositionAnalysisPrompt(): string {

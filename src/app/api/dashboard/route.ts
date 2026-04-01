@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import {
   connectDB,
   getStats,
@@ -18,9 +18,12 @@ import { getSignalConfig } from "@/lib/signal-config";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
     await connectDB();
+
+    const { searchParams } = new URL(request.url);
+    const channelFilter = searchParams.get("channelId");
 
     // Fetch exchange account info
     let account = null;
@@ -136,6 +139,10 @@ export async function GET() {
       finalStats = await getStats();
     }
 
+    // Build channelId filter for client-facing data
+    const chFilter = (item: any) =>
+      !channelFilter || item.channelId === channelFilter;
+
     const enrichedOpenPositions = activePositions.map((pos) => {
       const exPos = exchangePositions.find((ep) => ep.symbol === pos.symbol);
       return {
@@ -153,13 +160,27 @@ export async function GET() {
         account,
         exchangeProvider,
         exchangeError,
-        openPositions: enrichedOpenPositions,
-        recentMessages,
+        openPositions: channelFilter
+          ? enrichedOpenPositions.filter(chFilter)
+          : enrichedOpenPositions,
+        recentMessages: channelFilter
+          ? recentMessages.filter(chFilter)
+          : recentMessages,
         recentLogs,
-        allPositions:
-          syncedClosed > 0 ? await getAllPositions(50) : allPositions,
-        pendingDrafts,
-        recentDrafts,
+        allPositions: channelFilter
+          ? (syncedClosed > 0
+              ? await getAllPositions(50)
+              : allPositions
+            ).filter(chFilter)
+          : syncedClosed > 0
+            ? await getAllPositions(50)
+            : allPositions,
+        pendingDrafts: channelFilter
+          ? pendingDrafts.filter(chFilter)
+          : pendingDrafts,
+        recentDrafts: channelFilter
+          ? recentDrafts.filter(chFilter)
+          : recentDrafts,
         tradingMode,
         riskConfig,
         signalConfig,

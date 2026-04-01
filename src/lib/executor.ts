@@ -20,7 +20,7 @@ import {
   DiscordMessage,
 } from "./discord";
 import { AIFactory } from "./ai/AIFactory";
-import { TradingSignal } from "./ai/types";
+import { TradingSignal, BulkMessageInput } from "./ai/types";
 import { ExchangeFactory } from "./exchange/ExchangeFactory";
 import { calculateRiskBasedPosition, getRiskConfig } from "./risk";
 import { getSignalConfig } from "./signal-config";
@@ -165,175 +165,240 @@ export async function runSignalCheck(): Promise<{
       return a.messageId.localeCompare(b.messageId);
     });
 
-    for (const msg of allMessages) {
-      try {
-        // 3. Check if message was already processed
-        const existing = await ProcessedMessage.findOne({
-          messageId: msg.messageId,
-        });
-        if (existing) continue;
+    // ─── Bulk processing ────────────────────────────────────────────────────
+    // Filter out already-processed messages in one query
+    const existingProcessed = await ProcessedMessage.find(
+      { messageId: { $in: allMessages.map((m) => m.messageId) } },
+      { messageId: 1 },
+    ).lean();
+    const existingIds = new Set(existingProcessed.map((d) => d.messageId));
+    const newMessages = allMessages.filter(
+      (m) => !existingIds.has(m.messageId),
+    );
 
-        // 4. Save message as pending
-        await ProcessedMessage.create({
+    if (newMessages.length === 0) {
+      console.log("📭 No new messages to process");
+    } else {
+      console.log(
+        `📨 ${newMessages.length} new messages to process (bulk batchSize=${signalConfig.batchSize})`,
+      );
+
+      // Bulk-create pending messages
+      await ProcessedMessage.insertMany(
+        newMessages.map((msg) => ({
           messageId: msg.messageId,
           channelId: msg.channelId,
           author: msg.author,
           content: msg.content,
           signalType: null,
           parsedSignal: null,
-          status: "pending",
-        });
+          status: "pending" as const,
+        })),
+        { ordered: false },
+      );
 
-        // 5. Parse with AI — use original content for replies so AI sees the quoted signal
-        const analyzer = AIFactory.getAnalyzer();
-        const aiContent = msg.originalContent || msg.content;
-        const signal = await analyzer.parseSignal(aiContent);
+      // Batch AI parsing
+      const analyzer = AIFactory.getAnalyzer();
+      const batchSize = signalConfig.batchSize || 5;
 
-        if (!signal || !signal.action || signal.action === "HOLD") {
-          await ProcessedMessage.updateOne(
-            { messageId: msg.messageId },
-            { status: "ignored", processedAt: new Date() },
+      for (let i = 0; i < newMessages.length; i += batchSize) {
+        const batch = newMessages.slice(i, i + batchSize);
+
+        // Build BulkMessageInput[] — AI returns messageId so we can map back
+        const bulkInputs: BulkMessageInput[] = batch.map((msg) => ({
+          messageId: msg.messageId,
+          content: msg.originalContent || msg.content,
+        }));
+
+        let batchResults: Array<{
+          messageId: string;
+          signal: TradingSignal | null;
+        }>;
+
+        try {
+          batchResults = await analyzer.parseBulkSignals(bulkInputs);
+        } catch (bulkErr) {
+          // If bulk fails entirely, fall back to individual parsing
+          console.warn(
+            `⚠️ Bulk AI call failed, falling back to individual: ${bulkErr instanceof Error ? bulkErr.message : String(bulkErr)}`,
           );
-          continue;
-        }
-
-        // Check for cancel requests on previously drafted signals
-        if (signal.action === "CANCEL" && signal.symbol) {
-          console.log(
-            `🚫 Cancel request detected for ${signal.symbol} from ${msg.author}`,
-          );
-
-          // Find and reject any pending drafts for this symbol
-          const cancelledDrafts = await DraftTrade.updateMany(
-            { symbol: signal.symbol, status: "pending" },
-            { status: "rejected", resolvedAt: new Date() },
-          );
-
-          if (cancelledDrafts.modifiedCount > 0) {
-            console.log(
-              `🚫 Cancelled ${cancelledDrafts.modifiedCount} pending draft(s) for ${signal.symbol}`,
-            );
-          }
-
-          await ProcessedMessage.updateOne(
-            { messageId: msg.messageId },
-            {
-              signalType: "CANCEL",
-              parsedSignal: JSON.stringify(signal),
-              status: "processed",
-              processedAt: new Date(),
-            },
-          );
-
-          await TradeLog.create({
-            type: "signal",
-            action: "cancel_request",
-            symbol: signal.symbol,
-            details: `Cancel request from ${msg.author}: ${signal.reasoning || "no reason provided"}. ${cancelledDrafts.modifiedCount} draft(s) cancelled.`,
-            result:
-              cancelledDrafts.modifiedCount > 0
-                ? "cancelled_drafts"
-                : "no_pending_drafts",
-          });
-
-          // In auto mode, also close open positions if requested
-          if (mode === "auto") {
-            const openPositions = await Position.find({
-              symbol: signal.symbol,
-              status: "open",
-            });
-
-            if (openPositions.length > 0) {
-              const exchange = ExchangeFactory.getClient();
-              for (const pos of openPositions) {
-                try {
-                  await exchange.closePosition(
-                    pos.symbol,
-                    pos.orderId,
-                    pos.quantity,
-                  );
-                  pos.status = "closed";
-                  pos.closedAt = new Date();
-                  pos.closeReason = `Cancel request by ${msg.author}: ${signal.reasoning || "signal author requested cancellation"}`;
-                  await pos.save();
-                  console.log(
-                    `🚫 Auto-cancelled position: ${pos.symbol} ${pos.side}`,
-                  );
-                } catch (closeErr) {
-                  console.warn(
-                    `⚠️ Failed to auto-close ${pos.symbol}: ${closeErr instanceof Error ? closeErr.message : String(closeErr)}`,
-                  );
-                }
-              }
+          batchResults = [];
+          for (const input of bulkInputs) {
+            try {
+              const signal = await analyzer.parseSignal(input.content);
+              batchResults.push({ messageId: input.messageId, signal });
+            } catch {
+              batchResults.push({ messageId: input.messageId, signal: null });
             }
           }
-
-          continue;
         }
 
-        result.newSignals++;
-
-        // 6. Update message with parsed signal
-        await ProcessedMessage.updateOne(
-          { messageId: msg.messageId },
-          {
-            signalType: signal.action,
-            parsedSignal: JSON.stringify(signal),
-            status: "processed",
-            processedAt: new Date(),
-          },
-        );
-
-        // 7. Execute or draft based on trading mode
-        if (mode === "auto") {
-          await executeSignal(
-            signal,
-            msg.messageId,
-            msg.channelId,
-            msg.sourceName,
-          );
-          result.executed++;
-
-          await TradeLog.create({
-            type: "signal",
-            action: signal.action,
-            symbol: signal.symbol,
-            details: JSON.stringify(signal),
-            result: "executed",
-          });
-        } else {
-          // Manual mode: create a draft for user review
-          await createDraft(signal, msg);
-          result.drafted++;
-
-          await ProcessedMessage.updateOne(
-            { messageId: msg.messageId },
-            { status: "drafted" },
-          );
-
-          await TradeLog.create({
-            type: "signal",
-            action: signal.action,
-            symbol: signal.symbol,
-            details: JSON.stringify(signal),
-            result: "drafted",
-          });
+        // Build a lookup map from messageId → original Discord message
+        const msgLookup = new Map<string, (typeof batch)[number]>();
+        for (const m of batch) {
+          msgLookup.set(m.messageId, m);
         }
-      } catch (error) {
-        const errMsg = error instanceof Error ? error.message : "Unknown error";
-        result.errors.push(`Message ${msg.messageId}: ${errMsg}`);
 
-        await TradeLog.create({
-          type: "signal",
-          action: "error",
-          symbol: undefined,
-          details: msg.content,
-          error: errMsg,
-        });
+        // Process each result in the batch — map by messageId
+        for (const { messageId: resultMsgId, signal } of batchResults) {
+          const msg = msgLookup.get(resultMsgId);
+          if (!msg) continue;
 
-        console.error(`Error processing message ${msg.messageId}:`, errMsg);
-      }
-    } // end for loop
+          // Attach messageId and rawSignal to signal for downstream use
+          if (signal) {
+            signal.messageId = msg.messageId;
+            signal.rawSignal = msg.originalContent || msg.content;
+          }
+
+          try {
+            if (!signal || !signal.action || signal.action === "HOLD") {
+              await ProcessedMessage.updateOne(
+                { messageId: msg.messageId },
+                { status: "ignored", processedAt: new Date() },
+              );
+              continue;
+            }
+
+            // Check for cancel requests on previously drafted signals
+            if (signal.action === "CANCEL" && signal.symbol) {
+              console.log(
+                `🚫 Cancel request detected for ${signal.symbol} from ${msg.author}`,
+              );
+
+              // Find and reject any pending drafts for this symbol
+              const cancelledDrafts = await DraftTrade.updateMany(
+                { symbol: signal.symbol, status: "pending" },
+                { status: "rejected", resolvedAt: new Date() },
+              );
+
+              if (cancelledDrafts.modifiedCount > 0) {
+                console.log(
+                  `🚫 Cancelled ${cancelledDrafts.modifiedCount} pending draft(s) for ${signal.symbol}`,
+                );
+              }
+
+              await ProcessedMessage.updateOne(
+                { messageId: msg.messageId },
+                {
+                  signalType: "CANCEL",
+                  parsedSignal: JSON.stringify(signal),
+                  status: "processed",
+                  processedAt: new Date(),
+                },
+              );
+
+              await TradeLog.create({
+                type: "signal",
+                action: "cancel_request",
+                symbol: signal.symbol,
+                details: `Cancel request from ${msg.author}: ${signal.reasoning || "no reason provided"}. ${cancelledDrafts.modifiedCount} draft(s) cancelled.`,
+                result:
+                  cancelledDrafts.modifiedCount > 0
+                    ? "cancelled_drafts"
+                    : "no_pending_drafts",
+              });
+
+              // In auto mode, also close open positions if requested
+              if (mode === "auto") {
+                const openPositions = await Position.find({
+                  symbol: signal.symbol,
+                  status: "open",
+                });
+
+                if (openPositions.length > 0) {
+                  const exchange = ExchangeFactory.getClient();
+                  for (const pos of openPositions) {
+                    try {
+                      await exchange.closePosition(
+                        pos.symbol,
+                        pos.orderId,
+                        pos.quantity,
+                      );
+                      pos.status = "closed";
+                      pos.closedAt = new Date();
+                      pos.closeReason = `Cancel request by ${msg.author}: ${signal.reasoning || "signal author requested cancellation"}`;
+                      await pos.save();
+                      console.log(
+                        `🚫 Auto-cancelled position: ${pos.symbol} ${pos.side}`,
+                      );
+                    } catch (closeErr) {
+                      console.warn(
+                        `⚠️ Failed to auto-close ${pos.symbol}: ${closeErr instanceof Error ? closeErr.message : String(closeErr)}`,
+                      );
+                    }
+                  }
+                }
+              }
+
+              continue;
+            }
+
+            result.newSignals++;
+
+            // Update message with parsed signal
+            await ProcessedMessage.updateOne(
+              { messageId: msg.messageId },
+              {
+                signalType: signal.action,
+                parsedSignal: JSON.stringify(signal),
+                status: "processed",
+                processedAt: new Date(),
+              },
+            );
+
+            // Execute or draft based on trading mode
+            if (mode === "auto") {
+              await executeSignal(
+                signal,
+                msg.messageId,
+                msg.channelId,
+                msg.sourceName,
+              );
+              result.executed++;
+
+              await TradeLog.create({
+                type: "signal",
+                action: signal.action,
+                symbol: signal.symbol,
+                details: JSON.stringify(signal),
+                result: "executed",
+              });
+            } else {
+              // Manual mode: create a draft for user review
+              await createDraft(signal, msg);
+              result.drafted++;
+
+              await ProcessedMessage.updateOne(
+                { messageId: msg.messageId },
+                { status: "drafted" },
+              );
+
+              await TradeLog.create({
+                type: "signal",
+                action: signal.action,
+                symbol: signal.symbol,
+                details: JSON.stringify(signal),
+                result: "drafted",
+              });
+            }
+          } catch (error) {
+            const errMsg =
+              error instanceof Error ? error.message : "Unknown error";
+            result.errors.push(`Message ${msg.messageId}: ${errMsg}`);
+
+            await TradeLog.create({
+              type: "signal",
+              action: "error",
+              symbol: undefined,
+              details: msg.content,
+              error: errMsg,
+            });
+
+            console.error(`Error processing message ${msg.messageId}:`, errMsg);
+          }
+        } // end for batchResults
+      } // end for batch
+    } // end else (newMessages > 0)
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : "Unknown error";
     result.errors.push(`General: ${errMsg}`);

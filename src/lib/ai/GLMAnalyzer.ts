@@ -1,6 +1,13 @@
-import { AISignalAnalyzer, TradingSignal, PositionAnalysis } from "./types";
+import {
+  AISignalAnalyzer,
+  TradingSignal,
+  PositionAnalysis,
+  BulkSignalResult,
+  BulkMessageInput,
+} from "./types";
 import {
   buildSignalParserPrompt,
+  buildBulkSignalParserPrompt,
   buildPositionAnalysisPrompt,
 } from "./AIFactory";
 
@@ -42,6 +49,99 @@ export class GLMAnalyzer implements AISignalAnalyzer {
       console.error("GLM: Failed to parse signal response:", response);
       return null;
     }
+  }
+
+  async parseBulkSignals(
+    messages: BulkMessageInput[],
+  ): Promise<BulkSignalResult[]> {
+    if (messages.length === 0) return [];
+
+    const systemPrompt = buildBulkSignalParserPrompt();
+    const userMessage = messages
+      .map(
+        (msg) =>
+          `---MESSAGE ${msg.messageId}---\n${msg.content}\n---END MESSAGE ${msg.messageId}---`,
+      )
+      .join("\n\n");
+
+    // Scale max_tokens based on batch size: ~512 tokens per message analysis
+    const maxTokens = Math.min(16384, Math.max(2048, messages.length * 512));
+
+    const response = await this.callAPI(systemPrompt, userMessage, maxTokens);
+
+    try {
+      const cleaned = response
+        .replace(/```json\n?/g, "")
+        .replace(/```\n?/g, "")
+        .trim();
+      const parsed = JSON.parse(cleaned);
+
+      // Build a map from AI response by messageId
+      const responseMap = new Map<string, TradingSignal | null>();
+      if (Array.isArray(parsed)) {
+        for (const item of parsed) {
+          const msgId = item?.messageId || "";
+          const signal = item?.signal
+            ? this.toTradingSignal(item.signal)
+            : null;
+          responseMap.set(String(msgId), signal);
+        }
+      }
+
+      // Map back using messageId, falling back to positional index
+      const results: BulkSignalResult[] = messages.map((msg, i) => {
+        const signal =
+          responseMap.get(msg.messageId) ??
+          responseMap.get(String(i + 1)) ?? // fallback: AI used 1-based index
+          null;
+        return { messageId: msg.messageId, signal };
+      });
+
+      // If mapping failed for all, try positional fallback
+      if (
+        results.every((r) => r.signal === null) &&
+        Array.isArray(parsed) &&
+        parsed.length > 0
+      ) {
+        return messages.map((msg, i) => {
+          const item = parsed[i];
+          const signal = item?.signal
+            ? this.toTradingSignal(item.signal)
+            : null;
+          return { messageId: msg.messageId, signal };
+        });
+      }
+
+      return results;
+    } catch {
+      console.error(
+        "GLM: Failed to parse bulk signal response:",
+        response?.substring(0, 500),
+      );
+      // Fallback: process one-by-one
+      console.warn(
+        `GLM: Bulk parse failed, falling back to individual parsing for ${messages.length} messages`,
+      );
+      const results: BulkSignalResult[] = [];
+      for (const msg of messages) {
+        try {
+          const signal = await this.parseSignal(msg.content);
+          results.push({ messageId: msg.messageId, signal });
+        } catch {
+          results.push({ messageId: msg.messageId, signal: null });
+        }
+      }
+      return results;
+    }
+  }
+
+  private toTradingSignal(
+    parsed: Record<string, unknown>,
+  ): TradingSignal | null {
+    if (!parsed || !parsed.action || !parsed.symbol) return null;
+    return {
+      ...(parsed as Omit<TradingSignal, "rawSignal" | "messageId">),
+    } as TradingSignal;
   }
 
   async analyzePosition(
@@ -88,6 +188,7 @@ export class GLMAnalyzer implements AISignalAnalyzer {
   private async callAPI(
     systemPrompt: string,
     userMessage: string,
+    maxTokens?: number,
   ): Promise<string> {
     if (this.apiKeys.length === 0) {
       throw new Error("GLM_API_KEY is missing in environment variables.");
@@ -111,7 +212,7 @@ export class GLMAnalyzer implements AISignalAnalyzer {
                 { role: "system", content: systemPrompt },
                 { role: "user", content: userMessage },
               ],
-              max_tokens: 2048,
+              max_tokens: maxTokens || 2048,
             }),
           },
         );
