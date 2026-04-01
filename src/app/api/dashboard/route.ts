@@ -14,6 +14,7 @@ import {
   getAllDiscordSources,
 } from "@/lib/database";
 import { ExchangeFactory } from "@/lib/exchange/ExchangeFactory";
+import { fetchChannelNames } from "@/lib/discord";
 import { getRiskConfig } from "@/lib/risk";
 import { getSignalConfig } from "@/lib/signal-config";
 
@@ -65,6 +66,23 @@ export async function GET(request: NextRequest) {
       getSignalConfig(),
       getAllDiscordSources(),
     ]);
+
+    // Resolve channel names for the channel filter
+    const allUsedChannelIds = Array.from(
+      new Set([
+        ...(recentDrafts || []).map((d: any) => d.channelId).filter(Boolean),
+        ...(allPositions || []).map((p: any) => p.channelId).filter(Boolean),
+        ...(recentMessages || []).map((m: any) => m.channelId).filter(Boolean),
+      ])
+    );
+    let channelNames: Record<string, string> = {};
+    try {
+      const sources = await import("@/lib/database").then((m) => m.getAllDiscordSources());
+      const nameMap = await fetchChannelNames(allUsedChannelIds, sources);
+      channelNames = Object.fromEntries(nameMap);
+    } catch (err) {
+      console.warn("Failed to resolve channel names:", err instanceof Error ? err.message : err);
+    }
 
     // Enrich open positions with real-time exchange data (current price, PnL)
     // Also sync: detect positions closed on the exchange and update DB
@@ -188,6 +206,7 @@ export async function GET(request: NextRequest) {
         riskConfig,
         signalConfig,
         discordSources,
+        channelNames,
       },
     });
   } catch (error) {

@@ -465,6 +465,91 @@ function extractImageUrls(
   return urls;
 }
 
+/**
+ * Resolve channel IDs to channel names using Discord REST API.
+ * Uses the tokens from DiscordSource configs.
+ * Returns a Map<channelId, channelName>.
+ */
+export async function fetchChannelNames(
+  channelIds: string[],
+  sources: Array<{ token: string; method: string; channelIds: string[] }>,
+): Promise<Map<string, string>> {
+  const nameMap = new Map<string, string>();
+  if (channelIds.length === 0) return nameMap;
+
+  const idSet = new Set(channelIds);
+
+  // Try each source token until we resolve all channel IDs
+  for (const source of sources) {
+    if (idSet.size === 0) break;
+
+    const sourceChannelIds = source.channelIds.filter((id) => idSet.has(id));
+    if (sourceChannelIds.length === 0) continue;
+
+    try {
+      if (source.method === 'user') {
+        // Use REST API with user token
+        for (const chId of sourceChannelIds) {
+          if (!idSet.has(chId)) continue;
+          try {
+            const res = await axios.get(
+              `https://discord.com/api/v9/channels/${chId}`,
+              {
+                headers: {
+                  Authorization: source.token,
+                  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+                },
+                timeout: 5000,
+              },
+            );
+            const chName = res.data?.name;
+            if (chName) {
+              nameMap.set(chId, chName);
+              idSet.delete(chId);
+            }
+          } catch (err) {
+            console.warn(`Failed to fetch channel name for ${chId}:`,
+              err instanceof Error ? err.message : err);
+          }
+        }
+      } else if (source.method === 'bot') {
+        // Use discord.js bot client
+        try {
+          const client = getBotClient(source.token);
+          if (!client.isReady()) {
+            await client.login(source.token);
+            await new Promise<void>((resolve) => {
+              if (client.isReady()) resolve();
+              else client.once('ready', () => resolve());
+            });
+          }
+          for (const chId of sourceChannelIds) {
+            if (!idSet.has(chId)) continue;
+            try {
+              const channel = await client.channels.fetch(chId);
+              if (channel && 'name' in channel) {
+                nameMap.set(chId, (channel as any).name);
+                idSet.delete(chId);
+              }
+            } catch (err) {
+              console.warn(`Failed to fetch channel name for ${chId}:`,
+                err instanceof Error ? err.message : err);
+            }
+          }
+        } catch (err) {
+          console.warn('Failed to initialize bot client for channel name resolution:',
+            err instanceof Error ? err.message : err);
+        }
+      }
+    } catch (err) {
+      console.warn(`Failed to resolve channel names via source:`,
+        err instanceof Error ? err.message : err);
+    }
+  }
+
+  return nameMap;
+}
+
 export async function disconnectDiscord(): Promise<void> {
   for (const [token, client] of _botClients.entries()) {
     if (client.isReady()) {

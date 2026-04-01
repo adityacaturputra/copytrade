@@ -142,6 +142,7 @@ interface DashboardData {
   riskConfig: RiskConfig | null;
   signalConfig: SignalConfig | null;
   discordSources: DiscordSourceInfo[];
+  channelNames: Record<string, string>;
 }
 
 // ==================== Component ====================
@@ -317,15 +318,10 @@ export default function Dashboard() {
   }
   const channelIdArray = Array.from(allChannelIds).sort();
 
-  // ─── Build channelId → source name mapping ──────────────────────────
-  const channelNameMap = new Map<string, string>();
-  for (const source of data?.discordSources || []) {
-    for (const chId of source.channelIds || []) {
-      if (!channelNameMap.has(chId)) {
-        channelNameMap.set(chId, source.name);
-      }
-    }
-  }
+  // ─── Channel name map from Discord API (resolved server-side) ──────
+  const channelNameMap = new Map<string, string>(
+    Object.entries(data?.channelNames || {})
+  );
 
   // Filter helper
   const filterByChannel = <T extends Record<string, any>>(
