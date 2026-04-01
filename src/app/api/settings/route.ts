@@ -96,12 +96,21 @@ export async function POST(request: NextRequest) {
         );
       }
 
+      const { defaultRR } = body.risk;
+      if (defaultRR !== undefined && (defaultRR < 1 || defaultRR > 20)) {
+        return NextResponse.json(
+          { success: false, error: "Default RR must be between 1 and 20" },
+          { status: 400 },
+        );
+      }
+
       await setRiskConfig({
         ...(riskPerTradePercent !== undefined && { riskPerTradePercent }),
         ...(maxPositionPercent !== undefined && { maxPositionPercent }),
         ...(maxLeverage !== undefined && { maxLeverage }),
         ...(minLeverage !== undefined && { minLeverage }),
         ...(skipNoSL !== undefined && { skipNoSL }),
+        ...(defaultRR !== undefined && { defaultRR }),
       });
     }
 

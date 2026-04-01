@@ -9,6 +9,7 @@ export interface RiskConfig {
   maxLeverage: number; // e.g., 100
   minLeverage: number; // e.g., 1
   skipNoSL: boolean; // skip trades without stop loss
+  defaultRR: number; // default 3 — auto-calculate TP from RR when no TP provided
 }
 
 export interface RiskCalculation {
@@ -37,6 +38,7 @@ const DEFAULT_RISK_CONFIG: RiskConfig = {
   maxLeverage: 100,
   minLeverage: 1,
   skipNoSL: true,
+  defaultRR: 3,
 };
 
 // ─── DB Helpers ───────────────────────────────────────────────────────────────
@@ -53,6 +55,7 @@ export async function getRiskConfig(): Promise<RiskConfig> {
         maxLeverage: settings.maxLeverage,
         minLeverage: settings.minLeverage,
         skipNoSL: settings.skipNoSL ?? true,
+        defaultRR: settings.defaultRR ?? 3,
       };
     }
   } catch (err) {
@@ -81,6 +84,9 @@ export async function setRiskConfig(
   if (config.skipNoSL !== undefined) {
     update.skipNoSL = config.skipNoSL;
   }
+  if (config.defaultRR !== undefined) {
+    update.defaultRR = config.defaultRR;
+  }
   const doc = await RiskSettingsModel.findOneAndUpdate({}, update, {
     upsert: true,
     new: true,
@@ -90,6 +96,7 @@ export async function setRiskConfig(
     maxLeverage: doc.maxLeverage,
     minLeverage: doc.minLeverage,
     skipNoSL: doc.skipNoSL ?? true,
+    defaultRR: doc.defaultRR ?? 3,
   };
 }
 

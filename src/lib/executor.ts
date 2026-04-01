@@ -26,6 +26,35 @@ import { calculateRiskBasedPosition, getRiskConfig } from "./risk";
 import { getSignalConfig } from "./signal-config";
 
 /**
+ * Auto-calculate Take Profit targets based on RR (Risk-Reward) ratio.
+ * If a signal has entryPrice + stopLoss but no TP, generate TP levels using RR.
+ *
+ * Example: Entry=95000, SL=94000, RR=3
+ *   riskDistance = 1000
+ *   TP1 (1R) = 96000, TP2 (2R) = 97000, TP3 (3R) = 98000
+ *
+ * For SHORT (SELL): TP is below entry
+ *   TP1 (1R) = 94000, TP2 (2R) = 93000, TP3 (3R) = 92000
+ */
+function autoCalculateTPFromRR(
+  entryPrice: number,
+  stopLoss: number,
+  rr: number,
+  side: "LONG" | "SHORT",
+): number[] {
+  const riskDistance = Math.abs(entryPrice - stopLoss);
+  const direction = side === "LONG" ? 1 : -1;
+  const tps: number[] = [];
+
+  for (let i = 1; i <= rr; i++) {
+    const tp = entryPrice + direction * riskDistance * i;
+    tps.push(tp);
+  }
+
+  return tps;
+}
+
+/**
  * Sanitize leverage value from AI response.
  * AI may return leverage as "10x", "10-25x", or other string formats.
  * This extracts the first valid number and ensures it's a plain number.
@@ -452,6 +481,27 @@ async function createDraft(
     signal.positionSize ||
     parseFloat(process.env.DEFAULT_POSITION_SIZE || "50");
 
+  // Auto-calculate TP from RR if no TP targets but we have entry + SL + RR
+  let tpTargets = signal.takeProfitTargets || [];
+  if (tpTargets.length === 0 && signal.entryPrice && signal.stopLoss) {
+    const riskCfg = await getRiskConfig();
+    const rr =
+      signal.defaultRR && signal.defaultRR > 0
+        ? signal.defaultRR
+        : riskCfg.defaultRR;
+    if (rr > 0) {
+      tpTargets = autoCalculateTPFromRR(
+        signal.entryPrice,
+        signal.stopLoss,
+        rr,
+        side,
+      );
+      console.log(
+        `📐 Auto-calculated ${tpTargets.length} TP targets from ${rr}RR: [${tpTargets.join(", ")}]`,
+      );
+    }
+  }
+
   await DraftTrade.create({
     messageId: msg.messageId,
     channelId: msg.channelId,
@@ -464,7 +514,7 @@ async function createDraft(
     symbol: signal.symbol,
     side,
     entryPrice: signal.entryPrice || null,
-    takeProfitTargets: signal.takeProfitTargets || [],
+    takeProfitTargets: tpTargets,
     stopLoss: signal.stopLoss || null,
     leverage:
       sanitizeLeverage(signal.leverage) ||
@@ -663,7 +713,27 @@ export async function executeSignal(
       const filledQty = orderResult.quantity || orderQuantity;
 
       // ─── Place TP/SL via plan orders ────────────────────────────────
-      const tpTargets = signal.takeProfitTargets || [];
+      // Auto-calculate TP from RR if no TP targets but we have entry + SL + RR
+      let tpTargets = signal.takeProfitTargets || [];
+      if (tpTargets.length === 0 && entryPrice && signal.stopLoss) {
+        const riskCfg = await getRiskConfig();
+        const rr =
+          signal.defaultRR && signal.defaultRR > 0
+            ? signal.defaultRR
+            : riskCfg.defaultRR;
+        if (rr > 0) {
+          tpTargets = autoCalculateTPFromRR(
+            entryPrice,
+            signal.stopLoss,
+            rr,
+            side,
+          );
+          console.log(
+            `📐 Auto-calculated ${tpTargets.length} TP targets from ${rr}RR: [${tpTargets.join(", ")}]`,
+          );
+        }
+      }
+
       const sl = signal.stopLoss;
 
       // Place ALL TP targets on the exchange (not just the first one)

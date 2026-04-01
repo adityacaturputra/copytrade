@@ -246,11 +246,14 @@ export default function Dashboard() {
   const handleDraftAction = async (
     draftId: string,
     action: "accept" | "reject",
+    extraBody?: Record<string, any>,
   ) => {
     setActingDraft(draftId);
     try {
       const res = await fetch(`/api/drafts/${draftId}/${action}`, {
         method: "POST",
+        headers: extraBody ? { "Content-Type": "application/json" } : undefined,
+        body: extraBody ? JSON.stringify(extraBody) : undefined,
       });
       const json = await res.json();
       if (json.success) {
@@ -320,7 +323,7 @@ export default function Dashboard() {
 
   // ─── Channel name map from Discord API (resolved server-side) ──────
   const channelNameMap = new Map<string, string>(
-    Object.entries(data?.channelNames || {})
+    Object.entries(data?.channelNames || {}),
   );
 
   // Filter helper
@@ -662,7 +665,8 @@ export default function Dashboard() {
                 </button>
                 {channelIdArray.map((chId) => {
                   const sourceName = channelNameMap.get(chId);
-                  const shortId = chId.length > 8 ? `...${chId.slice(-6)}` : chId;
+                  const shortId =
+                    chId.length > 8 ? `...${chId.slice(-6)}` : chId;
                   return (
                     <button
                       key={chId}
@@ -677,7 +681,9 @@ export default function Dashboard() {
                       {sourceName ? (
                         <span className="flex items-center gap-1.5">
                           <span>{sourceName}</span>
-                          <span className="text-[10px] opacity-50 font-mono">{shortId}</span>
+                          <span className="text-[10px] opacity-50 font-mono">
+                            {shortId}
+                          </span>
                         </span>
                       ) : (
                         <span className="font-mono">{chId}</span>
@@ -812,7 +818,6 @@ function StatCard({
   );
 }
 
-
 function DraftsTab({
   drafts,
   actingDraft,
@@ -823,8 +828,16 @@ function DraftsTab({
 }: {
   drafts: DraftTrade[];
   actingDraft: string | null;
-  onAccept: (id: string, action: "accept" | "reject") => void;
-  onReject: (id: string, action: "accept" | "reject") => void;
+  onAccept: (
+    id: string,
+    action: "accept" | "reject",
+    extraBody?: Record<string, any>,
+  ) => void;
+  onReject: (
+    id: string,
+    action: "accept" | "reject",
+    extraBody?: Record<string, any>,
+  ) => void;
   riskConfig: RiskConfig | null;
   accountBalance: number;
 }) {
@@ -877,8 +890,16 @@ function DraftCard({
 }: {
   draft: DraftTrade;
   acting: boolean;
-  onAccept: (id: string, action: "accept" | "reject") => void;
-  onReject: (id: string, action: "accept" | "reject") => void;
+  onAccept: (
+    id: string,
+    action: "accept" | "reject",
+    extraBody?: Record<string, any>,
+  ) => void;
+  onReject: (
+    id: string,
+    action: "accept" | "reject",
+    extraBody?: Record<string, any>,
+  ) => void;
   riskConfig: RiskConfig | null;
   accountBalance: number;
 }) {
@@ -889,6 +910,25 @@ function DraftCard({
 
   // For resolved drafts, default to collapsed
   const [isExpanded, setIsExpanded] = useState(isPending);
+
+  // RR editor state — for signals without TP but with entry + SL
+  const [customRR, setCustomRR] = useState<number>(3);
+  const hasNoTP =
+    !draft.takeProfitTargets || draft.takeProfitTargets.length === 0;
+  const canCalcTPFromRR =
+    hasNoTP && !!draft.entryPrice && draft.entryPrice > 0 && !!draft.stopLoss;
+
+  // Compute auto-calculated TP preview from RR
+  const autoTPs = canCalcTPFromRR
+    ? (() => {
+        const riskDist = Math.abs(draft.entryPrice! - draft.stopLoss!);
+        const dir = draft.side === "LONG" ? 1 : -1;
+        return Array.from(
+          { length: customRR },
+          (_, i) => draft.entryPrice! + dir * riskDist * (i + 1),
+        );
+      })()
+    : [];
 
   // Parse orderType from signalData
   let orderType: string | null = null;
@@ -920,7 +960,10 @@ function DraftCard({
   const riskLeverage = riskResult?.leverage ?? draft.leverage;
 
   // Status config for resolved drafts
-  const statusConfig: Record<string, { icon: string; borderColor: string; bgColor: string; headerBg: string }> = {
+  const statusConfig: Record<
+    string,
+    { icon: string; borderColor: string; bgColor: string; headerBg: string }
+  > = {
     accepted: {
       icon: "✅",
       borderColor: "border-green-700/40",
@@ -945,14 +988,18 @@ function DraftCard({
   // For resolved drafts: collapsed accordion header
   if (isResolved && !isExpanded) {
     return (
-      <div className={`border rounded-lg overflow-hidden ${resolvedStyle.borderColor} ${resolvedStyle.bgColor}`}>
+      <div
+        className={`border rounded-lg overflow-hidden ${resolvedStyle.borderColor} ${resolvedStyle.bgColor}`}
+      >
         <button
           onClick={() => setIsExpanded(true)}
           className="w-full px-4 py-3 flex items-center justify-between text-left hover:brightness-110 transition"
         >
           <div className="flex items-center gap-2">
             <span>{resolvedStyle.icon}</span>
-            <span className={`badge ${draft.side === "LONG" ? "badge-success" : "badge-danger"}`}>
+            <span
+              className={`badge ${draft.side === "LONG" ? "badge-success" : "badge-danger"}`}
+            >
               {draft.action}
             </span>
             <span className="font-medium text-white">{draft.symbol}</span>
@@ -966,17 +1013,24 @@ function DraftCard({
             <span className="badge badge-warning">{draft.leverage}x</span>
             {draft.entryPrice && (
               <span className="text-xs text-slate-400">
-                Entry: <span className="font-mono text-slate-300">{draft.entryPrice}</span>
+                Entry:{" "}
+                <span className="font-mono text-slate-300">
+                  {draft.entryPrice}
+                </span>
               </span>
             )}
             {draft.stopLoss && (
               <span className="text-xs text-slate-400">
-                SL: <span className="font-mono text-danger">{draft.stopLoss}</span>
+                SL:{" "}
+                <span className="font-mono text-danger">{draft.stopLoss}</span>
               </span>
             )}
             {draft.takeProfitTargets && draft.takeProfitTargets.length > 0 && (
               <span className="text-xs text-slate-400">
-                TP: <span className="font-mono text-success">{draft.takeProfitTargets.join(", ")}</span>
+                TP:{" "}
+                <span className="font-mono text-success">
+                  {draft.takeProfitTargets.join(", ")}
+                </span>
               </span>
             )}
           </div>
@@ -996,11 +1050,13 @@ function DraftCard({
 
   // Expanded view (for both pending and resolved)
   return (
-    <div className={`border rounded-lg overflow-hidden ${
-      isPending
-        ? "border-amber-700/50 bg-amber-950/20"
-        : `${resolvedStyle.borderColor} ${resolvedStyle.bgColor}`
-    }`}>
+    <div
+      className={`border rounded-lg overflow-hidden ${
+        isPending
+          ? "border-amber-700/50 bg-amber-950/20"
+          : `${resolvedStyle.borderColor} ${resolvedStyle.bgColor}`
+      }`}
+    >
       {/* Header */}
       <div className="p-4">
         <div className="flex items-start justify-between gap-4">
@@ -1028,9 +1084,7 @@ function DraftCard({
                   {draft.confidence}% conf.
                 </span>
               )}
-              {!isPending && (
-                <StatusBadge status={draft.status} />
-              )}
+              {!isPending && <StatusBadge status={draft.status} />}
             </div>
 
             {/* Key info */}
@@ -1084,6 +1138,46 @@ function DraftCard({
                     </span>
                   );
                 })}
+              </div>
+            )}
+
+            {/* RR Editor — shown when no TP but has entry + SL */}
+            {canCalcTPFromRR && isPending && (
+              <div className="rounded-lg p-3 mb-3 text-xs bg-blue-900/20 border border-blue-700/30">
+                <div className="flex items-center gap-3 mb-2">
+                  <span className="font-semibold text-blue-300">
+                    📐 No TP — Set RR (Risk-Reward)
+                  </span>
+                  <div className="flex items-center gap-1">
+                    {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((rr) => (
+                      <button
+                        key={rr}
+                        onClick={() => setCustomRR(rr)}
+                        className={`w-7 h-7 rounded text-xs font-bold transition ${
+                          customRR === rr
+                            ? "bg-blue-600 text-white ring-2 ring-blue-400"
+                            : "bg-slate-700 text-slate-300 hover:bg-slate-600"
+                        }`}
+                      >
+                        {rr}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {/* Preview auto-calculated TPs */}
+                {autoTPs.length > 0 && (
+                  <div className="flex flex-wrap gap-2 mt-1">
+                    <span className="text-slate-400">Preview:</span>
+                    {autoTPs.map((tp, idx) => (
+                      <span
+                        key={idx}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono bg-green-900/20 border border-green-700/30 text-success"
+                      >
+                        TP{idx + 1}: {tp.toFixed(2)}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
@@ -1196,12 +1290,18 @@ function DraftCard({
           {isPending && (
             <div className="flex flex-col gap-2 min-w-[120px]">
               <button
-                onClick={() => onAccept(draft._id, "accept")}
+                onClick={() =>
+                  onAccept(
+                    draft._id,
+                    "accept",
+                    canCalcTPFromRR ? { rr: customRR } : undefined,
+                  )
+                }
                 disabled={acting}
                 className="bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold px-4 py-2 rounded-lg text-sm transition flex items-center justify-center gap-1"
               >
                 {acting ? <div className="spinner w-4 h-4 border-2" /> : "✅"}
-                Accept
+                Accept{canCalcTPFromRR ? ` (${customRR}RR)` : ""}
               </button>
               <button
                 onClick={() => onReject(draft._id, "reject")}
@@ -1247,7 +1347,9 @@ function DraftCard({
                       className="h-24 w-auto rounded-lg border border-slate-600 group-hover:border-primary-500 transition object-cover"
                     />
                     <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 rounded-lg transition flex items-center justify-center">
-                      <span className="text-white text-lg opacity-0 group-hover:opacity-100 transition">🔍</span>
+                      <span className="text-white text-lg opacity-0 group-hover:opacity-100 transition">
+                        🔍
+                      </span>
                     </div>
                   </button>
                 ))}
@@ -1359,7 +1461,8 @@ function ImageModal({
       if (e.key === "ArrowRight") goNext();
       if (e.key === "ArrowLeft") goPrev();
       if (e.key === "+" || e.key === "=") setZoom((z) => Math.min(z + 0.25, 5));
-      if (e.key === "-" || e.key === "_") setZoom((z) => Math.max(z - 0.25, 0.5));
+      if (e.key === "-" || e.key === "_")
+        setZoom((z) => Math.max(z - 0.25, 0.5));
       if (e.key === "0") resetView();
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -1482,7 +1585,9 @@ function ImageModal({
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
-        style={{ cursor: zoom > 1 ? (isDragging ? "grabbing" : "grab") : "default" }}
+        style={{
+          cursor: zoom > 1 ? (isDragging ? "grabbing" : "grab") : "default",
+        }}
       >
         <div
           className="transition-transform duration-150 ease-out"

@@ -47,6 +47,7 @@ interface RiskConfig {
   maxLeverage: number;
   minLeverage: number;
   skipNoSL: boolean;
+  defaultRR: number;
 }
 
 const defaultRiskConfig: RiskConfig = {
@@ -54,6 +55,7 @@ const defaultRiskConfig: RiskConfig = {
   maxLeverage: 100,
   minLeverage: 1,
   skipNoSL: true,
+  defaultRR: 3,
 };
 
 interface SignalConfigType {
@@ -1067,6 +1069,54 @@ export default function SettingsPage() {
               <p className="text-xs text-slate-500 mt-1">
                 Maximum leverage cap. Default: 100x
               </p>
+            </div>
+          </div>
+
+          {/* Default RR for auto TP */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="block text-sm text-slate-400 mb-1">
+                Default Risk-Reward Ratio (RR)
+              </label>
+              <div className="relative">
+                <input
+                  type="number"
+                  step="0.5"
+                  min="1"
+                  max="20"
+                  value={riskConfig.defaultRR}
+                  onChange={(e) =>
+                    setRiskConfigState({
+                      ...riskConfig,
+                      defaultRR: parseFloat(e.target.value) || 3,
+                    })
+                  }
+                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-amber-500 focus:outline-none pr-8"
+                />
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm">
+                  R
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-1">
+                When a signal has no TP, auto-calculate TP using this RR
+                multiplier from SL distance. Default: 3 (e.g., SL 2% → TP at 6%)
+              </p>
+            </div>
+            <div className="flex items-center justify-center">
+              <div className="text-center text-xs text-slate-500 bg-slate-800/50 rounded-lg p-3 w-full border border-slate-700">
+                <p className="font-semibold text-slate-400 mb-1">
+                  📏 RR Example
+                </p>
+                <p>Entry: $100 | SL: $95 (5% ↓)</p>
+                <p>Default RR: {riskConfig.defaultRR}R</p>
+                <p>
+                  → Auto TP:{" "}
+                  <span className="text-success">
+                    ${(100 + (100 - 95) * riskConfig.defaultRR).toFixed(2)}
+                  </span>{" "}
+                  ({(5 * riskConfig.defaultRR).toFixed(1)}% ↑)
+                </p>
+              </div>
             </div>
           </div>
 

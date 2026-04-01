@@ -12,6 +12,26 @@ import { TradingSignal } from "@/lib/ai/types";
 import { ExchangeFactory } from "@/lib/exchange/ExchangeFactory";
 import { calculateRiskBasedPosition, getRiskConfig } from "@/lib/risk";
 
+/**
+ * Auto-calculate Take Profit targets based on RR (Risk-Reward) ratio.
+ * Mirrors the same function in executor.ts.
+ */
+function autoCalculateTPFromRR(
+  entryPrice: number,
+  stopLoss: number,
+  rr: number,
+  side: "LONG" | "SHORT",
+): number[] {
+  const riskDistance = Math.abs(entryPrice - stopLoss);
+  const direction = side === "LONG" ? 1 : -1;
+  const tps: number[] = [];
+  for (let i = 1; i <= rr; i++) {
+    const tp = entryPrice + direction * riskDistance * i;
+    tps.push(tp);
+  }
+  return tps;
+}
+
 export const dynamic = "force-dynamic";
 
 export async function POST(
@@ -111,6 +131,35 @@ export async function POST(
 
     const side = draft.side;
     let position: IPosition | null = null;
+
+    // ─── Auto-calculate TP from RR if no TP but has entry + SL ──────────
+    let bodyData: { rr?: number } = {};
+    try {
+      bodyData = await request.json();
+    } catch {
+      // Empty body is fine
+    }
+
+    const draftTps = draft.takeProfitTargets || [];
+    if (
+      draftTps.length === 0 &&
+      draft.entryPrice &&
+      draft.entryPrice > 0 &&
+      draft.stopLoss
+    ) {
+      const riskCfg = await getRiskConfig();
+      const rr = bodyData.rr || riskCfg.defaultRR || 3;
+      const autoTps = autoCalculateTPFromRR(
+        draft.entryPrice,
+        draft.stopLoss,
+        rr,
+        side,
+      );
+      draft.takeProfitTargets = autoTps;
+      console.log(
+        `[${requestId}] 📐 Auto-calculated ${autoTps.length} TP targets from ${rr}RR: [${autoTps.join(", ")}]`,
+      );
+    }
 
     switch (draft.action) {
       case "BUY":

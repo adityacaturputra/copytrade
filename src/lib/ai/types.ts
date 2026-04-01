@@ -17,6 +17,8 @@ export interface TradingSignal {
   leverage?: number;
   positionSize?: number;
   orderType?: "market" | "limit";
+  /** Risk-Reward ratio extracted from signal (e.g., 3 means 3R / 3:1 RR) */
+  defaultRR?: number;
   timeframe?: string;
   confidence?: number;
   reasoning?: string;

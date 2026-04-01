@@ -129,6 +129,7 @@ export interface IRiskSettings extends Document {
   maxLeverage: number; // default 100
   minLeverage: number; // default 1
   skipNoSL: boolean; // default true — skip trades without SL
+  defaultRR: number; // default 3 — auto-calculate TP from RR when no TP provided
   updatedAt: Date;
 }
 
@@ -290,6 +291,7 @@ const RiskSettingsSchema = new Schema<IRiskSettings>(
     maxLeverage: { type: Number, default: 100, min: 1, max: 125 },
     minLeverage: { type: Number, default: 1, min: 1, max: 125 },
     skipNoSL: { type: Boolean, default: true },
+    defaultRR: { type: Number, default: 3, min: 1, max: 20 },
   },
   { timestamps: { createdAt: false, updatedAt: true } },
 );

@@ -23,6 +23,7 @@ Return a JSON object with this exact structure. If the message is NOT a trading 
   "leverage": number or null (default 10 if not specified),
   "positionSize": number or null (in USDT),
   "orderType": "market" | "limit" or null,
+  "defaultRR": number or null (risk-reward ratio, e.g. 3 means 3R/3:1 RR),
   "timeframe": "string" or null,
   "confidence": 0-100,
   "reasoning": "brief explanation of the signal",
@@ -40,6 +41,9 @@ Important rules:
 - If the message mentions "spot" explicitly, set leverage to 1
 - Handle abbreviations: BTC=BTCUSDT, ETH=ETHUSDT, SOL=SOLUSDT, etc.
 - Entry zones expressed as ranges should use the midpoint as entryPrice
+- orderType: "market" if signal says to enter at market price (e.g. "market buy", "buy now", "long market"), "limit" if a specific entry price is given. Default "limit" if entryPrice is set, "market" if no entry price.
+- positionSize: extract position size in USDT if mentioned (e.g. "$100", "100 USDT")
+- defaultRR: Extract the risk-reward ratio if mentioned (e.g. "3R", "3RR", "RR 3", "risk reward 1:3"). This is a PLAIN NUMBER (e.g., 3). If the signal has no TP but has entry + SL + RR ratio, set defaultRR so the system can auto-calculate TP levels.
 
 IMPORTANT — Detect cancel/close requests in reply messages:
 - If someone replies to a signal saying they want to cancel, close, or invalidate it (e.g., "lupa cancel", "close aja", "bisa sl+ atau close posisi", "should be cancelled"), return action: "CANCEL" with the symbol from the quoted signal
@@ -81,7 +85,7 @@ Return a JSON ARRAY where each element has "messageId" and either a parsed signa
 
 Example response:
 [
-  {"messageId":"msg001","signal":{"action":"BUY","symbol":"BTCUSDT","entryPrice":95000,"takeProfitTargets":[96000,97000,98000],"stopLoss":94000,"leverage":10,"confidence":90,"reasoning":"Clear long signal"}},
+  {"messageId":"msg001","signal":{"action":"BUY","symbol":"BTCUSDT","entryPrice":95000,"takeProfitTargets":[96000,97000,98000],"stopLoss":94000,"leverage":10,"positionSize":100,"orderType":"limit","defaultRR":3,"timeframe":"4h","confidence":90,"reasoning":"Clear long signal with 3R target"}},
   {"messageId":"msg002","signal":null},
   {"messageId":"msg003","signal":{"action":"UPDATE_SL","symbol":"ETHUSDT","stopLoss":3200,"confidence":85,"reasoning":"SL update"}}
 ]
@@ -89,17 +93,24 @@ Example response:
 Rules for each signal object:
 - Symbol MUST end with USDT (e.g., BTC → BTCUSDT, ETH → ETHUSDT)
 - If multiple TP targets, list them all in takeProfitTargets array
-- Distinguish between UPDATE_TP (replacing/modifying an existing TP) and ADD_TP (adding a new TP level)
+- Distinguish between UPDATE_TP (replacing/modifying an existing TP) and ADD_TP (adding a new TP level, e.g. "pasang TP2 di 70K" means ADD_TP because TP1 already exists)
+- If someone says they reached a TP level and sets a new one (e.g. "sudah TP1, TP2 di 70K"), use ADD_TP with the new TP price in takeProfitTargets
 - Leverage: PLAIN NUMBER ONLY, no suffix (e.g., 10, NOT "10x"). If signal says "10x" or "10-25x", extract the first number: 10. Default 10 if not mentioned.
 - Confidence: how certain you are this is a valid trading signal (0-100)
 - For non-signal messages (chat, casual conversation, role pings only), set signal to null
 - If "spot" is mentioned, set leverage to 1
 - Handle abbreviations: BTC=BTCUSDT, ETH=ETHUSDT, SOL=SOLUSDT
 - Entry zones expressed as ranges should use midpoint
+- orderType: "market" if signal says to enter at market price (e.g. "market buy", "buy now", "long market"), "limit" if a specific entry price is given. Default "limit" if entryPrice is set, "market" if no entry price.
+- positionSize: extract position size in USDT if mentioned (e.g. "$100", "100 USDT")
+- timeframe: extract timeframe if mentioned (e.g. "4h", "1D", "15m")
+- defaultRR: Extract the risk-reward ratio if mentioned (e.g. "3R", "3RR", "RR 3", "risk reward 1:3"). This is a PLAIN NUMBER (e.g., 3). If the signal has no TP but has entry + SL + RR ratio, set defaultRR so the system can auto-calculate TP levels.
 
 CRITICAL — Detect cancel/close requests in reply messages:
-- Phrases like "lupa cancel", "close aja", "bisa sl+ atau close posisi" → action: "CANCEL"
-- Copy the symbol from the quoted/referenced signal
+- If someone replies to a signal saying they want to cancel, close, or invalidate it (e.g., "lupa cancel", "close aja", "bisa sl+ atau close posisi", "should be cancelled"), return action: "CANCEL" with the symbol from the quoted signal
+- Phrases indicating cancellation intent: "lupa cancel", "cancel aja", "close posisi", "bisa close", "should cancel", "forget to cancel", "jangan masuk", "skip aja"
+- Set confidence based on how clear the cancel request is
+- Copy the symbol from the quoted signal into the symbol field
 
 CRITICAL — Ignore these messages (set signal to null):
 - Purely casual conversation with NO reference to trading actions
