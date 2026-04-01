@@ -68,7 +68,7 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "get_open_positions",
       description:
-        "Get all currently open positions from the DATABASE. Returns JSON array: [{ _id: string (MongoDB ObjectId), symbol: string (e.g., 'BTC-USDT-SWAP'), side: string ('LONG'|'SHORT'), entryPrice: number, currentPrice: number, quantity: number, leverage: number, takeProfitPrice: number|null, stopLossPrice: number|null, pnl: number|null, status: string ('open'), openedAt: date }]. Use this to see what positions are tracked in the system.",
+        "Get all currently open positions from the DATABASE. Returns JSON array: [{ _id: string (MongoDB ObjectId), symbol: string (e.g., 'BTC-USDT-SWAP'), side: string ('LONG'|'SHORT'), entryPrice: number, currentPrice: number, quantity: number, leverage: number, takeProfitTargets: array, stopLossPrice: number|null, pnl: number|null, status: string ('open'), openedAt: date }]. Use this to see what positions are tracked in the system.",
       parameters: { type: "object", properties: {}, required: [] },
     },
   },
@@ -539,7 +539,7 @@ export const toolImplementations: Record<string, ToolExecutor> = {
         currentPrice: p.currentPrice,
         quantity: p.quantity,
         leverage: p.leverage,
-        takeProfitPrice: p.takeProfitPrice,
+        takeProfitTargets: p.takeProfitTargets,
         stopLossPrice: p.stopLossPrice,
         pnl: p.pnl,
         status: p.status,

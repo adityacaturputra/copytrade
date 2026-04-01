@@ -5,6 +5,8 @@ import {
   Position,
   TradeLog,
   IPosition,
+  buildTPTargets,
+  recalculateTPAllocation,
 } from "@/lib/database";
 import { TradingSignal } from "@/lib/ai/types";
 import { ExchangeFactory } from "@/lib/exchange/ExchangeFactory";
@@ -117,17 +119,18 @@ export async function POST(
           `[${requestId}] 📊 Processing ${draft.action} order for ${draft.symbol}...`,
         );
 
-        // Check for duplicate — compare entry, TP, SL with existing open position
+        // Check for duplicate — compare entry, TP, SL with existing open position (same channel)
         const existingPos = await Position.findOne({
           symbol: draft.symbol,
           side,
+          channelId: draft.channelId || null,
           status: "open",
         });
 
         if (existingPos) {
           const newTP = draft.takeProfitTargets?.[0] ?? null;
           const newSL = draft.stopLoss ?? null;
-          const existingTP = existingPos.takeProfitPrice ?? null;
+          const existingTP = existingPos.takeProfitTargets?.[0]?.price ?? null;
           const existingSL = existingPos.stopLossPrice ?? null;
           const existingEntry = existingPos.entryPrice ?? null;
           const newEntry = draft.entryPrice ?? null;
@@ -139,7 +142,9 @@ export async function POST(
             return Math.abs(a - b) < 0.01;
           };
 
-          const entryMatch = numEqual(newEntry, existingEntry);
+          // null entry from same channel = referring to existing position
+          const entryMatch =
+            newEntry === null ? true : numEqual(newEntry, existingEntry);
           const tpMatch = numEqual(newTP, existingTP);
           const slMatch = numEqual(newSL, existingSL);
 
@@ -173,7 +178,8 @@ export async function POST(
             const updates: string[] = [];
 
             if (!tpMatch && newTP !== null) {
-              existingPos.takeProfitPrice = newTP;
+              const newTargets = buildTPTargets([newTP], existingPos.quantity);
+              existingPos.takeProfitTargets = newTargets;
               updates.push(`TP: ${existingTP} → ${newTP}`);
               updated = true;
             }
@@ -320,10 +326,11 @@ export async function POST(
 
         // ─── Place TP/SL via plan orders ────────────────────────────────
         const filledQty = orderResult.quantity || orderQuantity;
-        const tp = draft.takeProfitTargets?.[0];
+        const allTps = draft.takeProfitTargets || [];
         const sl = draft.stopLoss;
 
-        if (tp) {
+        // Place ALL TP targets on the exchange
+        for (const tp of allTps) {
           try {
             const tpId = await exchange.placeTakeProfit(
               draft.symbol,
@@ -337,7 +344,7 @@ export async function POST(
             );
           } catch (tpErr) {
             console.warn(
-              `[${requestId}] ⚠️ Failed to place TP: ${tpErr instanceof Error ? tpErr.message : String(tpErr)}`,
+              `[${requestId}] ⚠️ Failed to place TP at ${tp}: ${tpErr instanceof Error ? tpErr.message : String(tpErr)}`,
             );
           }
         }
@@ -370,10 +377,14 @@ export async function POST(
             entryPrice: draft.entryPrice || orderResult.price || 0,
             quantity: orderResult.quantity || orderQuantity,
             leverage: orderLeverage,
-            takeProfitPrice: draft.takeProfitTargets?.[0] || undefined,
+            takeProfitTargets: buildTPTargets(
+              draft.takeProfitTargets || [],
+              orderResult.quantity || orderQuantity,
+            ),
             stopLossPrice: draft.stopLoss || undefined,
             orderId: orderResult.orderId,
             status: "open",
+            channelId: draft.channelId || undefined,
             messageId: draft.messageId,
             signalData: draft.signalData,
           });
@@ -397,6 +408,7 @@ export async function POST(
         );
         const positions = await Position.find({
           symbol: draft.symbol,
+          channelId: draft.channelId || null,
           status: "open",
         });
 
@@ -443,12 +455,14 @@ export async function POST(
       }
 
       case "UPDATE_SL":
-      case "UPDATE_TP": {
+      case "UPDATE_TP":
+      case "ADD_TP": {
         console.log(
           `[${requestId}] 🔄 Processing ${draft.action} for ${draft.symbol}...`,
         );
         const pos = await Position.findOne({
           symbol: draft.symbol,
+          channelId: draft.channelId || null,
           status: "open",
         });
 
@@ -467,10 +481,80 @@ export async function POST(
         }
         if (draft.takeProfitTargets?.[0] && draft.action === "UPDATE_TP") {
           console.log(
-            `[${requestId}] 📈 Updating TP: ${pos.takeProfitPrice} → ${draft.takeProfitTargets[0]}`,
+            `[${requestId}] 📈 Updating TP: ${pos.takeProfitTargets?.[0]?.price} → ${draft.takeProfitTargets[0]}`,
           );
-          pos.takeProfitPrice = draft.takeProfitTargets[0];
+          const firstPending = pos.takeProfitTargets.findIndex(
+            (t: any) => t.status === "pending",
+          );
+          if (firstPending >= 0) {
+            pos.takeProfitTargets[firstPending].price =
+              draft.takeProfitTargets[0];
+          } else {
+            const newTargets = buildTPTargets(
+              draft.takeProfitTargets,
+              pos.quantity,
+            );
+            pos.takeProfitTargets.push(...newTargets);
+          }
+          // Recalculate percentages for all TPs
+          pos.takeProfitTargets = recalculateTPAllocation(
+            pos.takeProfitTargets,
+            pos.quantity,
+          );
         }
+
+        // ADD_TP: Add new TP target(s) without replacing existing ones
+        if (draft.takeProfitTargets?.length && draft.action === "ADD_TP") {
+          for (const newTpPrice of draft.takeProfitTargets) {
+            const alreadyExists = pos.takeProfitTargets.some(
+              (t: any) => Math.abs(t.price - newTpPrice) < 0.01,
+            );
+            if (!alreadyExists) {
+              pos.takeProfitTargets.push({
+                price: newTpPrice,
+                quantity: 0, // will be recalculated below
+                percentage: 0,
+                status: "pending",
+              });
+              console.log(
+                `[${requestId}] ➕ Added TP: ${newTpPrice} for ${draft.symbol}`,
+              );
+            } else {
+              console.log(
+                `[${requestId}] ⚠️ TP ${newTpPrice} already exists — skipping`,
+              );
+            }
+          }
+
+          // Recalculate percentages & quantities for ALL TPs
+          pos.takeProfitTargets = recalculateTPAllocation(
+            pos.takeProfitTargets,
+            pos.quantity,
+          );
+
+          // Also place TP orders on the exchange for the new targets
+          const exchange = ExchangeFactory.getClient();
+          const closeSide = pos.side === "LONG" ? "SELL" : "BUY";
+          for (const newTpPrice of draft.takeProfitTargets) {
+            try {
+              const tpId = await exchange.placeTakeProfit(
+                draft.symbol,
+                newTpPrice,
+                newTpPrice,
+                closeSide,
+                pos.quantity,
+              );
+              console.log(
+                `[${requestId}] 🎯 Exchange TP placed at ${newTpPrice} (orderId: ${tpId})`,
+              );
+            } catch (tpErr) {
+              console.warn(
+                `[${requestId}] ⚠️ Failed to place TP on exchange at ${newTpPrice}: ${tpErr instanceof Error ? tpErr.message : String(tpErr)}`,
+              );
+            }
+          }
+        }
+
         await pos.save();
         console.log(`[${requestId}] ✅ Position updated: ${pos._id}`);
         break;

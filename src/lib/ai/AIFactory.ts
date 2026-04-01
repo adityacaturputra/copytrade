@@ -15,7 +15,7 @@ export function buildSignalParserPrompt(): string {
 Return a JSON object with this exact structure. If the message is NOT a trading signal, return null.
 
 {
-  "action": "BUY" | "SELL" | "CLOSE" | "CANCEL" | "HOLD" | "TP" | "SL" | "UPDATE_SL" | "UPDATE_TP",
+  "action": "BUY" | "SELL" | "CLOSE" | "CANCEL" | "HOLD" | "TP" | "SL" | "UPDATE_SL" | "UPDATE_TP" | "ADD_TP",
   "symbol": "BTCUSDT" (always uppercase with USDT suffix, e.g. ETHUSDT, SOLUSDT),
   "entryPrice": number or null,
   "takeProfitTargets": [number] or null,
@@ -32,6 +32,8 @@ Return a JSON object with this exact structure. If the message is NOT a trading 
 Important rules:
 - Symbol MUST end with USDT (e.g., BTC → BTCUSDT, ETH → ETHUSDT)
 - If multiple TP targets, list them all in takeProfitTargets array
+- Distinguish between UPDATE_TP (replacing/modifying an existing TP) and ADD_TP (adding a new TP level, e.g. "pasang TP2 di 70K" means ADD_TP because TP1 already exists)
+- If someone says they reached a TP level and sets a new one (e.g. "sudah TP1, TP2 di 70K"), use ADD_TP with the new TP price in takeProfitTargets
 - Leverage: use x notation (e.g., 10x, 20x). Default 10x if not mentioned
 - Confidence: how certain you are this is a valid trading signal (0-100)
 - If the message is general chat, not a signal, return null

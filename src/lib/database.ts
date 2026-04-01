@@ -39,6 +39,15 @@ export interface IProcessedMessage extends Document {
   processedAt?: Date;
 }
 
+export interface ITPTarget {
+  price: number;
+  quantity: number;
+  percentage: number; // allocation percentage (e.g. 50 means 50% of position)
+  status: "pending" | "hit" | "cancelled";
+  orderId?: string;
+  hitAt?: Date;
+}
+
 export interface IPosition extends Document {
   symbol: string;
   side: "LONG" | "SHORT";
@@ -46,11 +55,13 @@ export interface IPosition extends Document {
   currentPrice?: number;
   quantity: number;
   leverage: number;
-  takeProfitPrice?: number;
+  takeProfitTargets: ITPTarget[];
   stopLossPrice?: number;
   orderId?: string;
   pnl: number;
   status: "open" | "closed";
+  channelId?: string;
+  sourceName?: string;
   messageId?: string;
   signalData?: string;
   openedAt: Date;
@@ -165,11 +176,26 @@ const PositionSchema = new Schema<IPosition>(
     currentPrice: { type: Number, default: null },
     quantity: { type: Number, default: 0 },
     leverage: { type: Number, default: 10 },
-    takeProfitPrice: { type: Number, default: null },
+    takeProfitTargets: [
+      {
+        price: { type: Number, required: true },
+        quantity: { type: Number, required: true },
+        percentage: { type: Number, default: 100 },
+        status: {
+          type: String,
+          enum: ["pending", "hit", "cancelled"],
+          default: "pending",
+        },
+        orderId: { type: String, default: null },
+        hitAt: { type: Date, default: null },
+      },
+    ],
     stopLossPrice: { type: Number, default: null },
     orderId: { type: String, default: null },
     pnl: { type: Number, default: 0 },
     status: { type: String, enum: ["open", "closed"], default: "open" },
+    channelId: { type: String, default: null },
+    sourceName: { type: String, default: null },
     messageId: { type: String, default: null },
     signalData: { type: String, default: null },
     closedAt: { type: Date, default: null },
@@ -180,6 +206,7 @@ const PositionSchema = new Schema<IPosition>(
 
 PositionSchema.index({ status: 1 });
 PositionSchema.index({ symbol: 1 });
+PositionSchema.index({ symbol: 1, side: 1, channelId: 1, status: 1 });
 
 const TradeLogSchema = new Schema<ITradeLog>(
   {
@@ -375,4 +402,63 @@ export function getPendingDrafts() {
 
 export function getRecentDrafts(limit: number = 50) {
   return DraftTrade.find().sort({ discordTimestamp: -1 }).limit(limit).lean();
+}
+
+// ─── TP Percentage Helper ──────────────────────────────────────────────────
+
+/**
+ * Calculate percentage allocation for TP targets.
+ * 1 TP → 100%
+ * 2 TPs → 50% / 50%
+ * 3 TPs → 33.33% / 33.33% / 33.34%
+ */
+export function calculateTPPercentages(count: number): number[] {
+  if (count <= 0) return [];
+  if (count === 1) return [100];
+
+  const base = Math.floor((100 / count) * 100) / 100; // e.g. 33.33 for 3
+  const percentages: number[] = [];
+  let allocated = 0;
+
+  for (let i = 0; i < count - 1; i++) {
+    percentages.push(base);
+    allocated = Math.round((allocated + base) * 100) / 100;
+  }
+
+  // Last one gets the remainder so total = exactly 100
+  percentages.push(Math.round((100 - allocated) * 100) / 100);
+  return percentages;
+}
+
+/**
+ * Build TP target objects with percentage-based quantity allocation.
+ */
+export function buildTPTargets(
+  prices: number[],
+  totalQuantity: number,
+): ITPTarget[] {
+  const percentages = calculateTPPercentages(prices.length);
+  return prices.map((price, idx) => ({
+    price,
+    quantity:
+      Math.round(((totalQuantity * percentages[idx]) / 100) * 10000) / 10000,
+    percentage: percentages[idx],
+    status: "pending" as const,
+  }));
+}
+
+/**
+ * Recalculate percentages and quantities when TP count changes.
+ */
+export function recalculateTPAllocation(
+  targets: ITPTarget[],
+  totalQuantity: number,
+): ITPTarget[] {
+  const percentages = calculateTPPercentages(targets.length);
+  return targets.map((t, idx) => ({
+    ...t,
+    quantity:
+      Math.round(((totalQuantity * percentages[idx]) / 100) * 10000) / 10000,
+    percentage: percentages[idx],
+  }));
 }

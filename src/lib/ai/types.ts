@@ -8,7 +8,8 @@ export interface TradingSignal {
     | "TP"
     | "SL"
     | "UPDATE_SL"
-    | "UPDATE_TP";
+    | "UPDATE_TP"
+    | "ADD_TP";
   symbol: string;
   entryPrice?: number;
   takeProfitTargets?: number[];

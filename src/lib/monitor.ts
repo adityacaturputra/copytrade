@@ -119,11 +119,14 @@ export async function runPositionMonitor(): Promise<{
         }
 
         // Check Take Profit
-        if (position.takeProfitPrice) {
+        const nextTp = position.takeProfitTargets?.find(
+          (t: any) => t.status === "pending",
+        );
+        if (nextTp) {
           const tpHit =
             position.side === "LONG"
-              ? currentPrice >= position.takeProfitPrice
-              : currentPrice <= position.takeProfitPrice;
+              ? currentPrice >= nextTp.price
+              : currentPrice <= nextTp.price;
 
           if (tpHit) {
             console.log(`🎯 TP hit for ${position.symbol} at ${currentPrice}`);
@@ -141,7 +144,7 @@ export async function runPositionMonitor(): Promise<{
           position.side,
           position.entryPrice,
           currentPrice,
-          position.takeProfitPrice ?? undefined,
+          position.takeProfitTargets?.[0]?.price ?? undefined,
           position.stopLossPrice ?? undefined,
           pnlPercent,
           position.quantity,
@@ -229,7 +232,20 @@ export async function runPositionMonitor(): Promise<{
 
           case "UPDATE_TP": {
             if (analysis.newTakeProfit && analysis.confidence >= 60) {
-              position.takeProfitPrice = analysis.newTakeProfit;
+              const firstPending = position.takeProfitTargets.findIndex(
+                (t: any) => t.status === "pending",
+              );
+              if (firstPending >= 0) {
+                position.takeProfitTargets[firstPending].price =
+                  analysis.newTakeProfit;
+              } else {
+                position.takeProfitTargets.push({
+                  price: analysis.newTakeProfit,
+                  quantity: position.quantity,
+                  percentage: 0,
+                  status: "pending",
+                });
+              }
               await position.save();
 
               await TradeLog.create({

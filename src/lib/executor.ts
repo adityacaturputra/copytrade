@@ -8,6 +8,9 @@ import {
   getTradingMode,
   getActiveDiscordSources,
   IPosition,
+  ITPTarget,
+  buildTPTargets,
+  recalculateTPAllocation,
 } from "./database";
 import {
   fetchRecentMessages,
@@ -283,7 +286,12 @@ export async function runSignalCheck(): Promise<{
 
         // 7. Execute or draft based on trading mode
         if (mode === "auto") {
-          await executeSignal(signal, msg.messageId);
+          await executeSignal(
+            signal,
+            msg.messageId,
+            msg.channelId,
+            msg.sourceName,
+          );
           result.executed++;
 
           await TradeLog.create({
@@ -385,6 +393,8 @@ async function createDraft(
 export async function executeSignal(
   signal: TradingSignal,
   messageId: string,
+  channelId?: string,
+  sourceName?: string,
 ): Promise<IPosition | null> {
   const side = signal.action === "SELL" ? "SHORT" : "LONG";
   const leverage = signal.leverage || 10;
@@ -396,10 +406,11 @@ export async function executeSignal(
   switch (signal.action) {
     case "BUY":
     case "SELL": {
-      // Check for duplicate open positions on same symbol with same side
+      // Check for duplicate open positions on same symbol+side+channel
       const existingPos = await Position.findOne({
         symbol: signal.symbol,
         side,
+        channelId: channelId || null,
         status: "open",
       });
 
@@ -407,7 +418,7 @@ export async function executeSignal(
         // Compare entry, TP, and SL to decide: skip or update TP/SL only
         const newTP = signal.takeProfitTargets?.[0] ?? null;
         const newSL = signal.stopLoss ?? null;
-        const existingTP = existingPos.takeProfitPrice ?? null;
+        const existingTP = existingPos.takeProfitTargets?.[0]?.price ?? null;
         const existingSL = existingPos.stopLossPrice ?? null;
         const existingEntry = existingPos.entryPrice ?? null;
         const newEntry = entryPrice ?? null;
@@ -419,7 +430,9 @@ export async function executeSignal(
           return Math.abs(a - b) < 0.01;
         };
 
-        const entryMatch = numEqual(newEntry, existingEntry);
+        // null entry from same channel = referring to existing position
+        const entryMatch =
+          newEntry === null ? true : numEqual(newEntry, existingEntry);
         const tpMatch = numEqual(newTP, existingTP);
         const slMatch = numEqual(newSL, existingSL);
 
@@ -444,7 +457,8 @@ export async function executeSignal(
           const updates: string[] = [];
 
           if (!tpMatch && newTP !== null) {
-            existingPos.takeProfitPrice = newTP;
+            const newTargets = buildTPTargets([newTP], existingPos.quantity);
+            existingPos.takeProfitTargets = newTargets;
             updates.push(`TP: ${existingTP} → ${newTP}`);
             updated = true;
           }
@@ -558,10 +572,11 @@ export async function executeSignal(
       const filledQty = orderResult.quantity || orderQuantity;
 
       // ─── Place TP/SL via plan orders ────────────────────────────────
-      const tp = signal.takeProfitTargets?.[0];
+      const tpTargets = signal.takeProfitTargets || [];
       const sl = signal.stopLoss;
 
-      if (tp) {
+      // Place ALL TP targets on the exchange (not just the first one)
+      for (const tp of tpTargets) {
         try {
           const tpId = await exchange.placeTakeProfit(
             signal.symbol,
@@ -573,7 +588,7 @@ export async function executeSignal(
           console.log(`🎯 Take Profit set at ${tp} (plan order ${tpId})`);
         } catch (tpErr) {
           console.warn(
-            `⚠️ Failed to place TP: ${tpErr instanceof Error ? tpErr.message : String(tpErr)}`,
+            `⚠️ Failed to place TP at ${tp}: ${tpErr instanceof Error ? tpErr.message : String(tpErr)}`,
           );
         }
       }
@@ -595,6 +610,9 @@ export async function executeSignal(
         }
       }
 
+      // Build TP target objects for DB storage with percentage allocation
+      const tpTargetObjects = buildTPTargets(tpTargets, filledQty);
+
       // Save position to DB
       const position = await Position.create({
         symbol: signal.symbol,
@@ -602,10 +620,12 @@ export async function executeSignal(
         entryPrice: entryPrice || orderResult.price || 0,
         quantity: orderResult.quantity || orderQuantity,
         leverage: orderLeverage,
-        takeProfitPrice: signal.takeProfitTargets?.[0] || undefined,
+        takeProfitTargets: tpTargetObjects,
         stopLossPrice: signal.stopLoss || undefined,
         orderId: orderResult.orderId,
         status: "open",
+        channelId: channelId || undefined,
+        sourceName: sourceName || undefined,
         messageId,
         signalData: JSON.stringify(signal),
       });
@@ -619,6 +639,7 @@ export async function executeSignal(
     case "CLOSE": {
       const positions = await Position.find({
         symbol: signal.symbol,
+        channelId: channelId || null,
         status: "open",
       });
 
@@ -640,6 +661,7 @@ export async function executeSignal(
     case "UPDATE_TP": {
       const position = await Position.findOne({
         symbol: signal.symbol,
+        channelId: channelId || null,
         status: "open",
       });
 
@@ -648,12 +670,72 @@ export async function executeSignal(
           position.stopLossPrice = signal.stopLoss;
         }
         if (signal.takeProfitTargets?.[0] && signal.action === "UPDATE_TP") {
-          position.takeProfitPrice = signal.takeProfitTargets[0];
+          // UPDATE_TP replaces the first pending TP price
+          const firstPending = position.takeProfitTargets.findIndex(
+            (t) => t.status === "pending",
+          );
+          if (firstPending >= 0) {
+            position.takeProfitTargets[firstPending].price =
+              signal.takeProfitTargets[0];
+          } else {
+            const newTargets = buildTPTargets(
+              signal.takeProfitTargets,
+              position.quantity,
+            );
+            position.takeProfitTargets.push(...newTargets);
+          }
+          // Recalculate percentages for all TPs
+          position.takeProfitTargets = recalculateTPAllocation(
+            position.takeProfitTargets,
+            position.quantity,
+          );
         }
         await position.save();
 
         console.log(
-          `✅ Updated ${signal.action} for ${signal.symbol}: SL=${position.stopLossPrice}, TP=${position.takeProfitPrice}`,
+          `✅ Updated ${signal.action} for ${signal.symbol} (channel=${channelId || "any"}): SL=${position.stopLossPrice}, TPs=[${position.takeProfitTargets.map((t) => `${t.price}(${t.status})`).join(", ")}]`,
+        );
+      } else {
+        console.log(
+          `⚠️ No open position found for ${signal.symbol} (channel=${channelId || "any"}) to update`,
+        );
+      }
+      return null;
+    }
+
+    case "ADD_TP": {
+      const position = await Position.findOne({
+        symbol: signal.symbol,
+        channelId: channelId || null,
+        status: "open",
+      });
+
+      if (position && signal.takeProfitTargets?.length) {
+        for (const newTpPrice of signal.takeProfitTargets) {
+          const alreadyExists = position.takeProfitTargets.some(
+            (t) => Math.abs(t.price - newTpPrice) < 0.01,
+          );
+          if (!alreadyExists) {
+            position.takeProfitTargets.push({
+              price: newTpPrice,
+              quantity: 0, // will be recalculated below
+              percentage: 0,
+              status: "pending",
+            });
+          }
+        }
+        // Recalculate percentages & quantities for ALL TPs
+        position.takeProfitTargets = recalculateTPAllocation(
+          position.takeProfitTargets,
+          position.quantity,
+        );
+        await position.save();
+        console.log(
+          `✅ Updated TPs for ${signal.symbol}: ${position.takeProfitTargets.map((t) => `${t.price}(${t.percentage}%)`).join(", ")}`,
+        );
+      } else {
+        console.log(
+          `⚠️ No open position found for ${signal.symbol} (channel=${channelId || "any"}) to add TP`,
         );
       }
       return null;

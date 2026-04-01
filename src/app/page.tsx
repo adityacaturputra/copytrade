@@ -23,7 +23,7 @@ interface Position {
   currentPrice?: number;
   quantity: number;
   leverage: number;
-  takeProfitPrice?: number;
+  takeProfitTargets?: any[];
   stopLossPrice?: number;
   pnl: number;
   status: string;
@@ -153,6 +153,7 @@ export default function Dashboard() {
     CronRunStatus
   > | null>(null);
   const [expandedCron, setExpandedCron] = useState<string | null>(null);
+  const [selectedChannelId, setSelectedChannelId] = useState<string>("all");
 
   const fetchData = useCallback(async () => {
     try {
@@ -294,6 +295,37 @@ export default function Dashboard() {
     pendingDrafts: 0,
   };
   const tradingMode = data?.tradingMode || "manual";
+
+  // ─── Collect unique channel IDs for filter ──────────────────────────
+  const allChannelIds = new Set<string>();
+  for (const d of data?.recentDrafts || []) {
+    if (d.channelId) allChannelIds.add(d.channelId);
+  }
+  for (const p of data?.allPositions || []) {
+    if ((p as any).channelId) allChannelIds.add((p as any).channelId);
+  }
+  for (const m of data?.recentMessages || []) {
+    if ((m as any).channelId) allChannelIds.add((m as any).channelId);
+  }
+  const channelIdArray = Array.from(allChannelIds).sort();
+
+  // Filter helper
+  const filterByChannel = <T extends Record<string, any>>(
+    items: T[],
+    channelField: string = "channelId",
+  ): T[] => {
+    if (selectedChannelId === "all") return items;
+    return items.filter((item) => item[channelField] === selectedChannelId);
+  };
+
+  // Filtered data for tabs
+  const filteredDrafts = filterByChannel(data?.recentDrafts || []);
+  const filteredPositions = filterByChannel(data?.allPositions || []);
+  const filteredMessages = filterByChannel(
+    data?.recentMessages || [],
+    "channelId",
+  );
+  const filteredOpenPositions = filterByChannel(data?.openPositions || []);
 
   return (
     <div className="min-h-screen">
@@ -567,7 +599,13 @@ export default function Dashboard() {
                       <td>{pos.currentPrice?.toFixed(2) || "-"}</td>
                       <td>{pos.leverage}x</td>
                       <td className="text-success">
-                        {pos.takeProfitPrice?.toFixed(2) || "-"}
+                        {pos.takeProfitTargets
+                          ?.filter((t: any) => t.status === "pending")
+                          .map(
+                            (t: any, i: number, arr: any[]) =>
+                              `TP${i + 1}: ${t.price.toFixed(2)} (${t.percentage?.toFixed(t.percentage % 1 === 0 ? 0 : 2) ?? (100 / arr.length).toFixed(0)}%)`,
+                          )
+                          .join(", ") || "-"}
                       </td>
                       <td className="text-danger">
                         {pos.stopLossPrice?.toFixed(2) || "-"}
@@ -589,8 +627,42 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* Tabs */}
+        {/* Channel Filter + Tabs */}
         <div className="card">
+          {/* Channel Filter */}
+          {channelIdArray.length > 0 && (
+            <div className="flex items-center gap-3 mb-4 pb-3 border-b border-slate-700/50">
+              <span className="text-xs text-slate-400 uppercase tracking-wider font-medium">
+                📺 Channel Filter:
+              </span>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => setSelectedChannelId("all")}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+                    selectedChannelId === "all"
+                      ? "bg-primary-600 text-white"
+                      : "bg-slate-700 text-slate-300 hover:bg-slate-600"
+                  }`}
+                >
+                  All Channels
+                </button>
+                {channelIdArray.map((chId) => (
+                  <button
+                    key={chId}
+                    onClick={() => setSelectedChannelId(chId)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-mono font-medium transition ${
+                      selectedChannelId === chId
+                        ? "bg-primary-600 text-white"
+                        : "bg-slate-700 text-slate-300 hover:bg-slate-600"
+                    }`}
+                  >
+                    {chId}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="flex border-b border-slate-700 mb-4">
             <button
               onClick={() => setActiveTab("drafts")}
@@ -642,7 +714,7 @@ export default function Dashboard() {
           {/* Tab Content */}
           {activeTab === "drafts" && (
             <DraftsTab
-              drafts={data?.recentDrafts || []}
+              drafts={filteredDrafts}
               actingDraft={actingDraft}
               onAccept={handleDraftAction}
               onReject={handleDraftAction}
@@ -655,10 +727,10 @@ export default function Dashboard() {
             />
           )}
           {activeTab === "positions" && (
-            <PositionsTab positions={data?.allPositions || []} />
+            <PositionsTab positions={filteredPositions} />
           )}
           {activeTab === "signals" && (
-            <SignalsTab messages={data?.recentMessages || []} />
+            <SignalsTab messages={filteredMessages} />
           )}
           {activeTab === "logs" && <LogsTab logs={data?.recentLogs || []} />}
         </div>
@@ -876,14 +948,6 @@ function DraftCard({
                 <span className="text-slate-500">Qty:</span>{" "}
                 <span className="text-white font-mono">{draft.quantity}</span>
               </div>
-              {draft.takeProfitTargets?.[0] && (
-                <div>
-                  <span className="text-slate-500">TP:</span>{" "}
-                  <span className="text-success font-mono">
-                    {draft.takeProfitTargets[0]}
-                  </span>
-                </div>
-              )}
               {draft.stopLoss && (
                 <div>
                   <span className="text-slate-500">SL:</span>{" "}
@@ -893,6 +957,36 @@ function DraftCard({
                 </div>
               )}
             </div>
+            {/* Multi-TP targets with percentage allocation */}
+            {draft.takeProfitTargets && draft.takeProfitTargets.length > 0 && (
+              <div className="flex flex-wrap gap-2 mb-3">
+                {draft.takeProfitTargets.map((tp, idx) => {
+                  const total = draft.takeProfitTargets.length;
+                  const pct =
+                    total === 1
+                      ? 100
+                      : idx < total - 1
+                        ? Math.floor((100 / total) * 100) / 100
+                        : Math.round(
+                            (100 -
+                              (total - 1) *
+                                (Math.floor((100 / total) * 100) / 100)) *
+                              100,
+                          ) / 100;
+                  return (
+                    <span
+                      key={idx}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-mono bg-green-900/30 border border-green-700/40 text-success"
+                    >
+                      TP{idx + 1}: {tp}
+                      <span className="text-green-400/70">
+                        ({pct.toFixed(pct % 1 === 0 ? 0 : 2)}%)
+                      </span>
+                    </span>
+                  );
+                })}
+              </div>
+            )}
 
             {/* Risk Preview */}
             {accountBalance > 0 && riskConfig && (
