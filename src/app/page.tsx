@@ -786,6 +786,7 @@ function StatCard({
   );
 }
 
+
 function DraftsTab({
   drafts,
   actingDraft,
@@ -813,47 +814,29 @@ function DraftsTab({
     );
   }
 
-  const pending = drafts.filter((d) => d.status === "pending");
-  const resolved = drafts.filter((d) => d.status !== "pending");
+  const pendingCount = drafts.filter((d) => d.status === "pending").length;
 
   return (
-    <div className="space-y-6">
-      {/* Pending Drafts */}
-      {pending.length > 0 && (
-        <div>
-          <h3 className="text-sm font-semibold text-amber-400 mb-3 flex items-center gap-2">
-            <span className="w-2 h-2 bg-amber-400 rounded-full pulse-dot" />
-            Pending Review ({pending.length})
-          </h3>
-          <div className="space-y-4">
-            {pending.map((draft) => (
-              <DraftCard
-                key={draft._id}
-                draft={draft}
-                acting={actingDraft === draft._id}
-                onAccept={onAccept}
-                onReject={onReject}
-                riskConfig={riskConfig}
-                accountBalance={accountBalance}
-              />
-            ))}
-          </div>
-        </div>
+    <div className="space-y-4">
+      {pendingCount > 0 && (
+        <h3 className="text-sm font-semibold text-amber-400 flex items-center gap-2">
+          <span className="w-2 h-2 bg-amber-400 rounded-full pulse-dot" />
+          Pending Review ({pendingCount})
+        </h3>
       )}
-
-      {/* Resolved Drafts */}
-      {resolved.length > 0 && (
-        <div>
-          <h3 className="text-sm font-semibold text-slate-400 mb-3">
-            History ({resolved.length})
-          </h3>
-          <div className="space-y-3">
-            {resolved.map((draft) => (
-              <ResolvedDraftCard key={draft._id} draft={draft} />
-            ))}
-          </div>
-        </div>
-      )}
+      <div className="space-y-4">
+        {drafts.map((draft) => (
+          <DraftCard
+            key={draft._id}
+            draft={draft}
+            acting={actingDraft === draft._id}
+            onAccept={onAccept}
+            onReject={onReject}
+            riskConfig={riskConfig}
+            accountBalance={accountBalance}
+          />
+        ))}
+      </div>
     </div>
   );
 }
@@ -874,6 +857,11 @@ function DraftCard({
   accountBalance: number;
 }) {
   const [showDetails, setShowDetails] = useState(false);
+  const isPending = draft.status === "pending";
+  const isResolved = !isPending;
+
+  // For resolved drafts, default to collapsed
+  const [isExpanded, setIsExpanded] = useState(isPending);
 
   // Parse orderType from signalData
   let orderType: string | null = null;
@@ -904,13 +892,94 @@ function DraftCard({
   const riskNotional = riskResult?.notionalSize ?? 0;
   const riskLeverage = riskResult?.leverage ?? draft.leverage;
 
+  // Status config for resolved drafts
+  const statusConfig: Record<string, { icon: string; borderColor: string; bgColor: string; headerBg: string }> = {
+    accepted: {
+      icon: "✅",
+      borderColor: "border-green-700/40",
+      bgColor: "bg-green-950/10",
+      headerBg: "bg-green-900/20",
+    },
+    rejected: {
+      icon: "❌",
+      borderColor: "border-red-700/40",
+      bgColor: "bg-red-950/10",
+      headerBg: "bg-red-900/20",
+    },
+    expired: {
+      icon: "⏰",
+      borderColor: "border-slate-600/40",
+      bgColor: "bg-slate-800/20",
+      headerBg: "bg-slate-800/30",
+    },
+  };
+  const resolvedStyle = statusConfig[draft.status] || statusConfig.expired;
+
+  // For resolved drafts: collapsed accordion header
+  if (isResolved && !isExpanded) {
+    return (
+      <div className={`border rounded-lg overflow-hidden ${resolvedStyle.borderColor} ${resolvedStyle.bgColor}`}>
+        <button
+          onClick={() => setIsExpanded(true)}
+          className="w-full px-4 py-3 flex items-center justify-between text-left hover:brightness-110 transition"
+        >
+          <div className="flex items-center gap-2">
+            <span>{resolvedStyle.icon}</span>
+            <span className={`badge ${draft.side === "LONG" ? "badge-success" : "badge-danger"}`}>
+              {draft.action}
+            </span>
+            <span className="font-medium text-white">{draft.symbol}</span>
+            {orderType && (
+              <span
+                className={`text-xs px-1.5 py-0.5 rounded ${orderType === "limit" ? "bg-purple-700/50 text-purple-300" : "bg-blue-700/50 text-blue-300"}`}
+              >
+                {orderType === "limit" ? "📌 Limit" : "⚡ Market"}
+              </span>
+            )}
+            <span className="badge badge-warning">{draft.leverage}x</span>
+            {draft.entryPrice && (
+              <span className="text-xs text-slate-400">
+                Entry: <span className="font-mono text-slate-300">{draft.entryPrice}</span>
+              </span>
+            )}
+            {draft.stopLoss && (
+              <span className="text-xs text-slate-400">
+                SL: <span className="font-mono text-danger">{draft.stopLoss}</span>
+              </span>
+            )}
+            {draft.takeProfitTargets && draft.takeProfitTargets.length > 0 && (
+              <span className="text-xs text-slate-400">
+                TP: <span className="font-mono text-success">{draft.takeProfitTargets.join(", ")}</span>
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-slate-500">by @{draft.author}</span>
+            {draft.resolvedAt && (
+              <span className="text-xs text-slate-500">
+                {new Date(draft.resolvedAt).toLocaleString()}
+              </span>
+            )}
+            <span className="text-slate-500 text-xs">▼</span>
+          </div>
+        </button>
+      </div>
+    );
+  }
+
+  // Expanded view (for both pending and resolved)
   return (
-    <div className="border border-amber-700/50 bg-amber-950/20 rounded-lg overflow-hidden">
+    <div className={`border rounded-lg overflow-hidden ${
+      isPending
+        ? "border-amber-700/50 bg-amber-950/20"
+        : `${resolvedStyle.borderColor} ${resolvedStyle.bgColor}`
+    }`}>
       {/* Header */}
       <div className="p-4">
         <div className="flex items-start justify-between gap-4">
           <div className="flex-1">
             <div className="flex items-center gap-2 mb-2">
+              {!isPending && <span>{resolvedStyle.icon}</span>}
               <span
                 className={`badge ${draft.side === "LONG" ? "badge-success" : "badge-danger"}`}
               >
@@ -931,6 +1000,9 @@ function DraftCard({
                 <span className="badge badge-info">
                   {draft.confidence}% conf.
                 </span>
+              )}
+              {!isPending && (
+                <StatusBadge status={draft.status} />
               )}
             </div>
 
@@ -1069,6 +1141,11 @@ function DraftCard({
               <span>
                 🕐 Drafted: {new Date(draft.createdAt).toLocaleString()}
               </span>
+              {draft.resolvedAt && !isPending && (
+                <span>
+                  ✅ Resolved: {new Date(draft.resolvedAt).toLocaleString()}
+                </span>
+              )}
               {draft.messageUrl && (
                 <a
                   href={draft.messageUrl}
@@ -1088,24 +1165,38 @@ function DraftCard({
             </div>
           </div>
 
-          {/* Action Buttons */}
-          <div className="flex flex-col gap-2 min-w-[120px]">
-            <button
-              onClick={() => onAccept(draft._id, "accept")}
-              disabled={acting}
-              className="bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold px-4 py-2 rounded-lg text-sm transition flex items-center justify-center gap-1"
-            >
-              {acting ? <div className="spinner w-4 h-4 border-2" /> : "✅"}
-              Accept
-            </button>
-            <button
-              onClick={() => onReject(draft._id, "reject")}
-              disabled={acting}
-              className="bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold px-4 py-2 rounded-lg text-sm transition flex items-center justify-center gap-1"
-            >
-              ❌ Reject
-            </button>
-          </div>
+          {/* Action Buttons — only for pending */}
+          {isPending && (
+            <div className="flex flex-col gap-2 min-w-[120px]">
+              <button
+                onClick={() => onAccept(draft._id, "accept")}
+                disabled={acting}
+                className="bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold px-4 py-2 rounded-lg text-sm transition flex items-center justify-center gap-1"
+              >
+                {acting ? <div className="spinner w-4 h-4 border-2" /> : "✅"}
+                Accept
+              </button>
+              <button
+                onClick={() => onReject(draft._id, "reject")}
+                disabled={acting}
+                className="bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold px-4 py-2 rounded-lg text-sm transition flex items-center justify-center gap-1"
+              >
+                ❌ Reject
+              </button>
+            </div>
+          )}
+
+          {/* Collapse button for resolved */}
+          {isResolved && (
+            <div className="flex flex-col gap-2 min-w-[120px]">
+              <button
+                onClick={() => setIsExpanded(false)}
+                className="bg-slate-700 hover:bg-slate-600 text-white font-semibold px-4 py-2 rounded-lg text-sm transition flex items-center justify-center gap-1"
+              >
+                ▲ Collapse
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -1158,64 +1249,6 @@ function DraftCard({
   );
 }
 
-function ResolvedDraftCard({ draft }: { draft: DraftTrade }) {
-  // Parse orderType from signalData
-  let orderType: string | null = null;
-  try {
-    const signal = JSON.parse(draft.signalData);
-    orderType = signal.orderType || null;
-  } catch {}
-
-  const statusConfig: Record<string, { icon: string; class: string }> = {
-    accepted: { icon: "✅", class: "border-green-900/30 bg-green-950/10" },
-    rejected: { icon: "❌", class: "border-red-900/30 bg-red-950/10" },
-    expired: { icon: "⏰", class: "border-slate-700/50 bg-slate-800/20" },
-  };
-  const config = statusConfig[draft.status] || statusConfig.expired;
-
-  return (
-    <div className={`border rounded-lg p-3 ${config.class}`}>
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span>{config.icon}</span>
-          <span
-            className={`badge ${draft.side === "LONG" ? "badge-success" : "badge-danger"}`}
-          >
-            {draft.action}
-          </span>
-          <span className="font-medium">{draft.symbol}</span>
-          {orderType && (
-            <span
-              className={`text-xs px-1.5 py-0.5 rounded ${orderType === "limit" ? "bg-purple-700/50 text-purple-300" : "bg-blue-700/50 text-blue-300"}`}
-            >
-              {orderType === "limit" ? "📌 Limit" : "⚡ Market"}
-            </span>
-          )}
-          <span className="text-slate-500 text-xs">by @{draft.author}</span>
-        </div>
-        <div className="flex items-center gap-3 text-xs text-slate-500">
-          {draft.messageUrl && (
-            <a
-              href={draft.messageUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-primary-400 hover:text-primary-300 underline"
-            >
-              🔗 Discord
-            </a>
-          )}
-          <span>
-            {draft.discordTimestamp
-              ? `💬 ${new Date(draft.discordTimestamp).toLocaleString()}`
-              : draft.resolvedAt
-                ? new Date(draft.resolvedAt).toLocaleString()
-                : new Date(draft.createdAt).toLocaleString()}
-          </span>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 function PositionsTab({ positions }: { positions: Position[] }) {
   if (positions.length === 0) {
