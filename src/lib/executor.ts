@@ -25,6 +25,27 @@ import { ExchangeFactory } from "./exchange/ExchangeFactory";
 import { calculateRiskBasedPosition, getRiskConfig } from "./risk";
 import { getSignalConfig } from "./signal-config";
 
+/**
+ * Sanitize leverage value from AI response.
+ * AI may return leverage as "10x", "10-25x", or other string formats.
+ * This extracts the first valid number and ensures it's a plain number.
+ */
+function sanitizeLeverage(
+  leverage: number | string | undefined | null,
+): number | null {
+  if (leverage === undefined || leverage === null) return null;
+  if (typeof leverage === "number") {
+    return isNaN(leverage) ? null : leverage;
+  }
+  // String: try to extract first number from patterns like "10x", "10-25x"
+  const match = String(leverage).match(/(\d+)/);
+  if (match) {
+    const num = parseInt(match[1], 10);
+    return isNaN(num) ? null : num;
+  }
+  return null;
+}
+
 export async function runSignalCheck(): Promise<{
   checked: number;
   newSignals: number;
@@ -208,6 +229,9 @@ export async function runSignalCheck(): Promise<{
         const bulkInputs: BulkMessageInput[] = batch.map((msg) => ({
           messageId: msg.messageId,
           content: msg.originalContent || msg.content,
+          ...(signalConfig.includeImageUrls && msg.imageUrls?.length > 0
+            ? { imageUrls: msg.imageUrls }
+            : {}),
         }));
 
         let batchResults: Array<{
@@ -442,7 +466,9 @@ async function createDraft(
     entryPrice: signal.entryPrice || null,
     takeProfitTargets: signal.takeProfitTargets || [],
     stopLoss: signal.stopLoss || null,
-    leverage: signal.leverage || parseInt(process.env.DEFAULT_LEVERAGE || "10"),
+    leverage:
+      sanitizeLeverage(signal.leverage) ||
+      parseInt(process.env.DEFAULT_LEVERAGE || "10"),
     quantity,
     confidence: signal.confidence || 0,
     reasoning: signal.reasoning || "",
@@ -462,7 +488,7 @@ export async function executeSignal(
   sourceName?: string,
 ): Promise<IPosition | null> {
   const side = signal.action === "SELL" ? "SHORT" : "LONG";
-  const leverage = signal.leverage || 10;
+  const leverage = sanitizeLeverage(signal.leverage) || 10;
   const quantity =
     signal.positionSize ||
     parseFloat(process.env.DEFAULT_POSITION_SIZE || "50");

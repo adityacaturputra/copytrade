@@ -6,6 +6,7 @@ export interface SignalConfigType {
   fetchLimit: number; // how many messages to fetch per channel (default 10)
   timeWindowHours: number; // only process messages within this window (default 24)
   batchSize: number; // how many messages to send to AI per bulk request (default 5)
+  includeImageUrls: boolean; // whether to include images in AI prompts (default false)
 }
 
 // ─── Defaults ─────────────────────────────────────────────────────────────────
@@ -14,6 +15,7 @@ const DEFAULT_SIGNAL_CONFIG: SignalConfigType = {
   fetchLimit: 10,
   timeWindowHours: 24,
   batchSize: 5,
+  includeImageUrls: false,
 };
 
 // ─── DB Helpers ───────────────────────────────────────────────────────────────
@@ -29,6 +31,7 @@ export async function getSignalConfig(): Promise<SignalConfigType> {
         fetchLimit: settings.fetchLimit,
         timeWindowHours: settings.timeWindowHours,
         batchSize: settings.batchSize,
+        includeImageUrls: settings.includeImageUrls ?? false,
       };
     }
   } catch (err) {
@@ -54,6 +57,9 @@ export async function setSignalConfig(
   if (config.batchSize !== undefined) {
     update.batchSize = config.batchSize;
   }
+  if (config.includeImageUrls !== undefined) {
+    update.includeImageUrls = config.includeImageUrls;
+  }
   const doc = await SignalConfigModel.findOneAndUpdate({}, update, {
     upsert: true,
     new: true,
@@ -62,5 +68,6 @@ export async function setSignalConfig(
     fetchLimit: doc.fetchLimit,
     timeWindowHours: doc.timeWindowHours,
     batchSize: doc.batchSize,
+    includeImageUrls: doc.includeImageUrls ?? false,
   };
 }

@@ -30,6 +30,7 @@ export interface TradingSignal {
 export interface BulkMessageInput {
   messageId: string;
   content: string;
+  imageUrls?: string[]; // optional image URLs to include in the AI prompt
 }
 
 export interface PositionAnalysis {

@@ -140,10 +140,12 @@ export async function POST(request: NextRequest) {
         );
       }
 
+      const includeImageUrls = body.signal.includeImageUrls;
       await setSignalConfig({
         ...(fetchLimit !== undefined && { fetchLimit }),
         ...(timeWindowHours !== undefined && { timeWindowHours }),
         ...(batchSize !== undefined && { batchSize }),
+        ...(includeImageUrls !== undefined && { includeImageUrls }),
       });
     }
 

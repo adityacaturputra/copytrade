@@ -34,7 +34,7 @@ Important rules:
 - If multiple TP targets, list them all in takeProfitTargets array
 - Distinguish between UPDATE_TP (replacing/modifying an existing TP) and ADD_TP (adding a new TP level, e.g. "pasang TP2 di 70K" means ADD_TP because TP1 already exists)
 - If someone says they reached a TP level and sets a new one (e.g. "sudah TP1, TP2 di 70K"), use ADD_TP with the new TP price in takeProfitTargets
-- Leverage: use x notation (e.g., 10x, 20x). Default 10x if not mentioned
+- Leverage: PLAIN NUMBER ONLY, no suffix (e.g., 10, NOT "10x"). If signal says "10x" or "10-25x", extract the first number: 10. Default 10 if not mentioned.
 - Confidence: how certain you are this is a valid trading signal (0-100)
 - If the message is general chat, not a signal, return null
 - If the message mentions "spot" explicitly, set leverage to 1
@@ -66,6 +66,15 @@ The user message will contain messages in this format:
 [content]
 ---END MESSAGE [messageId]---
 
+Some messages may also include chart image URLs labeled as [Attached Images]. These are TRADING CHART screenshots that contain critical signal data — you MUST read/analyze these chart images to extract:
+- ENTRY price (look for horizontal lines, zones, or marked entry points)
+- STOP LOSS level (usually marked below entry for LONG, above for SHORT)
+- TAKE PROFIT targets (TP1, TP2, TP3, etc. — usually marked as horizontal lines above/below entry)
+- Support/Resistance levels drawn on the chart
+- Trendlines, orderblocks, or other technical patterns visible
+
+When a message has attached chart images, the ENTRY/SL/TP values may ONLY be visible in the chart (not in the text). In this case, you MUST extract those values from the image and include them in your response.
+
 Each message has a unique messageId. You MUST include the messageId in each parsed result so results can be mapped back.
 
 Return a JSON ARRAY where each element has "messageId" and either a parsed signal or null.
@@ -81,7 +90,7 @@ Rules for each signal object:
 - Symbol MUST end with USDT (e.g., BTC → BTCUSDT, ETH → ETHUSDT)
 - If multiple TP targets, list them all in takeProfitTargets array
 - Distinguish between UPDATE_TP (replacing/modifying an existing TP) and ADD_TP (adding a new TP level)
-- Leverage: use x notation (default 10x if not mentioned)
+- Leverage: PLAIN NUMBER ONLY, no suffix (e.g., 10, NOT "10x"). If signal says "10x" or "10-25x", extract the first number: 10. Default 10 if not mentioned.
 - Confidence: how certain you are this is a valid trading signal (0-100)
 - For non-signal messages (chat, casual conversation, role pings only), set signal to null
 - If "spot" is mentioned, set leverage to 1

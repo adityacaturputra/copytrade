@@ -98,6 +98,7 @@ export default function SettingsPage() {
     fetchLimit: 10,
     timeWindowHours: 24,
     batchSize: 5,
+    includeImageUrls: false,
   });
   const [signalSaving, setSignalSaving] = useState(false);
   const [signalError, setSignalError] = useState<string | null>(null);
@@ -131,6 +132,7 @@ export default function SettingsPage() {
             fetchLimit: json.signal.fetchLimit,
             timeWindowHours: json.signal.timeWindowHours,
             batchSize: json.signal.batchSize || 5,
+            includeImageUrls: json.signal.includeImageUrls || false,
           });
       }
     } catch {
@@ -1189,6 +1191,36 @@ export default function SettingsPage() {
             outside the time window. They are then processed oldest-first for
             correct trade execution order.
           </p>
+          {/* Include Images toggle */}
+          <div className="flex items-center gap-3 mb-4 bg-slate-800/50 border border-slate-700 rounded-lg p-3">
+            <input
+              type="checkbox"
+              id="includeImageUrls"
+              checked={signalCfg.includeImageUrls}
+              onChange={(e) =>
+                setSignalCfg({
+                  ...signalCfg,
+                  includeImageUrls: e.target.checked,
+                })
+              }
+              className="rounded border-slate-600 bg-slate-800 text-blue-600 focus:ring-blue-500 w-4 h-4"
+            />
+            <label
+              htmlFor="includeImageUrls"
+              className="text-sm text-slate-300"
+            >
+              <span className="font-medium">
+                🖼️ Include Images in AI Analysis
+              </span>
+              <span className="block text-xs text-slate-500 mt-0.5">
+                When enabled, attached chart images from Discord messages will
+                be sent to the AI (vision model) for additional context
+                alongside the text. Requires a vision-capable AI model (e.g.,
+                GLM glm-4v-plus).
+              </span>
+            </label>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
             <div>
               <label className="block text-sm text-slate-400 mb-1">
