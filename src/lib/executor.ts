@@ -55,6 +55,29 @@ function autoCalculateTPFromRR(
 }
 
 /**
+ * Auto-calculate Stop Loss from TP distance using RR ratio.
+ * Reverse of autoCalculateTPFromRR — when signal has TP but no SL.
+ *
+ * Example: Entry=95000, TP=98000 (3R), RR=3
+ *   tpDistance = 3000
+ *   slDistance = tpDistance / RR = 1000
+ *   For LONG: SL = 95000 - 1000 = 94000
+ *   For SHORT: SL = 95000 + 1000 = 96000
+ */
+function autoCalculateSLFromRR(
+  entryPrice: number,
+  tpPrice: number,
+  rr: number,
+  side: "LONG" | "SHORT",
+): number {
+  const tpDistance = Math.abs(tpPrice - entryPrice);
+  const slDistance = tpDistance / rr;
+  // SL is on the opposite side of entry from TP
+  const direction = side === "LONG" ? -1 : 1;
+  return entryPrice + direction * slDistance;
+}
+
+/**
  * Sanitize leverage value from AI response.
  * AI may return leverage as "10x", "10-25x", or other string formats.
  * This extracts the first valid number and ensures it's a plain number.
@@ -480,9 +503,34 @@ async function createDraft(
   const side = signal.action === "SELL" ? "SHORT" : "LONG";
   const quantity = signal.positionSize || riskCfg.defaultPositionSize;
 
-  // Auto-calculate TP from RR if no TP targets but we have entry + SL + RR
   let tpTargets = signal.takeProfitTargets || [];
-  if (tpTargets.length === 0 && signal.entryPrice && signal.stopLoss) {
+  let autoSL: number | null = null;
+
+  // Auto-calculate SL from TP distance if no SL but has TP + entry + RR
+  if (!signal.stopLoss && tpTargets.length > 0 && signal.entryPrice) {
+    const rr =
+      signal.defaultRR && signal.defaultRR > 0
+        ? signal.defaultRR
+        : riskCfg.defaultRR;
+    if (rr > 0) {
+      autoSL = autoCalculateSLFromRR(
+        signal.entryPrice,
+        tpTargets[0], // Use first TP target
+        rr,
+        side,
+      );
+      console.log(
+        `📐 Auto-calculated SL from ${rr}RR using TP distance: entry=${signal.entryPrice}, TP=${tpTargets[0]} → SL=${autoSL}`,
+      );
+    }
+  }
+
+  // Auto-calculate TP from RR if no TP targets but we have entry + SL + RR
+  if (
+    tpTargets.length === 0 &&
+    signal.entryPrice &&
+    (signal.stopLoss || autoSL)
+  ) {
     const rr =
       signal.defaultRR && signal.defaultRR > 0
         ? signal.defaultRR
@@ -490,7 +538,7 @@ async function createDraft(
     if (rr > 0) {
       tpTargets = autoCalculateTPFromRR(
         signal.entryPrice,
-        signal.stopLoss,
+        signal.stopLoss || autoSL!,
         rr,
         side,
       );
@@ -513,7 +561,7 @@ async function createDraft(
     side,
     entryPrice: signal.entryPrice || null,
     takeProfitTargets: tpTargets,
-    stopLoss: signal.stopLoss || null,
+    stopLoss: signal.stopLoss || autoSL || null,
     leverage: sanitizeLeverage(signal.leverage) || riskCfg.defaultLeverage,
     quantity,
     confidence: signal.confidence || 0,
@@ -656,12 +704,32 @@ export async function executeSignal(
         );
       }
 
+      // ─── Auto-calculate SL from TP distance if no SL but has TP + entry ────
+      let effectiveSL = signal.stopLoss || null;
+      const signalTPs = signal.takeProfitTargets || [];
+      if (!effectiveSL && signalTPs.length > 0 && entryPrice) {
+        const rr =
+          signal.defaultRR && signal.defaultRR > 0
+            ? signal.defaultRR
+            : riskCfg.defaultRR;
+        if (rr > 0) {
+          effectiveSL = autoCalculateSLFromRR(
+            entryPrice,
+            signalTPs[0],
+            rr,
+            side,
+          );
+          console.log(
+            `📐 Auto-calculated SL from ${rr}RR using TP distance: entry=${entryPrice}, TP=${signalTPs[0]} → SL=${effectiveSL}`,
+          );
+        }
+      }
+
       // Check skipNoSL — skip trades without stop loss if setting is enabled
-      if (!signal.stopLoss) {
-        const riskCfg = await getRiskConfig();
+      if (!effectiveSL) {
         if (riskCfg.skipNoSL) {
           console.warn(
-            `🚫 Skipping ${signal.action} ${signal.symbol}: no stop loss and skipNoSL is enabled`,
+            `🚫 Skipping ${signal.action} ${signal.symbol}: no stop loss (and no TP to derive SL from) and skipNoSL is enabled`,
           );
           await TradeLog.create({
             type: "signal",
@@ -681,7 +749,7 @@ export async function executeSignal(
       if (entryPrice && entryPrice > 0) {
         const riskCalc = await calculateRiskBasedPosition(
           entryPrice,
-          signal.stopLoss || null,
+          effectiveSL,
           side,
           quantity,
           leverage,
