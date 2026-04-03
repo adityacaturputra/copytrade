@@ -121,6 +121,44 @@ export default function SettingsPage() {
   const [signalError, setSignalError] = useState<string | null>(null);
   const [signalSuccess, setSignalSuccess] = useState(false);
 
+  // Proxy state
+  const [proxyConfig, setProxyConfig] = useState<{
+    enabled: boolean;
+    provider: "webshare" | "custom";
+    custom?: {
+      host: string;
+      port: number;
+      username: string;
+      password: string;
+    };
+  } | null>(null);
+  const [proxyProviderInfo, setProxyProviderInfo] = useState<{
+    providerName: string;
+    credentials: { username: string; password: string };
+    proxies: {
+      ip: string;
+      port: number;
+      country_code: string;
+      city_name: string;
+      valid: boolean;
+    }[];
+    ipList: string[];
+    total: number;
+    validCount: number;
+  } | null>(null);
+  const [proxyLoading, setProxyLoading] = useState(true);
+  const [proxyRefreshing, setProxyRefreshing] = useState(false);
+  const [proxySaving, setProxySaving] = useState(false);
+  const [showProxyPasswords, setShowProxyPasswords] = useState(false);
+  const [proxyError, setProxyError] = useState<string | null>(null);
+  // Custom proxy form
+  const [customProxy, setCustomProxy] = useState({
+    host: "",
+    port: 1080,
+    username: "",
+    password: "",
+  });
+
   const fetchSources = useCallback(async () => {
     try {
       const res = await fetch("/api/discord-sources");
@@ -157,10 +195,65 @@ export default function SettingsPage() {
     }
   }, []);
 
+  const fetchProxies = useCallback(async () => {
+    try {
+      const res = await fetch("/api/proxy");
+      const json = await res.json();
+      if (json.success) {
+        setProxyConfig(json.config);
+        setProxyProviderInfo(json.providerInfo || null);
+        if (json.config?.custom) {
+          setCustomProxy(json.config.custom);
+        }
+        setProxyError(null);
+      } else {
+        setProxyError(json.error || "Failed to load proxy config");
+      }
+    } catch {
+      setProxyError("Failed to fetch proxy info from server.");
+    } finally {
+      setProxyLoading(false);
+      setProxyRefreshing(false);
+    }
+  }, []);
+
+  const handleProxySave = async () => {
+    setProxySaving(true);
+    setProxyError(null);
+    try {
+      const body: Record<string, unknown> = {
+        enabled: proxyConfig?.enabled ?? false,
+        provider: proxyConfig?.provider ?? "webshare",
+      };
+      if (proxyConfig?.provider === "custom") {
+        body.custom = customProxy;
+      }
+      const res = await fetch("/api/proxy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setProxyConfig(json.config);
+        setProxyProviderInfo(json.providerInfo || null);
+      } else {
+        setProxyError(json.error || "Failed to save proxy config");
+      }
+    } catch (err) {
+      setProxyError(
+        err instanceof Error ? err.message : "Failed to save proxy config",
+      );
+    } finally {
+      setProxySaving(false);
+    }
+  };
+
   useEffect(() => {
     fetchSources();
     fetchSettings();
-  }, [fetchSources, fetchSettings]);
+    fetchProxies();
+  }, [fetchSources, fetchSettings, fetchProxies]);
 
   const handleSignalSave = async () => {
     setSignalSaving(true);
@@ -1262,6 +1355,348 @@ export default function SettingsPage() {
               "💾 Save Risk Settings"
             )}
           </button>
+        </div>
+
+        {/* Webshare Proxy / OKX Static IP */}
+        <div className="card border-purple-700/50">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <span className="text-lg">🌐</span>
+              <h3 className="text-sm font-semibold text-slate-300">
+                Proxy — OKX Static IP
+              </h3>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  setProxyRefreshing(true);
+                  fetchProxies();
+                }}
+                disabled={proxyRefreshing}
+                className="text-xs bg-purple-600 hover:bg-purple-700 disabled:opacity-50 px-3 py-1.5 rounded-lg transition flex items-center gap-1"
+              >
+                {proxyRefreshing ? (
+                  <span className="flex items-center gap-1">
+                    <div className="spinner w-3 h-3 border-2" /> Refreshing...
+                  </span>
+                ) : (
+                  "🔄 Refresh"
+                )}
+              </button>
+            </div>
+          </div>
+
+          {proxyLoading ? (
+            <div className="flex items-center gap-2 text-sm text-slate-400 py-4 justify-center">
+              <div className="spinner w-4 h-4 border-2" /> Loading proxy info...
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {/* Enable / Disable toggle */}
+              <div className="flex items-center gap-3 bg-slate-800/50 border border-slate-700 rounded-lg p-3">
+                <input
+                  type="checkbox"
+                  id="proxyEnabled"
+                  checked={proxyConfig?.enabled ?? false}
+                  onChange={(e) =>
+                    setProxyConfig({
+                      ...proxyConfig!,
+                      enabled: e.target.checked,
+                      provider: proxyConfig?.provider ?? "webshare",
+                    })
+                  }
+                  className="rounded border-slate-600 bg-slate-800 text-purple-600 focus:ring-purple-500 w-4 h-4"
+                />
+                <label
+                  htmlFor="proxyEnabled"
+                  className="text-sm text-slate-300"
+                >
+                  <span className="font-medium">
+                    🚀 Enable Proxy for OKX Requests
+                  </span>
+                  <span className="block text-xs text-slate-500 mt-0.5">
+                    Route all OKX API requests through a static IP proxy.
+                    Required for OKX API key IP whitelisting.
+                  </span>
+                </label>
+              </div>
+
+              {/* Provider selector */}
+              <div>
+                <label className="block text-sm text-slate-400 mb-1">
+                  Proxy Provider
+                </label>
+                <select
+                  value={proxyConfig?.provider ?? "webshare"}
+                  onChange={(e) =>
+                    setProxyConfig({
+                      ...proxyConfig!,
+                      provider: e.target.value as "webshare" | "custom",
+                      enabled: proxyConfig?.enabled ?? false,
+                    })
+                  }
+                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-purple-500 focus:outline-none"
+                >
+                  <option value="webshare">🌐 Webshare (Free Static IP)</option>
+                  <option value="custom">🔧 Custom Proxy</option>
+                </select>
+              </div>
+
+              {/* Custom proxy fields */}
+              {proxyConfig?.provider === "custom" && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">
+                      Proxy Host
+                    </label>
+                    <input
+                      type="text"
+                      value={customProxy.host}
+                      onChange={(e) =>
+                        setCustomProxy({ ...customProxy, host: e.target.value })
+                      }
+                      placeholder="e.g., 192.168.1.1"
+                      className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-purple-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">
+                      Port
+                    </label>
+                    <input
+                      type="number"
+                      value={customProxy.port}
+                      onChange={(e) =>
+                        setCustomProxy({
+                          ...customProxy,
+                          port: parseInt(e.target.value) || 1080,
+                        })
+                      }
+                      className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-purple-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">
+                      Username
+                    </label>
+                    <input
+                      type="text"
+                      value={customProxy.username}
+                      onChange={(e) =>
+                        setCustomProxy({
+                          ...customProxy,
+                          username: e.target.value,
+                        })
+                      }
+                      placeholder="Proxy username"
+                      className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-purple-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">
+                      Password
+                    </label>
+                    <input
+                      type="password"
+                      value={customProxy.password}
+                      onChange={(e) =>
+                        setCustomProxy({
+                          ...customProxy,
+                          password: e.target.value,
+                        })
+                      }
+                      placeholder="Proxy password"
+                      className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-purple-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Save button */}
+              {proxyError && (
+                <div className="bg-red-900/30 border border-red-700/50 rounded-lg px-4 py-3 text-sm text-red-300">
+                  ⚠️ {proxyError}
+                </div>
+              )}
+              <button
+                onClick={handleProxySave}
+                disabled={proxySaving}
+                className="bg-purple-600 hover:bg-purple-700 disabled:opacity-50 px-6 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2"
+              >
+                {proxySaving ? (
+                  <>
+                    <div className="spinner w-4 h-4 border-2" /> Saving...
+                  </>
+                ) : (
+                  "💾 Save Proxy Settings"
+                )}
+              </button>
+
+              {/* Webshare info banner */}
+              {proxyConfig?.provider === "webshare" && (
+                <div className="bg-purple-900/20 border border-purple-700/30 rounded-lg px-4 py-3 text-xs text-purple-300">
+                  <p className="font-semibold mb-1">
+                    📋 OKX membutuhkan IP statis yang di-whitelist
+                  </p>
+                  <p>
+                    Tambahkan IP proxy di bawah ini ke OKX API Key whitelist
+                    kamu:{" "}
+                    <a
+                      href="https://www.okx.com/account/my-api"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="underline text-purple-200 hover:text-white"
+                    >
+                      OKX → Account → API → Edit API Key → Bind IP
+                    </a>
+                  </p>
+                </div>
+              )}
+
+              {/* Provider info (credentials + IP list) */}
+              {proxyConfig?.enabled && proxyProviderInfo && (
+                <>
+                  {/* Credentials */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div className="bg-slate-800/50 border border-slate-700 rounded-lg p-3">
+                      <p className="text-xs text-slate-500 mb-1">
+                        Proxy Username
+                      </p>
+                      <p className="text-sm text-white font-mono">
+                        {proxyProviderInfo.credentials?.username}
+                      </p>
+                    </div>
+                    <div className="bg-slate-800/50 border border-slate-700 rounded-lg p-3">
+                      <p className="text-xs text-slate-500 mb-1">
+                        Proxy Password
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm text-white font-mono flex-1">
+                          {showProxyPasswords
+                            ? proxyProviderInfo.credentials?.password
+                            : "••••••••••••"}
+                        </p>
+                        <button
+                          onClick={() =>
+                            setShowProxyPasswords(!showProxyPasswords)
+                          }
+                          className="text-xs text-purple-400 hover:text-purple-300 transition"
+                        >
+                          {showProxyPasswords ? "🙈 Hide" : "👁 Show"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Proxy IP List */}
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-xs text-slate-400 font-semibold">
+                        📡 Proxy IP Addresses ({proxyProviderInfo.validCount}/
+                        {proxyProviderInfo.total} valid)
+                      </p>
+                      {proxyProviderInfo.ipList &&
+                        proxyProviderInfo.ipList.length > 0 && (
+                          <button
+                            onClick={() => {
+                              navigator.clipboard.writeText(
+                                proxyProviderInfo.ipList.join("\n"),
+                              );
+                            }}
+                            className="text-xs text-purple-400 hover:text-purple-300 transition"
+                          >
+                            📋 Copy all IPs
+                          </button>
+                        )}
+                    </div>
+                    <div className="bg-slate-800/50 border border-slate-700 rounded-lg overflow-hidden">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="border-b border-slate-700 bg-slate-800/80">
+                            <th className="text-left px-3 py-2 text-slate-400 font-medium">
+                              IP Address
+                            </th>
+                            <th className="text-left px-3 py-2 text-slate-400 font-medium">
+                              Port
+                            </th>
+                            <th className="text-left px-3 py-2 text-slate-400 font-medium">
+                              Location
+                            </th>
+                            <th className="text-center px-3 py-2 text-slate-400 font-medium">
+                              Status
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {proxyProviderInfo.proxies?.map((p, i) => (
+                            <tr
+                              key={i}
+                              className={`border-b border-slate-700/50 ${p.valid ? "" : "opacity-50"}`}
+                            >
+                              <td className="px-3 py-2 font-mono text-white">
+                                {p.ip}
+                              </td>
+                              <td className="px-3 py-2 font-mono text-slate-300">
+                                {p.port}
+                              </td>
+                              <td className="px-3 py-2 text-slate-300">
+                                {p.city_name ? `${p.city_name}, ` : ""}
+                                {p.country_code}
+                              </td>
+                              <td className="px-3 py-2 text-center">
+                                {p.valid ? (
+                                  <span className="text-emerald-400">
+                                    ✅ Valid
+                                  </span>
+                                ) : (
+                                  <span className="text-red-400">
+                                    ❌ Invalid
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* OKX Whitelist Instructions */}
+                  <div className="bg-amber-900/20 border border-amber-700/30 rounded-lg px-4 py-3 text-xs text-amber-300">
+                    <p className="font-semibold mb-1">
+                      ⚡ Cara whitelist IP di OKX:
+                    </p>
+                    <ol className="list-decimal list-inside space-y-1 ml-1 text-amber-200/80">
+                      <li>
+                        Login ke{" "}
+                        <a
+                          href="https://www.okx.com/account/my-api"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="underline hover:text-white"
+                        >
+                          OKX Account → API Management
+                        </a>
+                      </li>
+                      <li>
+                        Klik <strong>Edit</strong> pada API Key yang digunakan
+                      </li>
+                      <li>
+                        Di bagian <strong>Bind IP</strong>, tambahkan IP valid
+                        dari tabel di atas
+                      </li>
+                      <li>Save changes — butuh ~5 menit untuk生效</li>
+                    </ol>
+                    <p className="mt-2 text-amber-200/60">
+                      💡 Hanya IP dengan status <strong>✅ Valid</strong> yang
+                      perlu ditambahkan. Semua proxy menggunakan username &
+                      password yang sama.
+                    </p>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Signal Fetch Settings */}

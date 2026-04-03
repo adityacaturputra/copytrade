@@ -8,10 +8,14 @@ import {
   KlineData,
   OrderResult,
 } from "./types";
+import { getProxyAgent } from "../proxy/ProxyFactory";
 
 // ==================== OKX Exchange Adapter ====================
 
-const BASE_URL = process.env.OKX_PROXY_URL || process.env.OKX_BASE_URL || "https://www.okx.com";
+const BASE_URL =
+  process.env.OKX_PROXY_URL ||
+  process.env.OKX_BASE_URL ||
+  "https://www.okx.com";
 
 /**
  * OKX V5 API — ExchangeClient implementation.
@@ -50,6 +54,23 @@ export class OkxExchange implements ExchangeClient {
       headers: {
         "Content-Type": "application/json",
       },
+    });
+
+    // ─── Proxy: attach httpsProxyAgent for Webshare static IP ────────
+    this.client.interceptors.request.use(async (config) => {
+      try {
+        const agent = await getProxyAgent();
+        if (agent) {
+          config.httpsAgent = agent;
+          config.httpAgent = agent;
+        }
+      } catch (err) {
+        console.warn(
+          "[OKX] ⚠️ Proxy agent not available, using direct connection:",
+          err instanceof Error ? err.message : err,
+        );
+      }
+      return config;
     });
 
     // ─── Error-only request/response logging ──────────────────────────
@@ -853,7 +874,9 @@ export class OkxExchange implements ExchangeClient {
     const orderPath = "/api/v5/trade/order";
     const fallbackHeaders = this.authHeaders("POST", orderPath, fallbackBody);
 
-    console.log(`[OKX] 📤 Placing opposite order to close: ${instId} (${mgnMode})...`);
+    console.log(
+      `[OKX] 📤 Placing opposite order to close: ${instId} (${mgnMode})...`,
+    );
 
     const fallbackResp = await this.client.post(orderPath, fallbackBody, {
       headers: fallbackHeaders,
