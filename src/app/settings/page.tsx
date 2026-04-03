@@ -95,6 +95,21 @@ export default function SettingsPage() {
   const [riskError, setRiskError] = useState<string | null>(null);
   const [riskSuccess, setRiskSuccess] = useState(false);
 
+  // Reset state
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetResult, setResetResult] = useState<{
+    success: boolean;
+    message: string;
+    results?: {
+      step: string;
+      status: string;
+      message: string;
+      details?: string[];
+    }[];
+  } | null>(null);
+  const [resetShowConfirm, setResetShowConfirm] = useState(false);
+  const [resetConfirmText, setResetConfirmText] = useState("");
+
   // Signal config state
   const [signalCfg, setSignalCfg] = useState({
     fetchLimit: 10,
@@ -350,6 +365,29 @@ export default function SettingsPage() {
       console.error("Health check error:", err);
     } finally {
       setCheckingHealth(null);
+    }
+  };
+
+  const handleReset = async () => {
+    setResetLoading(true);
+    setResetResult(null);
+    try {
+      const res = await fetch("/api/reset-all", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const json = await res.json();
+      setResetResult(json);
+    } catch (err) {
+      setResetResult({
+        success: false,
+        message: err instanceof Error ? err.message : "Network error",
+      });
+    } finally {
+      setResetLoading(false);
+      setResetShowConfirm(false);
+      setResetConfirmText("");
     }
   };
 
@@ -1359,6 +1397,147 @@ export default function SettingsPage() {
               "💾 Save Signal Settings"
             )}
           </button>
+        </div>
+
+        {/* Danger Zone — Reset All */}
+        <div className="card border-red-700/50">
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-lg">☠️</span>
+            <h3 className="text-sm font-semibold text-red-400">
+              Danger Zone — Reset All
+            </h3>
+          </div>
+          <p className="text-xs text-slate-400 mb-4">
+            This will{" "}
+            <strong className="text-red-300">
+              drop all database collections
+            </strong>{" "}
+            (ProcessedMessage, Position, TradeLog, DraftTrade, TradingMode,
+            RiskSettings) and{" "}
+            <strong className="text-red-300">
+              close all open exchange positions
+            </strong>
+            . Discord sources are preserved. This action is{" "}
+            <strong className="text-red-300">irreversible</strong>.
+          </p>
+
+          {!resetShowConfirm ? (
+            <button
+              onClick={() => {
+                setResetShowConfirm(true);
+                setResetResult(null);
+              }}
+              className="bg-red-600 hover:bg-red-700 px-6 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2"
+            >
+              🔄 Reset Everything
+            </button>
+          ) : (
+            <div className="space-y-4">
+              <div className="bg-red-900/30 border border-red-700/50 rounded-lg p-4">
+                <p className="text-sm text-red-300 font-semibold mb-2">
+                  ⚠️ Are you absolutely sure?
+                </p>
+                <p className="text-xs text-slate-400 mb-3">
+                  This will permanently delete all trading data, positions,
+                  logs, and drafts. Discord source configurations will be kept.
+                  Type <strong className="text-red-300">reset</strong> to
+                  confirm.
+                </p>
+                <input
+                  type="text"
+                  value={resetConfirmText}
+                  onChange={(e) => setResetConfirmText(e.target.value)}
+                  placeholder='Type "reset" to confirm'
+                  className="w-full bg-slate-800 border border-red-700/50 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-red-500 focus:outline-none mb-3"
+                />
+                <div className="flex gap-3">
+                  <button
+                    onClick={handleReset}
+                    disabled={resetLoading || resetConfirmText !== "reset"}
+                    className="bg-red-600 hover:bg-red-700 disabled:opacity-50 px-6 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2"
+                  >
+                    {resetLoading ? (
+                      <>
+                        <div className="spinner w-4 h-4 border-2" />{" "}
+                        Resetting...
+                      </>
+                    ) : (
+                      "💥 Confirm Reset"
+                    )}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setResetShowConfirm(false);
+                      setResetConfirmText("");
+                    }}
+                    disabled={resetLoading}
+                    className="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 px-4 py-2 rounded-lg text-sm transition"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Reset Result */}
+          {resetResult && (
+            <div
+              className={`mt-4 rounded-lg border p-4 ${
+                resetResult.success
+                  ? "bg-emerald-900/30 border-emerald-700/50"
+                  : "bg-red-900/30 border-red-700/50"
+              }`}
+            >
+              <p
+                className={`text-sm font-semibold mb-2 ${
+                  resetResult.success ? "text-emerald-300" : "text-red-300"
+                }`}
+              >
+                {resetResult.success ? "✅" : "❌"} {resetResult.message}
+              </p>
+              {resetResult.results && resetResult.results.length > 0 && (
+                <div className="space-y-2">
+                  {resetResult.results.map((r, i) => (
+                    <div
+                      key={i}
+                      className="bg-slate-800/50 rounded-lg p-3 border border-slate-700"
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <span
+                          className={`text-xs font-medium px-2 py-0.5 rounded ${
+                            r.status === "success"
+                              ? "bg-emerald-900/50 text-emerald-300"
+                              : r.status === "skipped"
+                                ? "bg-slate-700 text-slate-400"
+                                : "bg-red-900/50 text-red-300"
+                          }`}
+                        >
+                          {r.status.toUpperCase()}
+                        </span>
+                        <span className="text-sm text-white font-medium">
+                          {r.step}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-400">{r.message}</p>
+                      {r.details && r.details.length > 0 && (
+                        <ul className="mt-1 space-y-0.5">
+                          {r.details.map((d, j) => (
+                            <li
+                              key={j}
+                              className="text-xs text-slate-500 font-mono"
+                            >
+                              • {d}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* How-to Guide */}
