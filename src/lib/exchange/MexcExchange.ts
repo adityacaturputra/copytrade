@@ -7,6 +7,9 @@ import {
   AccountInfo,
   KlineData,
   OrderResult,
+  OpenOrderInfo,
+  AlgoOrderInfo,
+  HistoricalOrder,
 } from "./types";
 
 // ==================== MEXC Exchange Adapter ====================
@@ -347,5 +350,192 @@ export class MexcExchange implements ExchangeClient {
     throw new Error(
       `Failed to place take profit: ${data.message || "Unknown error"}`,
     );
+  }
+
+  // ─── Order Management ───────────────────────────────────────────────
+
+  async getOpenOrders(symbol?: string): Promise<OpenOrderInfo[]> {
+    const params = this.buildAuthParams();
+    if (symbol) params["symbol"] = symbol;
+    params["sign"] = this.sign(params);
+
+    const response = await this.client.get(
+      "/api/v1/private/order/list/open_orders",
+      { params },
+    );
+
+    const data = response.data;
+    if (data.success && data.data) {
+      return data.data.map(
+        (o: {
+          id: string;
+          symbol: string;
+          side: number;
+          type: number;
+          price: number;
+          vol: number;
+          dealVol: number;
+          state: number;
+          cTime?: number;
+          [key: string]: unknown;
+        }) => ({
+          orderId: String(o.id),
+          symbol: o.symbol,
+          side: o.side === 1 ? ("BUY" as const) : ("SELL" as const),
+          type: String(o.type),
+          price: o.price,
+          quantity: o.vol,
+          filledQuantity: o.dealVol,
+          status: String(o.state),
+          createdAt: o.cTime,
+          raw: o,
+        }),
+      );
+    }
+    return [];
+  }
+
+  async cancelOrder(orderId: string, symbol: string): Promise<boolean> {
+    const params = this.buildAuthParams();
+    params["symbol"] = symbol;
+    params["orderId"] = orderId;
+    params["sign"] = this.sign(params);
+
+    const response = await this.client.post(
+      "/api/v1/private/order/cancel",
+      null,
+      { params },
+    );
+
+    return response.data.success === true;
+  }
+
+  async getAlgoOrders(symbol?: string): Promise<AlgoOrderInfo[]> {
+    const params = this.buildAuthParams();
+    if (symbol) params["symbol"] = symbol;
+    params["sign"] = this.sign(params);
+
+    const response = await this.client.get("/api/v1/private/plan/order/list", {
+      params,
+    });
+
+    const data = response.data;
+    if (data.success && data.data) {
+      return data.data.map(
+        (o: {
+          id: string;
+          symbol: string;
+          side: number;
+          type: number;
+          triggerPrice: number;
+          executePrice: number;
+          vol: number;
+          state: number;
+          cTime?: number;
+          [key: string]: unknown;
+        }) => ({
+          orderId: String(o.id),
+          symbol: o.symbol,
+          side: o.side === 1 ? ("BUY" as const) : ("SELL" as const),
+          type: o.type === 1 ? "sl" : "tp",
+          triggerPrice: o.triggerPrice,
+          executePrice: o.executePrice,
+          quantity: o.vol,
+          status: String(o.state),
+          createdAt: o.cTime,
+          raw: o,
+        }),
+      );
+    }
+    return [];
+  }
+
+  async cancelAlgoOrders(
+    symbol: string,
+  ): Promise<{ cancelled: string[]; errors: string[] }> {
+    const cancelled: string[] = [];
+    const errors: string[] = [];
+
+    const algoOrders = await this.getAlgoOrders(symbol);
+
+    for (const order of algoOrders) {
+      const params = this.buildAuthParams();
+      params["symbol"] = symbol;
+      params["orderId"] = order.orderId;
+      params["sign"] = this.sign(params);
+
+      try {
+        const response = await this.client.post(
+          "/api/v1/private/plan/order/cancel",
+          null,
+          { params },
+        );
+
+        if (response.data.success) {
+          cancelled.push(order.orderId);
+        } else {
+          errors.push(
+            `${order.orderId}: ${response.data.message || "Unknown error"}`,
+          );
+        }
+      } catch (error) {
+        errors.push(
+          `${order.orderId}: ${error instanceof Error ? error.message : "Unknown error"}`,
+        );
+      }
+    }
+
+    return { cancelled, errors };
+  }
+
+  async getOrderHistory(
+    symbol?: string,
+    limit: number = 20,
+  ): Promise<HistoricalOrder[]> {
+    const params = this.buildAuthParams();
+    if (symbol) params["symbol"] = symbol;
+    params["limit"] = limit;
+    params["sign"] = this.sign(params);
+
+    const response = await this.client.get(
+      "/api/v1/private/order/list/history_orders",
+      { params },
+    );
+
+    const data = response.data;
+    if (data.success && data.data) {
+      return data.data.map(
+        (o: {
+          id: string;
+          symbol: string;
+          side: number;
+          type: number;
+          price: number;
+          vol: number;
+          dealVol: number;
+          fee: number;
+          profit: number;
+          state: number;
+          cTime: number;
+          uTime?: number;
+          [key: string]: unknown;
+        }) => ({
+          orderId: String(o.id),
+          symbol: o.symbol,
+          side: o.side === 1 ? ("BUY" as const) : ("SELL" as const),
+          type: String(o.type),
+          price: o.price,
+          quantity: o.vol,
+          filledQuantity: o.dealVol,
+          fee: Math.abs(o.fee || 0),
+          realizedPnl: o.profit || undefined,
+          status: String(o.state),
+          createdAt: o.cTime,
+          updatedAt: o.uTime,
+          raw: o,
+        }),
+      );
+    }
+    return [];
   }
 }

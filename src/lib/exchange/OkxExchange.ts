@@ -7,6 +7,9 @@ import {
   AccountInfo,
   KlineData,
   OrderResult,
+  OpenOrderInfo,
+  AlgoOrderInfo,
+  HistoricalOrder,
 } from "./types";
 import { getProxyAgent } from "../proxy/ProxyFactory";
 
@@ -1002,5 +1005,212 @@ export class OkxExchange implements ExchangeClient {
     throw new Error(
       `Failed to place OKX take profit: ${data.msg || data.data?.[0]?.sMsg || "Unknown error"}`,
     );
+  }
+
+  // ─── Order Management ───────────────────────────────────────────────
+
+  async getOpenOrders(symbol?: string): Promise<OpenOrderInfo[]> {
+    const instId = symbol ? this.toOkxSymbol(symbol) : undefined;
+    const path = instId
+      ? `/api/v5/trade/orders-pending?instType=SWAP&instId=${instId}`
+      : `/api/v5/trade/orders-pending?instType=SWAP`;
+    const headers = this.authHeaders("GET", path);
+
+    const response = await this.client.get(path, { headers });
+    const data = response.data;
+
+    if (data.code === "0" && data.data) {
+      return data.data.map(
+        (o: {
+          ordId: string;
+          instId: string;
+          side: string;
+          ordType: string;
+          px?: string;
+          sz: string;
+          accFillSz: string;
+          state: string;
+          cTime?: string;
+          [key: string]: unknown;
+        }) => ({
+          orderId: o.ordId,
+          symbol: this.fromOkxSymbol(o.instId),
+          side: o.side === "buy" ? ("BUY" as const) : ("SELL" as const),
+          type: o.ordType,
+          price: o.px ? parseFloat(o.px) : undefined,
+          quantity: parseFloat(o.sz),
+          filledQuantity: parseFloat(o.accFillSz || "0"),
+          status: o.state,
+          createdAt: o.cTime ? parseInt(o.cTime) : undefined,
+          raw: o,
+        }),
+      );
+    }
+    return [];
+  }
+
+  async cancelOrder(orderId: string, symbol: string): Promise<boolean> {
+    const instId = this.toOkxSymbol(symbol);
+    const body = JSON.stringify([{ instId, ordId: orderId }]);
+    const path = "/api/v5/trade/cancel-batch-orders";
+    const headers = this.authHeaders("POST", path, body);
+
+    console.log(`[OKX] 🗑️ Cancelling order ${orderId} for ${instId}...`);
+
+    const response = await this.client.post(path, body, { headers });
+    const data = response.data;
+
+    if (data.code === "0" && data.data?.[0]?.sCode === "0") {
+      console.log(`[OKX] ✅ Order cancelled: ${orderId}`);
+      return true;
+    }
+    console.warn(
+      `[OKX] ⚠️ Failed to cancel order: ${data.msg || data.data?.[0]?.sMsg}`,
+    );
+    return false;
+  }
+
+  async getAlgoOrders(symbol?: string): Promise<AlgoOrderInfo[]> {
+    const instId = symbol ? this.toOkxSymbol(symbol) : undefined;
+    // Get conditional orders (TP/SL)
+    const path = instId
+      ? `/api/v5/trade/orders-algo-pending?ordType=conditional&instType=SWAP&instId=${instId}`
+      : `/api/v5/trade/orders-algo-pending?ordType=conditional&instType=SWAP`;
+    const headers = this.authHeaders("GET", path);
+
+    const response = await this.client.get(path, { headers });
+    const data = response.data;
+
+    if (data.code === "0" && data.data) {
+      return data.data.map(
+        (o: {
+          algoId: string;
+          instId: string;
+          side: string;
+          ordType: string;
+          slTriggerPx?: string;
+          slOrdPx?: string;
+          tpTriggerPx?: string;
+          tpOrdPx?: string;
+          sz: string;
+          state: string;
+          cTime?: string;
+          [key: string]: unknown;
+        }) => ({
+          orderId: o.algoId,
+          symbol: this.fromOkxSymbol(o.instId),
+          side: o.side === "buy" ? ("BUY" as const) : ("SELL" as const),
+          type: o.tpTriggerPx ? "tp" : "sl",
+          triggerPrice: parseFloat(o.tpTriggerPx || o.slTriggerPx || "0"),
+          executePrice: parseFloat(o.tpOrdPx || o.slOrdPx || "0") || undefined,
+          quantity: parseFloat(o.sz),
+          status: o.state,
+          createdAt: o.cTime ? parseInt(o.cTime) : undefined,
+          raw: o,
+        }),
+      );
+    }
+    return [];
+  }
+
+  async cancelAlgoOrders(
+    symbol: string,
+  ): Promise<{ cancelled: string[]; errors: string[] }> {
+    const instId = this.toOkxSymbol(symbol);
+    const cancelled: string[] = [];
+    const errors: string[] = [];
+
+    // First get all algo orders for this symbol
+    const algoOrders = await this.getAlgoOrders(symbol);
+
+    if (algoOrders.length === 0) {
+      return { cancelled, errors };
+    }
+
+    // Cancel them in batch
+    const orderIds = algoOrders.map((o) => ({
+      instId,
+      algoId: o.orderId,
+    }));
+
+    const body = JSON.stringify(orderIds);
+    const path = "/api/v5/trade/cancel-algos";
+    const headers = this.authHeaders("POST", path, body);
+
+    console.log(
+      `[OKX] 🗑️ Cancelling ${algoOrders.length} algo orders for ${instId}...`,
+    );
+
+    try {
+      const response = await this.client.post(path, body, { headers });
+      const data = response.data;
+
+      if (data.code === "0" && data.data) {
+        for (const result of data.data) {
+          if (result.sCode === "0") {
+            cancelled.push(result.algoId);
+          } else {
+            errors.push(`${result.algoId}: ${result.sMsg}`);
+          }
+        }
+      } else {
+        errors.push(`Batch cancel failed: ${data.msg || "Unknown error"}`);
+      }
+    } catch (error) {
+      errors.push(
+        `Failed to cancel algo orders: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
+    }
+
+    return { cancelled, errors };
+  }
+
+  async getOrderHistory(
+    symbol?: string,
+    limit: number = 20,
+  ): Promise<HistoricalOrder[]> {
+    const instId = symbol ? this.toOkxSymbol(symbol) : undefined;
+    const path = instId
+      ? `/api/v5/trade/orders-history-archive?instType=SWAP&instId=${instId}&limit=${limit}`
+      : `/api/v5/trade/orders-history-archive?instType=SWAP&limit=${limit}`;
+    const headers = this.authHeaders("GET", path);
+
+    const response = await this.client.get(path, { headers });
+    const data = response.data;
+
+    if (data.code === "0" && data.data) {
+      return data.data.map(
+        (o: {
+          ordId: string;
+          instId: string;
+          side: string;
+          ordType: string;
+          px: string;
+          sz: string;
+          accFillSz: string;
+          fee?: string;
+          pnl?: string;
+          state: string;
+          cTime: string;
+          uTime?: string;
+          [key: string]: unknown;
+        }) => ({
+          orderId: o.ordId,
+          symbol: this.fromOkxSymbol(o.instId),
+          side: o.side === "buy" ? ("BUY" as const) : ("SELL" as const),
+          type: o.ordType,
+          price: parseFloat(o.px || "0"),
+          quantity: parseFloat(o.sz),
+          filledQuantity: parseFloat(o.accFillSz || "0"),
+          fee: Math.abs(parseFloat(o.fee || "0")),
+          realizedPnl: o.pnl ? parseFloat(o.pnl) : undefined,
+          status: o.state,
+          createdAt: parseInt(o.cTime),
+          updatedAt: o.uTime ? parseInt(o.uTime) : undefined,
+          raw: o,
+        }),
+      );
+    }
+    return [];
   }
 }

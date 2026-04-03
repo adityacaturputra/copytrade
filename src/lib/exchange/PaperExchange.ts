@@ -14,6 +14,9 @@ import {
   PositionInfo,
   AccountInfo,
   KlineData,
+  OpenOrderInfo,
+  AlgoOrderInfo,
+  HistoricalOrder,
 } from "./types";
 
 interface SimPosition {
@@ -299,6 +302,58 @@ export class PaperExchange implements ExchangeClient {
       `📊 [PAPER] TP set for ${symbol} @ $${triggerPrice.toFixed(2)}`,
     );
     return `paper_tp_${Date.now()}`;
+  }
+
+  // ─── Order Management ──────────────────────────────────────
+
+  private openOrders: OpenOrderInfo[] = [];
+  private algoOrders: AlgoOrderInfo[] = [];
+  private orderHistory: HistoricalOrder[] = [];
+
+  async getOpenOrders(symbol?: string): Promise<OpenOrderInfo[]> {
+    if (symbol) {
+      return this.openOrders.filter((o) => o.symbol === symbol);
+    }
+    return this.openOrders;
+  }
+
+  async cancelOrder(orderId: string, _symbol: string): Promise<boolean> {
+    const idx = this.openOrders.findIndex((o) => o.orderId === orderId);
+    if (idx >= 0) {
+      this.openOrders.splice(idx, 1);
+      console.log(`📊 [PAPER] Cancelled order ${orderId}`);
+      return true;
+    }
+    return false;
+  }
+
+  async getAlgoOrders(symbol?: string): Promise<AlgoOrderInfo[]> {
+    if (symbol) {
+      return this.algoOrders.filter((o) => o.symbol === symbol);
+    }
+    return this.algoOrders;
+  }
+
+  async cancelAlgoOrders(
+    symbol: string,
+  ): Promise<{ cancelled: string[]; errors: string[] }> {
+    const toCancel = this.algoOrders.filter((o) => o.symbol === symbol);
+    const cancelled = toCancel.map((o) => o.orderId);
+    this.algoOrders = this.algoOrders.filter((o) => o.symbol !== symbol);
+    console.log(
+      `📊 [PAPER] Cancelled ${cancelled.length} algo orders for ${symbol}`,
+    );
+    return { cancelled, errors: [] };
+  }
+
+  async getOrderHistory(
+    symbol?: string,
+    _limit?: number,
+  ): Promise<HistoricalOrder[]> {
+    if (symbol) {
+      return this.orderHistory.filter((o) => o.symbol === symbol);
+    }
+    return this.orderHistory;
   }
 
   // ─── Helpers ──────────────────────────────────────────────

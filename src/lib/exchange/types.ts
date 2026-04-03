@@ -57,6 +57,51 @@ export interface OrderResult {
   raw?: unknown;
 }
 
+/** Open/pending order info */
+export interface OpenOrderInfo {
+  orderId: string;
+  symbol: string;
+  side: "BUY" | "SELL";
+  type: string; // "limit", "market", "conditional", etc.
+  price?: number;
+  quantity: number;
+  filledQuantity: number;
+  status: string;
+  createdAt?: number;
+  raw?: unknown;
+}
+
+/** Algo order info (TP/SL) */
+export interface AlgoOrderInfo {
+  orderId: string;
+  symbol: string;
+  side: "BUY" | "SELL";
+  type: string; // "tp", "sl", "conditional"
+  triggerPrice: number;
+  executePrice?: number;
+  quantity: number;
+  status: string;
+  createdAt?: number;
+  raw?: unknown;
+}
+
+/** Historical order (filled/cancelled) */
+export interface HistoricalOrder {
+  orderId: string;
+  symbol: string;
+  side: "BUY" | "SELL";
+  type: string;
+  price: number;
+  quantity: number;
+  filledQuantity: number;
+  fee: number;
+  realizedPnl?: number;
+  status: string;
+  createdAt: number;
+  updatedAt?: number;
+  raw?: unknown;
+}
+
 /**
  * ExchangeClient — the common interface every exchange adapter must implement.
  *
@@ -118,4 +163,18 @@ export interface ExchangeClient {
     side: "BUY" | "SELL",
     quantity: number,
   ): Promise<string>;
+
+  // ─── Order Management ───────────────────────────────────────────────
+  /** Get all open/pending orders on the exchange */
+  getOpenOrders(symbol?: string): Promise<OpenOrderInfo[]>;
+  /** Cancel a specific order by orderId */
+  cancelOrder(orderId: string, symbol: string): Promise<boolean>;
+  /** Get algo orders (TP/SL) for a symbol */
+  getAlgoOrders(symbol?: string): Promise<AlgoOrderInfo[]>;
+  /** Cancel all algo orders (TP/SL) for a symbol */
+  cancelAlgoOrders(
+    symbol: string,
+  ): Promise<{ cancelled: string[]; errors: string[] }>;
+  /** Get recent order history (filled/cancelled) */
+  getOrderHistory(symbol?: string, limit?: number): Promise<HistoricalOrder[]>;
 }
