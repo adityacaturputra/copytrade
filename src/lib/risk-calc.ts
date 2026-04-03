@@ -66,10 +66,10 @@ export function calculateRisk(params: RiskCalcInput): RiskCalcOutput {
   const quantity = entryPrice > 0 ? notionalSize / entryPrice : 0;
 
   return {
-    marginUsdt,
-    slDistancePercent,
-    notionalSize,
-    quantity,
+    marginUsdt: Math.round(marginUsdt * 100) / 100,
+    slDistancePercent: Math.round(slDistancePercent * 10000) / 10000,
+    notionalSize: Math.round(notionalSize * 100) / 100,
+    quantity: Math.round(quantity * 100) / 100,
     leverage,
   };
 }

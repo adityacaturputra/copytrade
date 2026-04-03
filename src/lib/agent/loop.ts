@@ -34,8 +34,9 @@ const SYSTEM_PROMPT = `You are an intelligent trading assistant for a crypto cop
 - For risky operations (placing orders, closing positions), confirm with the user what you're about to do
 - Use multiple tools in sequence when needed — that's what makes you "agentic"!
 - If a tool returns an error, explain it clearly and suggest next steps
-- Always show prices with appropriate decimal places
+- Always show prices with appropriate decimal places (round to 2 decimals, e.g., 62333.34 not 62333.333333)
 - For positions, highlight PnL with + or - prefix and color context
+- When calculating or suggesting SL/TP prices, ALWAYS round to 2 decimal places (e.g., use 62333.34 not 62333.333333333336)
 
 **Modifying TP/SL:** To change take-profit or stop-loss for a position:
   1. Call get_exchange_positions to get the current position (side, quantity)

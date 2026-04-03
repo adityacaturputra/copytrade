@@ -31,6 +31,11 @@ import { ExchangeFactory } from "@/lib/exchange/ExchangeFactory";
 import { calculateRisk } from "@/lib/risk-calc";
 import { getRiskConfig } from "@/lib/risk";
 
+/** Round a number to 2 decimal places (e.g., 62333.333333 → 62333.34) */
+function roundPrice(price: number): number {
+  return Math.round(price * 100) / 100;
+}
+
 // ==================== Tool Definitions ====================
 
 export const agentTools: OpenAI.ChatCompletionTool[] = [
@@ -836,7 +841,7 @@ export const toolImplementations: Record<string, ToolExecutor> = {
       side,
       type,
       quantity,
-      price,
+      price: price ? roundPrice(price) : undefined,
       leverage,
     });
     return JSON.stringify(result);
@@ -881,14 +886,21 @@ export const toolImplementations: Record<string, ToolExecutor> = {
       quantity: number;
     };
     const exchange = ExchangeFactory.getClient();
+    const roundedTrigger = roundPrice(triggerPrice);
+    const roundedExecute = roundPrice(executePrice);
     const id = await exchange.placeStopLoss(
       symbol,
-      triggerPrice,
-      executePrice,
+      roundedTrigger,
+      roundedExecute,
       side,
       quantity,
     );
-    return JSON.stringify({ success: true, orderId: id });
+    return JSON.stringify({
+      success: true,
+      orderId: id,
+      triggerPrice: roundedTrigger,
+      executePrice: roundedExecute,
+    });
   },
 
   set_take_profit: async (args) => {
@@ -900,14 +912,21 @@ export const toolImplementations: Record<string, ToolExecutor> = {
       quantity: number;
     };
     const exchange = ExchangeFactory.getClient();
+    const roundedTrigger = roundPrice(triggerPrice);
+    const roundedExecute = roundPrice(executePrice);
     const id = await exchange.placeTakeProfit(
       symbol,
-      triggerPrice,
-      executePrice,
+      roundedTrigger,
+      roundedExecute,
       side,
       quantity,
     );
-    return JSON.stringify({ success: true, orderId: id });
+    return JSON.stringify({
+      success: true,
+      orderId: id,
+      triggerPrice: roundedTrigger,
+      executePrice: roundedExecute,
+    });
   },
 
   get_klines: async (args) => {
@@ -1005,6 +1024,8 @@ export const toolImplementations: Record<string, ToolExecutor> = {
         quantity: number;
       };
     const exchange = ExchangeFactory.getClient();
+    const roundedTrigger = roundPrice(newTriggerPrice);
+    const roundedExecute = roundPrice(newExecutePrice);
 
     // Step 1: Cancel existing algo orders for this symbol
     console.log(
@@ -1013,11 +1034,11 @@ export const toolImplementations: Record<string, ToolExecutor> = {
     await exchange.cancelAlgoOrders(symbol);
 
     // Step 2: Place new SL order
-    console.log(`[Agent] Placing new SL for ${symbol} @ ${newTriggerPrice}...`);
+    console.log(`[Agent] Placing new SL for ${symbol} @ ${roundedTrigger}...`);
     const orderId = await exchange.placeStopLoss(
       symbol,
-      newTriggerPrice,
-      newExecutePrice,
+      roundedTrigger,
+      roundedExecute,
       side,
       quantity,
     );
@@ -1025,8 +1046,8 @@ export const toolImplementations: Record<string, ToolExecutor> = {
     return JSON.stringify({
       success: true,
       symbol,
-      newTriggerPrice,
-      newExecutePrice,
+      newTriggerPrice: roundedTrigger,
+      newExecutePrice: roundedExecute,
       orderId,
     });
   },
@@ -1041,6 +1062,8 @@ export const toolImplementations: Record<string, ToolExecutor> = {
         quantity: number;
       };
     const exchange = ExchangeFactory.getClient();
+    const roundedTrigger = roundPrice(newTriggerPrice);
+    const roundedExecute = roundPrice(newExecutePrice);
 
     // Step 1: Cancel existing algo orders for this symbol
     console.log(
@@ -1049,11 +1072,11 @@ export const toolImplementations: Record<string, ToolExecutor> = {
     await exchange.cancelAlgoOrders(symbol);
 
     // Step 2: Place new TP order
-    console.log(`[Agent] Placing new TP for ${symbol} @ ${newTriggerPrice}...`);
+    console.log(`[Agent] Placing new TP for ${symbol} @ ${roundedTrigger}...`);
     const orderId = await exchange.placeTakeProfit(
       symbol,
-      newTriggerPrice,
-      newExecutePrice,
+      roundedTrigger,
+      roundedExecute,
       side,
       quantity,
     );
@@ -1061,8 +1084,8 @@ export const toolImplementations: Record<string, ToolExecutor> = {
     return JSON.stringify({
       success: true,
       symbol,
-      newTriggerPrice,
-      newExecutePrice,
+      newTriggerPrice: roundedTrigger,
+      newExecutePrice: roundedExecute,
       orderId,
     });
   },
@@ -1354,8 +1377,8 @@ export const toolImplementations: Record<string, ToolExecutor> = {
 
     return JSON.stringify({
       side,
-      entryPrice,
-      stopLossPrice,
+      entryPrice: roundPrice(entryPrice),
+      stopLossPrice: roundPrice(stopLossPrice),
       ...result,
       accountBalance: account.availableBalance || account.totalBalance,
     });
