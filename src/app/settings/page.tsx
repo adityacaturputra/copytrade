@@ -1282,60 +1282,68 @@ export default function SettingsPage() {
             </label>
           </div>
 
-          {/* Default Position Size & Default Leverage */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-            <div>
-              <label className="block text-sm text-slate-400 mb-1">
-                Default Position Size (USDT)
-              </label>
-              <div className="relative">
-                <input
-                  type="number"
-                  step="1"
-                  min="1"
-                  max="1000000"
-                  value={riskConfig.defaultPositionSize}
-                  onChange={(e) =>
-                    setRiskConfigState({
-                      ...riskConfig,
-                      defaultPositionSize: parseFloat(e.target.value) || 50,
-                    })
-                  }
-                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-amber-500 focus:outline-none pr-12"
-                />
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm">
-                  USDT
-                </span>
+          {/* Fallback Position Size & Leverage (only used when risk calc can't apply) */}
+          <div className="bg-slate-800/30 border border-slate-700/50 rounded-lg p-3 mb-4">
+            <p className="text-xs text-slate-500 mb-3">
+              💡 <strong className="text-slate-400">Fallback values</strong> —
+              only used when risk-based sizing can't apply (e.g., no entry
+              price, can't fetch balance). Primary sizing uses margin % + SL
+              distance above.
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm text-slate-400 mb-1">
+                  Fallback Position Size (USDT)
+                </label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    step="1"
+                    min="1"
+                    max="1000000"
+                    value={riskConfig.defaultPositionSize}
+                    onChange={(e) =>
+                      setRiskConfigState({
+                        ...riskConfig,
+                        defaultPositionSize: parseFloat(e.target.value) || 50,
+                      })
+                    }
+                    className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-amber-500 focus:outline-none pr-12"
+                  />
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm">
+                    USDT
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 mt-1">
+                  When risk calc can't apply. Default: 50
+                </p>
               </div>
-              <p className="text-xs text-slate-500 mt-1">
-                Fallback position size when signal has no size. Default: 50
-              </p>
-            </div>
-            <div>
-              <label className="block text-sm text-slate-400 mb-1">
-                Default Leverage
-              </label>
-              <div className="relative">
-                <input
-                  type="number"
-                  min="1"
-                  max="125"
-                  value={riskConfig.defaultLeverage}
-                  onChange={(e) =>
-                    setRiskConfigState({
-                      ...riskConfig,
-                      defaultLeverage: parseInt(e.target.value) || 10,
-                    })
-                  }
-                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-amber-500 focus:outline-none pr-8"
-                />
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm">
-                  x
-                </span>
+              <div>
+                <label className="block text-sm text-slate-400 mb-1">
+                  Fallback Leverage
+                </label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    min="1"
+                    max="125"
+                    value={riskConfig.defaultLeverage}
+                    onChange={(e) =>
+                      setRiskConfigState({
+                        ...riskConfig,
+                        defaultLeverage: parseInt(e.target.value) || 10,
+                      })
+                    }
+                    className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-amber-500 focus:outline-none pr-8"
+                  />
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm">
+                    x
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 mt-1">
+                  When risk calc can't apply. Default: 10x
+                </p>
               </div>
-              <p className="text-xs text-slate-500 mt-1">
-                Fallback leverage when signal has no leverage. Default: 10x
-              </p>
             </div>
           </div>
 
