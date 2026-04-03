@@ -10,6 +10,9 @@ export interface RiskConfig {
   minLeverage: number; // e.g., 1
   skipNoSL: boolean; // skip trades without stop loss
   defaultRR: number; // default 3 — auto-calculate TP from RR when no TP provided
+  defaultPositionSize: number; // default 50 — fallback position size (USDT) when signal has no size
+  defaultLeverage: number; // default 10 — fallback leverage when signal has no leverage
+  maxPositions: number; // default 5 — max concurrent open positions (0 = unlimited)
 }
 
 export interface RiskCalculation {
@@ -39,6 +42,9 @@ const DEFAULT_RISK_CONFIG: RiskConfig = {
   minLeverage: 1,
   skipNoSL: true,
   defaultRR: 3,
+  defaultPositionSize: 50,
+  defaultLeverage: 10,
+  maxPositions: 5,
 };
 
 // ─── DB Helpers ───────────────────────────────────────────────────────────────
@@ -56,6 +62,9 @@ export async function getRiskConfig(): Promise<RiskConfig> {
         minLeverage: settings.minLeverage,
         skipNoSL: settings.skipNoSL ?? true,
         defaultRR: settings.defaultRR ?? 3,
+        defaultPositionSize: settings.defaultPositionSize ?? 50,
+        defaultLeverage: settings.defaultLeverage ?? 10,
+        maxPositions: settings.maxPositions ?? 5,
       };
     }
   } catch (err) {
@@ -87,6 +96,15 @@ export async function setRiskConfig(
   if (config.defaultRR !== undefined) {
     update.defaultRR = config.defaultRR;
   }
+  if (config.defaultPositionSize !== undefined) {
+    update.defaultPositionSize = config.defaultPositionSize;
+  }
+  if (config.defaultLeverage !== undefined) {
+    update.defaultLeverage = config.defaultLeverage;
+  }
+  if (config.maxPositions !== undefined) {
+    update.maxPositions = config.maxPositions;
+  }
   const doc = await RiskSettingsModel.findOneAndUpdate({}, update, {
     upsert: true,
     new: true,
@@ -97,6 +115,9 @@ export async function setRiskConfig(
     minLeverage: doc.minLeverage,
     skipNoSL: doc.skipNoSL ?? true,
     defaultRR: doc.defaultRR ?? 3,
+    defaultPositionSize: doc.defaultPositionSize ?? 50,
+    defaultLeverage: doc.defaultLeverage ?? 10,
+    maxPositions: doc.maxPositions ?? 5,
   };
 }
 

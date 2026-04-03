@@ -476,15 +476,13 @@ async function createDraft(
     timestamp?: Date;
   },
 ): Promise<void> {
+  const riskCfg = await getRiskConfig();
   const side = signal.action === "SELL" ? "SHORT" : "LONG";
-  const quantity =
-    signal.positionSize ||
-    parseFloat(process.env.DEFAULT_POSITION_SIZE || "50");
+  const quantity = signal.positionSize || riskCfg.defaultPositionSize;
 
   // Auto-calculate TP from RR if no TP targets but we have entry + SL + RR
   let tpTargets = signal.takeProfitTargets || [];
   if (tpTargets.length === 0 && signal.entryPrice && signal.stopLoss) {
-    const riskCfg = await getRiskConfig();
     const rr =
       signal.defaultRR && signal.defaultRR > 0
         ? signal.defaultRR
@@ -516,9 +514,7 @@ async function createDraft(
     entryPrice: signal.entryPrice || null,
     takeProfitTargets: tpTargets,
     stopLoss: signal.stopLoss || null,
-    leverage:
-      sanitizeLeverage(signal.leverage) ||
-      parseInt(process.env.DEFAULT_LEVERAGE || "10"),
+    leverage: sanitizeLeverage(signal.leverage) || riskCfg.defaultLeverage,
     quantity,
     confidence: signal.confidence || 0,
     reasoning: signal.reasoning || "",
@@ -537,16 +533,33 @@ export async function executeSignal(
   channelId?: string,
   sourceName?: string,
 ): Promise<IPosition | null> {
+  const riskCfg = await getRiskConfig();
   const side = signal.action === "SELL" ? "SHORT" : "LONG";
-  const leverage = sanitizeLeverage(signal.leverage) || 10;
-  const quantity =
-    signal.positionSize ||
-    parseFloat(process.env.DEFAULT_POSITION_SIZE || "50");
+  const leverage = sanitizeLeverage(signal.leverage) || riskCfg.defaultLeverage;
+  const quantity = signal.positionSize || riskCfg.defaultPositionSize;
   const entryPrice = signal.entryPrice;
 
   switch (signal.action) {
     case "BUY":
     case "SELL": {
+      // ─── Max positions check ─────────────────────────────────────────
+      if (riskCfg.maxPositions > 0) {
+        const openCount = await Position.countDocuments({ status: "open" });
+        if (openCount >= riskCfg.maxPositions) {
+          console.warn(
+            `🚫 Max positions reached (${openCount}/${riskCfg.maxPositions}) — skipping ${signal.action} ${signal.symbol}`,
+          );
+          await TradeLog.create({
+            type: "signal",
+            action: "skipped_max_positions",
+            symbol: signal.symbol,
+            details: `Trade skipped: ${openCount} open positions, max is ${riskCfg.maxPositions}`,
+            result: "skipped",
+          });
+          return null;
+        }
+      }
+
       // Check for duplicate open positions on same symbol+side+channel
       const existingPos = await Position.findOne({
         symbol: signal.symbol,

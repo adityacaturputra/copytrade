@@ -130,6 +130,9 @@ export interface IRiskSettings extends Document {
   minLeverage: number; // default 1
   skipNoSL: boolean; // default true — skip trades without SL
   defaultRR: number; // default 3 — auto-calculate TP from RR when no TP provided
+  defaultPositionSize: number; // default 50 (USDT) — fallback position size when signal has no size
+  defaultLeverage: number; // default 10 — fallback leverage when signal has no leverage
+  maxPositions: number; // default 5 — max concurrent open positions (0 = unlimited)
   updatedAt: Date;
 }
 
@@ -292,6 +295,9 @@ const RiskSettingsSchema = new Schema<IRiskSettings>(
     minLeverage: { type: Number, default: 1, min: 1, max: 125 },
     skipNoSL: { type: Boolean, default: true },
     defaultRR: { type: Number, default: 3, min: 1, max: 20 },
+    defaultPositionSize: { type: Number, default: 50, min: 1 },
+    defaultLeverage: { type: Number, default: 10, min: 1, max: 125 },
+    maxPositions: { type: Number, default: 5, min: 0 },
   },
   { timestamps: { createdAt: false, updatedAt: true } },
 );

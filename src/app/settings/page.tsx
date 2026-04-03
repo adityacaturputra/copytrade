@@ -48,6 +48,9 @@ interface RiskConfig {
   minLeverage: number;
   skipNoSL: boolean;
   defaultRR: number;
+  defaultPositionSize: number;
+  defaultLeverage: number;
+  maxPositions: number;
 }
 
 const defaultRiskConfig: RiskConfig = {
@@ -56,6 +59,9 @@ const defaultRiskConfig: RiskConfig = {
   minLeverage: 1,
   skipNoSL: true,
   defaultRR: 3,
+  defaultPositionSize: 50,
+  defaultLeverage: 10,
+  maxPositions: 5,
 };
 
 interface SignalConfigType {
@@ -1274,6 +1280,89 @@ export default function SettingsPage() {
                 rejected (auto mode) or shown with a warning (manual mode).
               </span>
             </label>
+          </div>
+
+          {/* Default Position Size & Default Leverage */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="block text-sm text-slate-400 mb-1">
+                Default Position Size (USDT)
+              </label>
+              <div className="relative">
+                <input
+                  type="number"
+                  step="1"
+                  min="1"
+                  max="1000000"
+                  value={riskConfig.defaultPositionSize}
+                  onChange={(e) =>
+                    setRiskConfigState({
+                      ...riskConfig,
+                      defaultPositionSize: parseFloat(e.target.value) || 50,
+                    })
+                  }
+                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-amber-500 focus:outline-none pr-12"
+                />
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm">
+                  USDT
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-1">
+                Fallback position size when signal has no size. Default: 50
+              </p>
+            </div>
+            <div>
+              <label className="block text-sm text-slate-400 mb-1">
+                Default Leverage
+              </label>
+              <div className="relative">
+                <input
+                  type="number"
+                  min="1"
+                  max="125"
+                  value={riskConfig.defaultLeverage}
+                  onChange={(e) =>
+                    setRiskConfigState({
+                      ...riskConfig,
+                      defaultLeverage: parseInt(e.target.value) || 10,
+                    })
+                  }
+                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-amber-500 focus:outline-none pr-8"
+                />
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm">
+                  x
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-1">
+                Fallback leverage when signal has no leverage. Default: 10x
+              </p>
+            </div>
+          </div>
+
+          {/* Max Positions */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="block text-sm text-slate-400 mb-1">
+                Max Concurrent Positions
+              </label>
+              <input
+                type="number"
+                min="0"
+                max="100"
+                value={riskConfig.maxPositions}
+                onChange={(e) =>
+                  setRiskConfigState({
+                    ...riskConfig,
+                    maxPositions: parseInt(e.target.value) || 0,
+                  })
+                }
+                className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-amber-500 focus:outline-none"
+              />
+              <p className="text-xs text-slate-500 mt-1">
+                Max open positions at once. Set to <strong>0</strong> for
+                unlimited. Default: 5
+              </p>
+            </div>
           </div>
 
           {/* Example calculation */}

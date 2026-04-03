@@ -96,10 +96,44 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      const { defaultRR } = body.risk;
+      const { defaultRR, defaultPositionSize, defaultLeverage, maxPositions } =
+        body.risk;
       if (defaultRR !== undefined && (defaultRR < 1 || defaultRR > 20)) {
         return NextResponse.json(
           { success: false, error: "Default RR must be between 1 and 20" },
+          { status: 400 },
+        );
+      }
+      if (
+        defaultPositionSize !== undefined &&
+        (defaultPositionSize < 1 || defaultPositionSize > 1000000)
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Default position size must be between 1 and 1,000,000",
+          },
+          { status: 400 },
+        );
+      }
+      if (
+        defaultLeverage !== undefined &&
+        (defaultLeverage < 1 || defaultLeverage > 125)
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Default leverage must be between 1 and 125",
+          },
+          { status: 400 },
+        );
+      }
+      if (
+        maxPositions !== undefined &&
+        (maxPositions < 0 || maxPositions > 100)
+      ) {
+        return NextResponse.json(
+          { success: false, error: "Max positions must be between 0 and 100" },
           { status: 400 },
         );
       }
@@ -111,6 +145,9 @@ export async function POST(request: NextRequest) {
         ...(minLeverage !== undefined && { minLeverage }),
         ...(skipNoSL !== undefined && { skipNoSL }),
         ...(defaultRR !== undefined && { defaultRR }),
+        ...(defaultPositionSize !== undefined && { defaultPositionSize }),
+        ...(defaultLeverage !== undefined && { defaultLeverage }),
+        ...(maxPositions !== undefined && { maxPositions }),
       });
     }
 
