@@ -694,10 +694,10 @@ export class OkxExchange implements ExchangeClient {
         const price =
           orderParams.price || (await this.getTickerPrice(orderParams.symbol));
         console.log(
-          `[OKX] ✅ Order placed: orderId=${result.orderId}, price=${price}`,
+          `[OKX] ✅ Order placed: orderId=${result.ordId}, price=${price}`,
         );
         return {
-          orderId: result.orderId,
+          orderId: result.ordId,
           price,
           quantity: roundedQty,
           status: "submitted",
@@ -772,10 +772,10 @@ export class OkxExchange implements ExchangeClient {
         const price =
           orderParams.price || (await this.getTickerPrice(orderParams.symbol));
         console.log(
-          `[OKX] ✅ Order succeeded after auto-fix: orderId=${retryResult.orderId}`,
+          `[OKX] ✅ Order succeeded after auto-fix: orderId=${retryResult.ordId}`,
         );
         return {
-          orderId: retryResult.orderId,
+          orderId: retryResult.ordId,
           price,
           quantity: orderParams.quantity,
           status: "submitted",
