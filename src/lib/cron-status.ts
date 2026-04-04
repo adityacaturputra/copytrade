@@ -47,6 +47,7 @@ export function getAllCronStatus(): Record<string, CronRunStatus> {
   return {
     "signal-check": getCronStatus("signal-check"),
     "position-monitor": getCronStatus("position-monitor"),
+    "tp-sl-monitor": getCronStatus("tp-sl-monitor"),
   };
 }
 

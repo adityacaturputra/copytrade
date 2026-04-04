@@ -60,6 +60,7 @@ export interface IPosition extends Document {
   orderId?: string;
   pnl: number;
   status: "pending" | "open" | "closed";
+  tpSlPlaced?: boolean;
   channelId?: string;
   sourceName?: string;
   messageId?: string;
@@ -206,6 +207,7 @@ const PositionSchema = new Schema<IPosition>(
       enum: ["pending", "open", "closed"],
       default: "open",
     },
+    tpSlPlaced: { type: Boolean, default: false },
     channelId: { type: String, default: null },
     sourceName: { type: String, default: null },
     messageId: { type: String, default: null },

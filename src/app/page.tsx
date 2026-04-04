@@ -204,7 +204,26 @@ export default function Dashboard() {
     };
   }, [fetchData, fetchCronStatus]);
 
-  const triggerCron = async (type: "signal-check" | "position-monitor") => {
+  const [showCronMenu, setShowCronMenu] = useState(false);
+  const cronMenuRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        cronMenuRef.current &&
+        !cronMenuRef.current.contains(e.target as Node)
+      ) {
+        setShowCronMenu(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const triggerCron = async (
+    type: "signal-check" | "position-monitor" | "tp-sl-monitor",
+  ) => {
     setTriggeringCron(type);
     try {
       const res = await fetch(`/api/cron/${type}`, { method: "POST" });
@@ -384,30 +403,92 @@ export default function Dashboard() {
                 </span>
               </div>
 
-              <button
-                onClick={() => triggerCron("signal-check")}
-                disabled={triggeringCron === "signal-check"}
-                className="bg-primary-600 hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2"
-              >
-                {triggeringCron === "signal-check" ? (
-                  <div className="spinner w-4 h-4 border-2" />
-                ) : (
-                  "🔍"
+              {/* Cron Actions Dropdown */}
+              <div className="relative" ref={cronMenuRef}>
+                <button
+                  onClick={() => setShowCronMenu(!showCronMenu)}
+                  className="bg-primary-600 hover:bg-primary-700 px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2"
+                >
+                  ⚡ Actions
+                  <svg
+                    className="w-3 h-3"
+                    fill="currentColor"
+                    viewBox="0 0 20 20"
+                  >
+                    <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
+                  </svg>
+                </button>
+                {showCronMenu && (
+                  <div className="absolute right-0 mt-2 w-56 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-20 overflow-hidden">
+                    <button
+                      onClick={() => {
+                        triggerCron("signal-check");
+                        setShowCronMenu(false);
+                      }}
+                      disabled={triggeringCron === "signal-check"}
+                      className="w-full text-left px-4 py-3 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center gap-3 text-sm"
+                    >
+                      {triggeringCron === "signal-check" ? (
+                        <div className="spinner w-4 h-4 border-2" />
+                      ) : (
+                        <span>🔍</span>
+                      )}
+                      <div>
+                        <div className="text-white font-medium">
+                          Check Signals
+                        </div>
+                        <div className="text-[10px] text-slate-400">
+                          Fetch & parse Discord signals
+                        </div>
+                      </div>
+                    </button>
+                    <button
+                      onClick={() => {
+                        triggerCron("position-monitor");
+                        setShowCronMenu(false);
+                      }}
+                      disabled={triggeringCron === "position-monitor"}
+                      className="w-full text-left px-4 py-3 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center gap-3 text-sm border-t border-slate-700/50"
+                    >
+                      {triggeringCron === "position-monitor" ? (
+                        <div className="spinner w-4 h-4 border-2" />
+                      ) : (
+                        <span>📊</span>
+                      )}
+                      <div>
+                        <div className="text-white font-medium">
+                          Position Monitor
+                        </div>
+                        <div className="text-[10px] text-slate-400">
+                          Sync PnL & detect hits
+                        </div>
+                      </div>
+                    </button>
+                    <button
+                      onClick={() => {
+                        triggerCron("tp-sl-monitor");
+                        setShowCronMenu(false);
+                      }}
+                      disabled={triggeringCron === "tp-sl-monitor"}
+                      className="w-full text-left px-4 py-3 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center gap-3 text-sm border-t border-slate-700/50"
+                    >
+                      {triggeringCron === "tp-sl-monitor" ? (
+                        <div className="spinner w-4 h-4 border-2" />
+                      ) : (
+                        <span>🎯</span>
+                      )}
+                      <div>
+                        <div className="text-white font-medium">
+                          TP/SL Monitor
+                        </div>
+                        <div className="text-[10px] text-slate-400">
+                          Place TP/SL for filled limits
+                        </div>
+                      </div>
+                    </button>
+                  </div>
                 )}
-                Check Signals
-              </button>
-              <button
-                onClick={() => triggerCron("position-monitor")}
-                disabled={triggeringCron === "position-monitor"}
-                className="bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2"
-              >
-                {triggeringCron === "position-monitor" ? (
-                  <div className="spinner w-4 h-4 border-2" />
-                ) : (
-                  "📊"
-                )}
-                Monitor
-              </button>
+              </div>
               <a
                 href="/agent"
                 className="bg-purple-700 hover:bg-purple-600 px-3 py-2 rounded-lg text-sm transition flex items-center gap-1"
@@ -1877,6 +1958,7 @@ function CronStatusPanel({
   const labels: Record<string, string> = {
     "signal-check": "🔍 Signal Check",
     "position-monitor": "📊 Position Monitor",
+    "tp-sl-monitor": "🎯 TP/SL Monitor",
   };
 
   return (

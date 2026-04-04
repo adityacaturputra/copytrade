@@ -102,7 +102,7 @@ function autoCalculateSLFromRR(
  * @param getSpecs  - Async function returning instrument specs (lotSz, qtyDecimals)
  * @returns Array of quantities, one per TP level
  */
-async function splitQuantityForTPs(
+export async function splitQuantityForTPs(
   totalQty: number,
   numLevels: number,
   getSpecs: () => Promise<{ lotSz: number; qtyDecimals: number }>,
@@ -905,49 +905,59 @@ export async function executeSignal(
 
       const sl = effectiveSL;
 
-      // Split quantity across TP levels using lot-size-aware rounding
-      const tpQuantities = await splitQuantityForTPs(
-        filledQty,
-        tpTargets.length,
-        () => exchange.getInstrumentSpecs(signal.symbol),
-      );
+      // ─── Place TP/SL only for MARKET orders ─────────────────────────
+      // For LIMIT orders, TP/SL is placed AFTER the order fills,
+      // handled by the tp-sl-monitor cron to avoid TP/SL being attached
+      // to the wrong position on the same symbol.
+      if (orderType !== "LIMIT") {
+        // Split quantity across TP levels using lot-size-aware rounding
+        const tpQuantities = await splitQuantityForTPs(
+          filledQty,
+          tpTargets.length,
+          () => exchange.getInstrumentSpecs(signal.symbol),
+        );
 
-      for (let i = 0; i < tpTargets.length; i++) {
-        const tp = tpTargets[i];
-        const tpQty = tpQuantities[i];
-        try {
-          const tpId = await exchange.placeTakeProfit(
-            signal.symbol,
-            tp,
-            tp,
-            closeSide,
-            tpQty,
-          );
-          console.log(
-            `🎯 Take Profit ${i + 1}/${tpTargets.length} set at ${tp} (qty: ${tpQty}/${filledQty}, plan order ${tpId})`,
-          );
-        } catch (tpErr) {
-          console.warn(
-            `⚠️ Failed to place TP at ${tp}: ${tpErr instanceof Error ? tpErr.message : String(tpErr)}`,
-          );
+        for (let i = 0; i < tpTargets.length; i++) {
+          const tp = tpTargets[i];
+          const tpQty = tpQuantities[i];
+          try {
+            const tpId = await exchange.placeTakeProfit(
+              signal.symbol,
+              tp,
+              tp,
+              closeSide,
+              tpQty,
+            );
+            console.log(
+              `🎯 Take Profit ${i + 1}/${tpTargets.length} set at ${tp} (qty: ${tpQty}/${filledQty}, plan order ${tpId})`,
+            );
+          } catch (tpErr) {
+            console.warn(
+              `⚠️ Failed to place TP at ${tp}: ${tpErr instanceof Error ? tpErr.message : String(tpErr)}`,
+            );
+          }
         }
-      }
 
-      if (sl) {
-        try {
-          const slId = await exchange.placeStopLoss(
-            signal.symbol,
-            sl,
-            sl,
-            closeSide,
-            filledQty,
-          );
-          console.log(`🛑 Stop Loss set at ${sl} (plan order ${slId})`);
-        } catch (slErr) {
-          console.warn(
-            `⚠️ Failed to place SL: ${slErr instanceof Error ? slErr.message : String(slErr)}`,
-          );
+        if (sl) {
+          try {
+            const slId = await exchange.placeStopLoss(
+              signal.symbol,
+              sl,
+              sl,
+              closeSide,
+              filledQty,
+            );
+            console.log(`🛑 Stop Loss set at ${sl} (plan order ${slId})`);
+          } catch (slErr) {
+            console.warn(
+              `⚠️ Failed to place SL: ${slErr instanceof Error ? slErr.message : String(slErr)}`,
+            );
+          }
         }
+      } else {
+        console.log(
+          `⏳ LIMIT order — skipping TP/SL placement. Will be placed by tp-sl-monitor after order fills.`,
+        );
       }
 
       // Build TP target objects for DB storage with percentage allocation
@@ -968,6 +978,7 @@ export async function executeSignal(
         stopLossPrice: effectiveSL || undefined,
         orderId: orderResult.orderId,
         status: positionStatus,
+        tpSlPlaced: orderType !== "LIMIT", // true for MARKET (already placed), false for LIMIT (deferred)
         channelId: channelId || undefined,
         sourceName: sourceName || undefined,
         messageId,
