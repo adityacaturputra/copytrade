@@ -111,6 +111,7 @@ export interface IDiscordSource extends Document {
   refreshToken?: string;
   channelIds: string[];
   channelNames?: Map<string, string>; // channelId → display name
+  disabledChannelIds?: string[]; // channel IDs that are temporarily disabled
   isActive: boolean;
   lastFetchedAt?: Date;
   lastError?: string;
@@ -276,6 +277,7 @@ const DiscordSourceSchema = new Schema<IDiscordSource>(
     refreshToken: { type: String, default: null },
     channelIds: [{ type: String, required: true }],
     channelNames: { type: Map, of: String, default: {} },
+    disabledChannelIds: [{ type: String, default: [] }],
     isActive: { type: Boolean, default: true },
     lastFetchedAt: { type: Date, default: null },
     lastError: { type: String, default: null },

@@ -10,6 +10,7 @@ interface DiscordSource {
   refreshToken?: string;
   channelIds: string[];
   channelNames?: Record<string, string>;
+  disabledChannelIds?: string[];
   isActive: boolean;
   lastFetchedAt?: string;
   lastError?: string;
@@ -454,6 +455,36 @@ export default function SettingsPage() {
     }
   };
 
+  const handleToggleChannel = async (
+    source: DiscordSource,
+    channelId: string,
+  ) => {
+    const disabled = new Set(source.disabledChannelIds || []);
+    if (disabled.has(channelId)) {
+      disabled.delete(channelId);
+    } else {
+      disabled.add(channelId);
+    }
+    try {
+      const res = await fetch("/api/discord-sources", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: source._id,
+          disabledChannelIds: Array.from(disabled),
+        }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        await fetchSources();
+      } else {
+        alert(`Failed: ${json.error}`);
+      }
+    } catch (err) {
+      alert(`Error: ${err instanceof Error ? err.message : "Unknown"}`);
+    }
+  };
+
   const checkHealth = async (id?: string) => {
     setCheckingHealth(id || "all");
     try {
@@ -859,32 +890,66 @@ export default function SettingsPage() {
                       </div>
 
                       {/* Channels */}
-                      <div className="text-sm text-slate-400 mb-2">
-                        <span className="text-slate-500">
+                      <div className="mb-2">
+                        <span className="text-sm text-slate-500 block mb-1.5">
                           Channels ({source.channelIds.length}):
-                        </span>{" "}
-                        {source.channelIds.map((cid, i) => {
-                          const displayName = source.channelNames?.[cid];
-                          return (
-                            <code
-                              key={i}
-                              className="text-xs bg-slate-800 px-1.5 py-0.5 rounded mr-1 inline-flex items-center gap-1"
-                            >
-                              {displayName ? (
-                                <>
-                                  <span className="text-primary-300">
-                                    {displayName}
-                                  </span>
-                                  <span className="text-slate-600">
-                                    ({cid})
-                                  </span>
-                                </>
-                              ) : (
-                                cid
-                              )}
-                            </code>
-                          );
-                        })}
+                        </span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {source.channelIds.map((cid) => {
+                            const isDisabled = (
+                              source.disabledChannelIds || []
+                            ).includes(cid);
+                            const displayName = source.channelNames?.[cid];
+                            return (
+                              <button
+                                key={cid}
+                                onClick={() => handleToggleChannel(source, cid)}
+                                title={
+                                  isDisabled
+                                    ? "Click to enable this channel"
+                                    : "Click to disable this channel"
+                                }
+                                className={`text-xs px-2 py-1 rounded-md inline-flex items-center gap-1.5 transition border ${
+                                  isDisabled
+                                    ? "bg-red-900/30 border-red-700/50 text-red-400 line-through opacity-60"
+                                    : "bg-slate-800 border-slate-600 text-slate-300 hover:border-slate-500"
+                                }`}
+                              >
+                                <span
+                                  className={`w-2 h-2 rounded-full ${isDisabled ? "bg-red-500" : "bg-green-500"}`}
+                                />
+                                {displayName ? (
+                                  <>
+                                    <span
+                                      className={
+                                        isDisabled
+                                          ? "text-red-300"
+                                          : "text-primary-300"
+                                      }
+                                    >
+                                      {displayName}
+                                    </span>
+                                    <span className="text-slate-600 text-[10px]">
+                                      {cid}
+                                    </span>
+                                  </>
+                                ) : (
+                                  <span className="font-mono">{cid}</span>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        {(source.disabledChannelIds || []).length > 0 && (
+                          <p className="text-[10px] text-amber-400 mt-1">
+                            ⚠️ {(source.disabledChannelIds || []).length}{" "}
+                            channel
+                            {(source.disabledChannelIds || []).length > 1
+                              ? "s"
+                              : ""}{" "}
+                            disabled — click to re-enable
+                          </p>
+                        )}
                       </div>
 
                       {/* Status info */}

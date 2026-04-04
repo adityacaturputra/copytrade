@@ -164,6 +164,13 @@ export async function PUT(request: NextRequest) {
     if (channelNames !== undefined) source.channelNames = channelNames;
     if (isActive !== undefined) source.isActive = isActive;
     if (autoRefresh !== undefined) source.autoRefresh = autoRefresh;
+    if (body.disabledChannelIds !== undefined) {
+      // Validate that all disabled channel IDs belong to this source
+      const validIds = body.disabledChannelIds.filter((id: string) =>
+        source.channelIds.includes(id),
+      );
+      source.disabledChannelIds = validIds;
+    }
 
     await source.save();
 

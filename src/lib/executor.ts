@@ -161,12 +161,30 @@ export async function runSignalCheck(): Promise<{
       );
 
       for (const source of dbSources) {
+        // Filter out disabled channels
+        const disabledSet = new Set(source.disabledChannelIds || []);
+        const activeChannelIds = source.channelIds.filter(
+          (id: string) => !disabledSet.has(id),
+        );
+
+        if (activeChannelIds.length === 0) {
+          console.log(
+            `⏭️ Source "${source.name}": all channels disabled, skipping`,
+          );
+          result.sources.push({
+            name: source.name,
+            channels: source.channelIds.length,
+            healthy: true,
+          });
+          continue;
+        }
+
         const sourceConfig: DiscordSourceConfig = {
           _id: (source as any)._id.toString(),
           name: source.name,
           method: source.method,
           token: source.token,
-          channelIds: source.channelIds,
+          channelIds: activeChannelIds,
           refreshToken: source.refreshToken,
           tokenExpiresAt: source.tokenExpiresAt,
           autoRefresh: source.autoRefresh,
