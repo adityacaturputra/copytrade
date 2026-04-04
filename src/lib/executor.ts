@@ -818,16 +818,45 @@ export async function executeSignal(
       const sl = signal.stopLoss;
 
       // Place ALL TP targets on the exchange (not just the first one)
-      for (const tp of tpTargets) {
+      // Split quantity evenly across TP levels, giving remainder to the last TP
+      // to ensure total always equals filledQty exactly.
+      // e.g., 0.01 / 3 → [0.0033, 0.0033, 0.0034]
+      const tpQuantities: number[] = [];
+      if (tpTargets.length > 0) {
+        const precision = 4; // Support up to 4 decimal places (e.g., 0.0033 BTC)
+        const multiplier = Math.pow(10, precision);
+        const totalUnits = Math.round(filledQty * multiplier);
+        const baseUnits = Math.floor(totalUnits / tpTargets.length);
+
+        let allocated = 0;
+        for (let i = 0; i < tpTargets.length; i++) {
+          if (i === tpTargets.length - 1) {
+            // Last TP gets the remainder to ensure total = filledQty
+            tpQuantities.push(
+              Math.round((filledQty - allocated) * multiplier) / multiplier,
+            );
+          } else {
+            const qty = baseUnits / multiplier;
+            tpQuantities.push(qty);
+            allocated = Math.round((allocated + qty) * multiplier) / multiplier;
+          }
+        }
+      }
+
+      for (let i = 0; i < tpTargets.length; i++) {
+        const tp = tpTargets[i];
+        const tpQty = tpQuantities[i];
         try {
           const tpId = await exchange.placeTakeProfit(
             signal.symbol,
             tp,
             tp,
             closeSide,
-            filledQty,
+            tpQty,
           );
-          console.log(`🎯 Take Profit set at ${tp} (plan order ${tpId})`);
+          console.log(
+            `🎯 Take Profit ${i + 1}/${tpTargets.length} set at ${tp} (qty: ${tpQty}/${filledQty}, plan order ${tpId})`,
+          );
         } catch (tpErr) {
           console.warn(
             `⚠️ Failed to place TP at ${tp}: ${tpErr instanceof Error ? tpErr.message : String(tpErr)}`,
