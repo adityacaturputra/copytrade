@@ -49,7 +49,7 @@ import {
  * For SHORT (SELL): TP is below entry
  *   TP1 (1R) = 94000, TP2 (2R) = 93000, TP3 (3R) = 92000
  */
-function autoCalculateTPFromRR(
+export function autoCalculateTPFromRR(
   entryPrice: number,
   stopLoss: number,
   rr: number,
@@ -661,6 +661,285 @@ async function createDraft(
   );
 }
 
+// ─── Result types for duplicate / max-positions checks ────────────
+export type DuplicateCheckResult =
+  | { type: "new" }
+  | { type: "duplicate_exact" }
+  | { type: "duplicate_updated"; updates: string[] }
+  | { type: "duplicate_no_update" };
+
+/**
+ * Check for duplicate open positions (same symbol + side + channel).
+ * Shared by both auto (executeSignal) and manual (accept) paths.
+ */
+export async function checkDuplicatePosition(
+  symbol: string,
+  side: "LONG" | "SHORT",
+  channelId: string | undefined,
+  entryPrice: number | null | undefined,
+  takeProfitTargets: number[],
+  stopLoss: number | null | undefined,
+): Promise<DuplicateCheckResult> {
+  const existingPos = await Position.findOne({
+    symbol,
+    side,
+    channelId: channelId || null,
+    status: "open",
+  });
+
+  if (!existingPos) return { type: "new" };
+
+  const newTP = takeProfitTargets?.[0] ?? null;
+  const newSL = stopLoss ?? null;
+  const existingTP = existingPos.takeProfitTargets?.[0]?.price ?? null;
+  const existingSL = existingPos.stopLossPrice ?? null;
+  const existingEntry = existingPos.entryPrice ?? null;
+  const newEntry = entryPrice ?? null;
+
+  const numEqual = (
+    a: number | null | undefined,
+    b: number | null | undefined,
+  ) => {
+    if ((a === null || a === undefined) && (b === null || b === undefined))
+      return true;
+    if (a === null || a === undefined || b === null || b === undefined)
+      return false;
+    return Math.abs(a - b) < 0.01;
+  };
+
+  // null entry from same channel = referring to existing position
+  const entryMatch =
+    newEntry === null ? true : numEqual(newEntry, existingEntry);
+  const tpMatch = numEqual(newTP, existingTP);
+  const slMatch = numEqual(newSL, existingSL);
+
+  if (entryMatch && tpMatch && slMatch) {
+    return { type: "duplicate_exact" };
+  }
+
+  if (entryMatch) {
+    let updated = false;
+    const updates: string[] = [];
+
+    if (!tpMatch && newTP !== null) {
+      const newTargets = buildTPTargets([newTP], existingPos.quantity);
+      existingPos.takeProfitTargets = newTargets;
+      updates.push(`TP: ${existingTP} → ${newTP}`);
+      updated = true;
+    }
+    if (!slMatch && newSL !== null) {
+      existingPos.stopLossPrice = newSL;
+      updates.push(`SL: ${existingSL} → ${newSL}`);
+      updated = true;
+    }
+
+    if (updated) {
+      await existingPos.save();
+      return { type: "duplicate_updated", updates };
+    }
+    return { type: "duplicate_no_update" };
+  }
+
+  // Different entry price — genuinely new signal
+  return { type: "new" };
+}
+
+export interface ExecuteTradeInput {
+  symbol: string;
+  action: "BUY" | "SELL";
+  entryPrice?: number;
+  stopLoss?: number | null;
+  takeProfitTargets: number[];
+  leverage: number;
+  quantity: number;
+  orderType: "MARKET" | "LIMIT";
+  channelId?: string;
+  messageId?: string;
+  sourceName?: string;
+  signalData: string;
+  /** Custom log prefix for request tracing (e.g. "[accept-abc123]") */
+  logPrefix?: string;
+}
+
+/**
+ * Core trade execution — single source of truth for:
+ *   Risk sizing → Set leverage → Place order → TP/SL → Save position
+ *
+ * Called by both `executeSignal` (auto mode) and `/api/drafts/[id]/accept` (manual mode).
+ * Does NOT handle duplicate checks, max-positions, or skipNoSL — those are
+ * the caller's responsibility.
+ */
+export async function executeTrade(
+  input: ExecuteTradeInput,
+): Promise<IPosition> {
+  const {
+    symbol,
+    action,
+    entryPrice,
+    stopLoss,
+    takeProfitTargets: tpTargets,
+    leverage,
+    quantity,
+    orderType,
+    channelId,
+    messageId,
+    sourceName,
+    signalData,
+    logPrefix = "",
+  } = input;
+
+  const side = action === "SELL" ? ("SHORT" as const) : ("LONG" as const);
+  const lp = logPrefix ? `${logPrefix} ` : "";
+
+  // ─── Risk-Based Position Sizing ─────────────────────────────────
+  let orderQuantity = quantity;
+  let orderLeverage = leverage;
+
+  if (entryPrice && entryPrice > 0 && stopLoss) {
+    const riskCalc = await calculateRiskBasedPosition(
+      entryPrice,
+      stopLoss,
+      side,
+      quantity,
+      leverage,
+    );
+
+    if (riskCalc.applied) {
+      orderQuantity = riskCalc.quantity;
+      orderLeverage = riskCalc.leverage;
+      console.log(
+        `${lp}🛡️ Risk management applied: qty=${orderQuantity.toFixed(6)} → ${orderQuantity}, leverage=${leverage} → ${orderLeverage}`,
+      );
+      console.log(
+        `${lp}🛡️ Risk details: balance=$${riskCalc.accountBalance.toFixed(2)}, margin=$${riskCalc.marginUsdt.toFixed(2)}, slDist=${(riskCalc.slDistancePercent * 100).toFixed(2)}%, notional=$${riskCalc.notionalSize.toFixed(2)}`,
+      );
+    } else {
+      console.warn(`${lp}⚠️ Risk management skipped: ${riskCalc.skipReason}`);
+    }
+  } else if (!entryPrice || entryPrice <= 0) {
+    console.warn(`${lp}⚠️ Risk management skipped: no entry price available`);
+  }
+
+  // ─── Place order via exchange ────────────────────────────────────
+  const exchange = ExchangeFactory.getClient();
+
+  // Set leverage before placing order
+  try {
+    await exchange.setLeverage(symbol, orderLeverage);
+  } catch (levErr) {
+    console.warn(
+      `${lp}⚠️ Failed to set leverage (may already be set): ${levErr instanceof Error ? levErr.message : String(levErr)}`,
+    );
+  }
+
+  const orderSide = action === "BUY" ? "BUY" : "SELL";
+  const closeSide = orderSide === "BUY" ? "SELL" : "BUY";
+
+  console.log(
+    `${lp}🔄 Placing ${orderType} ${action} order: symbol=${symbol}, qty=${orderQuantity}, leverage=${orderLeverage}${orderType === "LIMIT" ? `, price=${entryPrice}` : ""}`,
+  );
+
+  const orderResult = await exchange.placeOrder({
+    symbol,
+    side: orderSide,
+    type: orderType,
+    quantity: orderQuantity,
+    price: orderType === "LIMIT" ? entryPrice : undefined,
+    leverage: orderLeverage,
+  });
+
+  console.log(
+    `${lp}✅ Order placed: orderId=${orderResult.orderId}, price=${orderResult.price}, qty=${orderResult.quantity}`,
+  );
+
+  const filledQty = orderResult.quantity || orderQuantity;
+
+  // ─── Place TP/SL via plan orders ────────────────────────────────
+  // Only for MARKET orders. For LIMIT orders, deferred to tp-sl-monitor.
+  if (orderType !== "LIMIT") {
+    // Split quantity across TP levels using lot-size-aware rounding
+    const tpQuantities = await splitQuantityForTPs(
+      filledQty,
+      tpTargets.length,
+      () => exchange.getInstrumentSpecs(symbol),
+    );
+
+    for (let i = 0; i < tpTargets.length; i++) {
+      const tp = tpTargets[i];
+      const tpQty = tpQuantities[i];
+      try {
+        const tpId = await exchange.placeTakeProfit(
+          symbol,
+          tp,
+          tp,
+          closeSide,
+          tpQty,
+        );
+        console.log(
+          `${lp}🎯 Take Profit ${i + 1}/${tpTargets.length} set at ${tp} (qty: ${tpQty}/${filledQty}, plan order ${tpId})`,
+        );
+      } catch (tpErr) {
+        console.warn(
+          `${lp}⚠️ Failed to place TP at ${tp}: ${tpErr instanceof Error ? tpErr.message : String(tpErr)}`,
+        );
+      }
+    }
+
+    if (stopLoss) {
+      try {
+        const slId = await exchange.placeStopLoss(
+          symbol,
+          stopLoss,
+          stopLoss,
+          closeSide,
+          filledQty,
+        );
+        console.log(
+          `${lp}🛑 Stop Loss set at ${stopLoss} (plan order ${slId})`,
+        );
+      } catch (slErr) {
+        console.warn(
+          `${lp}⚠️ Failed to place SL: ${slErr instanceof Error ? slErr.message : String(slErr)}`,
+        );
+      }
+    }
+  } else {
+    console.log(
+      `${lp}⏳ LIMIT order — skipping TP/SL placement. Will be placed by tp-sl-monitor after order fills.`,
+    );
+  }
+
+  // ─── Save position to DB ────────────────────────────────────────
+  const tpTargetObjects = buildTPTargets(tpTargets, filledQty);
+  const positionStatus = orderType === "LIMIT" ? "pending" : "open";
+
+  console.log(
+    `${lp}💾 Saving position to database (status: ${positionStatus})...`,
+  );
+
+  const position = await Position.create({
+    symbol,
+    side,
+    entryPrice: entryPrice || orderResult.price || 0,
+    quantity: orderResult.quantity || orderQuantity,
+    leverage: orderLeverage,
+    takeProfitTargets: tpTargetObjects,
+    stopLossPrice: stopLoss || undefined,
+    orderId: orderResult.orderId,
+    status: positionStatus,
+    tpSlPlaced: orderType !== "LIMIT",
+    channelId: channelId || undefined,
+    sourceName: sourceName || undefined,
+    messageId: messageId || undefined,
+    signalData,
+  });
+
+  console.log(
+    `${lp}✅ ${orderType === "LIMIT" ? "Placed limit order for" : "Opened"} ${side} position: ${symbol} @ ${entryPrice || "market"} (status: ${positionStatus})`,
+  );
+  return position;
+}
+
 export async function executeSignal(
   signal: TradingSignal,
   messageId: string,
@@ -830,164 +1109,37 @@ export async function executeSignal(
         }
       }
 
-      // ─── Risk-Based Position Sizing ─────────────────────────────────
-      let orderQuantity = quantity;
-      let orderLeverage = leverage;
-
-      if (entryPrice && entryPrice > 0) {
-        const riskCalc = await calculateRiskBasedPosition(
-          entryPrice,
-          effectiveSL,
-          side,
-          quantity,
-          leverage,
-        );
-
-        if (riskCalc.applied) {
-          orderQuantity = riskCalc.quantity;
-          orderLeverage = riskCalc.leverage;
-          console.log(
-            `🛡️ Risk management applied: qty=${orderQuantity.toFixed(6)}, leverage=${orderLeverage}x (balance=$${riskCalc.accountBalance.toFixed(2)}, margin=$${riskCalc.marginUsdt.toFixed(2)}, slDist=${(riskCalc.slDistancePercent * 100).toFixed(2)}%)`,
-          );
-        } else {
-          console.warn(`⚠️ Risk management skipped: ${riskCalc.skipReason}`);
-        }
-      }
-
-      // Place order via exchange
-      const exchange = ExchangeFactory.getClient();
-
-      // Set leverage before placing order
-      try {
-        await exchange.setLeverage(signal.symbol, orderLeverage);
-      } catch (levErr) {
-        console.warn(
-          `⚠️ Failed to set leverage: ${levErr instanceof Error ? levErr.message : String(levErr)}`,
-        );
-      }
-
-      const orderSide = signal.action === "BUY" ? "BUY" : "SELL";
-      const closeSide = orderSide === "BUY" ? "SELL" : "BUY";
-      const orderType = signal.orderType === "limit" ? "LIMIT" : "MARKET";
-
-      const orderResult = await exchange.placeOrder({
-        symbol: signal.symbol,
-        side: orderSide,
-        type: orderType as "LIMIT" | "MARKET",
-        quantity: orderQuantity,
-        price: signal.orderType === "limit" ? entryPrice : undefined,
-        leverage: orderLeverage,
-      });
-
-      const filledQty = orderResult.quantity || orderQuantity;
-
-      // ─── Place TP/SL via plan orders ────────────────────────────────
       // Auto-calculate TP from RR if no TP targets but we have entry + SL + RR
       let tpTargets = signal.takeProfitTargets || [];
-      if (tpTargets.length === 0 && entryPrice && signal.stopLoss) {
-        const riskCfg = await getRiskConfig();
+      if (tpTargets.length === 0 && entryPrice && effectiveSL) {
         const rr =
           signal.defaultRR && signal.defaultRR > 0
             ? signal.defaultRR
             : riskCfg.defaultRR;
         if (rr > 0) {
-          tpTargets = autoCalculateTPFromRR(
-            entryPrice,
-            signal.stopLoss,
-            rr,
-            side,
-          );
+          tpTargets = autoCalculateTPFromRR(entryPrice, effectiveSL, rr, side);
           console.log(
             `📐 Auto-calculated ${tpTargets.length} TP targets from ${rr}RR: [${tpTargets.join(", ")}]`,
           );
         }
       }
 
-      const sl = effectiveSL;
-
-      // ─── Place TP/SL only for MARKET orders ─────────────────────────
-      // For LIMIT orders, TP/SL is placed AFTER the order fills,
-      // handled by the tp-sl-monitor cron to avoid TP/SL being attached
-      // to the wrong position on the same symbol.
-      if (orderType !== "LIMIT") {
-        // Split quantity across TP levels using lot-size-aware rounding
-        const tpQuantities = await splitQuantityForTPs(
-          filledQty,
-          tpTargets.length,
-          () => exchange.getInstrumentSpecs(signal.symbol),
-        );
-
-        for (let i = 0; i < tpTargets.length; i++) {
-          const tp = tpTargets[i];
-          const tpQty = tpQuantities[i];
-          try {
-            const tpId = await exchange.placeTakeProfit(
-              signal.symbol,
-              tp,
-              tp,
-              closeSide,
-              tpQty,
-            );
-            console.log(
-              `🎯 Take Profit ${i + 1}/${tpTargets.length} set at ${tp} (qty: ${tpQty}/${filledQty}, plan order ${tpId})`,
-            );
-          } catch (tpErr) {
-            console.warn(
-              `⚠️ Failed to place TP at ${tp}: ${tpErr instanceof Error ? tpErr.message : String(tpErr)}`,
-            );
-          }
-        }
-
-        if (sl) {
-          try {
-            const slId = await exchange.placeStopLoss(
-              signal.symbol,
-              sl,
-              sl,
-              closeSide,
-              filledQty,
-            );
-            console.log(`🛑 Stop Loss set at ${sl} (plan order ${slId})`);
-          } catch (slErr) {
-            console.warn(
-              `⚠️ Failed to place SL: ${slErr instanceof Error ? slErr.message : String(slErr)}`,
-            );
-          }
-        }
-      } else {
-        console.log(
-          `⏳ LIMIT order — skipping TP/SL placement. Will be placed by tp-sl-monitor after order fills.`,
-        );
-      }
-
-      // Build TP target objects for DB storage with percentage allocation
-      const tpTargetObjects = buildTPTargets(tpTargets, filledQty);
-
-      // Save position to DB
-      // For LIMIT orders, use "pending" status since the order may not be filled yet
-      // The monitor will detect when the order fills and update to "open"
-      const positionStatus = orderType === "LIMIT" ? "pending" : "open";
-
-      const position = await Position.create({
+      // ─── Execute trade via shared core function ───────────────────
+      const position = await executeTrade({
         symbol: signal.symbol,
-        side,
-        entryPrice: entryPrice || orderResult.price || 0,
-        quantity: orderResult.quantity || orderQuantity,
-        leverage: orderLeverage,
-        takeProfitTargets: tpTargetObjects,
-        stopLossPrice: effectiveSL || undefined,
-        orderId: orderResult.orderId,
-        status: positionStatus,
-        tpSlPlaced: orderType !== "LIMIT", // true for MARKET (already placed), false for LIMIT (deferred)
-        channelId: channelId || undefined,
-        sourceName: sourceName || undefined,
+        action: signal.action,
+        entryPrice: entryPrice || undefined,
+        stopLoss: effectiveSL,
+        takeProfitTargets: tpTargets,
+        leverage,
+        quantity,
+        orderType: signal.orderType === "limit" ? "LIMIT" : "MARKET",
+        channelId,
         messageId,
+        sourceName,
         signalData: JSON.stringify(signal),
       });
 
-      console.log(
-        `✅ ${orderType === "LIMIT" ? "Placed limit order for" : "Opened"} ${side} position: ${signal.symbol} @ ${entryPrice || "market"} (status: ${positionStatus})`,
-      );
       return position;
     }
 
