@@ -9,6 +9,7 @@ interface DiscordSource {
   token: string;
   refreshToken?: string;
   channelIds: string[];
+  channelNames?: Record<string, string>;
   isActive: boolean;
   lastFetchedAt?: string;
   lastError?: string;
@@ -24,12 +25,17 @@ interface HealthStatus {
   needsRefresh: boolean;
 }
 
+interface ChannelEntry {
+  id: string;
+  name: string;
+}
+
 interface SourceFormData {
   name: string;
   method: "bot" | "user";
   token: string;
   refreshToken: string;
-  channelIds: string; // comma-separated
+  channels: ChannelEntry[];
   autoRefresh: boolean;
 }
 
@@ -38,7 +44,7 @@ const emptyForm: SourceFormData = {
   method: "bot",
   token: "",
   refreshToken: "",
-  channelIds: "",
+  channels: [{ id: "", name: "" }],
   autoRefresh: true,
 };
 
@@ -314,10 +320,14 @@ export default function SettingsPage() {
     setSaving(true);
     setFormError(null);
 
-    const channelIdsArray = form.channelIds
-      .split(",")
-      .map((id) => id.trim())
-      .filter(Boolean);
+    const validChannels = form.channels.filter((c) => c.id.trim() !== "");
+    const channelIdsArray = validChannels.map((c) => c.id.trim());
+    const channelNamesMap: Record<string, string> = {};
+    validChannels.forEach((c) => {
+      if (c.name.trim()) {
+        channelNamesMap[c.id.trim()] = c.name.trim();
+      }
+    });
 
     if (
       !form.name ||
@@ -346,6 +356,7 @@ export default function SettingsPage() {
             token: form.token,
             refreshToken: form.refreshToken || undefined,
             channelIds: channelIdsArray,
+            channelNames: channelNamesMap,
             autoRefresh: form.autoRefresh,
           }),
         });
@@ -359,6 +370,7 @@ export default function SettingsPage() {
             token: form.token,
             refreshToken: form.refreshToken || undefined,
             channelIds: channelIdsArray,
+            channelNames: channelNamesMap,
             autoRefresh: form.autoRefresh,
           }),
         });
@@ -381,13 +393,19 @@ export default function SettingsPage() {
   };
 
   const handleEdit = (source: DiscordSource) => {
+    const sourceChannelNames =
+      (source as DiscordSource & { channelNames?: Record<string, string> })
+        .channelNames || {};
     setEditingId(source._id);
     setForm({
       name: source.name,
       method: source.method,
       token: "", // Leave empty = keep existing token
       refreshToken: "", // Leave empty = keep existing
-      channelIds: source.channelIds.join(", "),
+      channels: source.channelIds.map((cid) => ({
+        id: cid,
+        name: sourceChannelNames[cid] || "",
+      })),
       autoRefresh: source.autoRefresh,
     });
     setShowForm(true);
@@ -637,17 +655,68 @@ export default function SettingsPage() {
               </div>
               <div>
                 <label className="block text-sm text-slate-400 mb-1">
-                  Channel IDs * (comma-separated)
+                  Channels *
                 </label>
-                <input
-                  type="text"
-                  value={form.channelIds}
-                  onChange={(e) =>
-                    setForm({ ...form, channelIds: e.target.value })
-                  }
-                  placeholder="e.g., 123456789, 987654321"
-                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none"
-                />
+                <div className="space-y-2">
+                  {form.channels.map((ch, idx) => (
+                    <div key={idx} className="flex gap-2">
+                      <input
+                        type="text"
+                        value={ch.id}
+                        onChange={(e) => {
+                          const updated = [...form.channels];
+                          updated[idx] = {
+                            ...updated[idx],
+                            id: e.target.value,
+                          };
+                          setForm({ ...form, channels: updated });
+                        }}
+                        placeholder="Channel ID"
+                        className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none font-mono"
+                      />
+                      <input
+                        type="text"
+                        value={ch.name}
+                        onChange={(e) => {
+                          const updated = [...form.channels];
+                          updated[idx] = {
+                            ...updated[idx],
+                            name: e.target.value,
+                          };
+                          setForm({ ...form, channels: updated });
+                        }}
+                        placeholder="Display name (optional)"
+                        className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none"
+                      />
+                      {form.channels.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const updated = form.channels.filter(
+                              (_, i) => i !== idx,
+                            );
+                            setForm({ ...form, channels: updated });
+                          }}
+                          className="bg-red-600/20 text-red-400 hover:bg-red-600/30 px-2 rounded-lg text-sm transition border border-red-700/50"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setForm({
+                        ...form,
+                        channels: [...form.channels, { id: "", name: "" }],
+                      })
+                    }
+                    className="text-xs text-primary-400 hover:text-primary-300 transition flex items-center gap-1"
+                  >
+                    ➕ Add another channel
+                  </button>
+                </div>
                 <p className="text-xs text-slate-500 mt-1">
                   To get channel ID: Enable Developer Mode in Discord → Right
                   click channel → Copy Channel ID
@@ -794,14 +863,28 @@ export default function SettingsPage() {
                         <span className="text-slate-500">
                           Channels ({source.channelIds.length}):
                         </span>{" "}
-                        {source.channelIds.map((cid, i) => (
-                          <code
-                            key={i}
-                            className="text-xs bg-slate-800 px-1.5 py-0.5 rounded mr-1"
-                          >
-                            {cid}
-                          </code>
-                        ))}
+                        {source.channelIds.map((cid, i) => {
+                          const displayName = source.channelNames?.[cid];
+                          return (
+                            <code
+                              key={i}
+                              className="text-xs bg-slate-800 px-1.5 py-0.5 rounded mr-1 inline-flex items-center gap-1"
+                            >
+                              {displayName ? (
+                                <>
+                                  <span className="text-primary-300">
+                                    {displayName}
+                                  </span>
+                                  <span className="text-slate-600">
+                                    ({cid})
+                                  </span>
+                                </>
+                              ) : (
+                                cid
+                              )}
+                            </code>
+                          );
+                        })}
                       </div>
 
                       {/* Status info */}

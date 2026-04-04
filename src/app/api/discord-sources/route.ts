@@ -35,7 +35,15 @@ export async function POST(request: NextRequest) {
     await connectDB();
     const body = await request.json();
 
-    const { name, method, token, refreshToken, channelIds, autoRefresh } = body;
+    const {
+      name,
+      method,
+      token,
+      refreshToken,
+      channelIds,
+      channelNames,
+      autoRefresh,
+    } = body;
 
     if (!name || !method || !token || !channelIds || channelIds.length === 0) {
       return NextResponse.json(
@@ -73,6 +81,7 @@ export async function POST(request: NextRequest) {
       token,
       refreshToken: refreshToken || null,
       channelIds: Array.isArray(channelIds) ? channelIds : [channelIds],
+      channelNames: channelNames || {},
       isActive: true,
       autoRefresh: autoRefresh !== false,
     });
@@ -110,6 +119,7 @@ export async function PUT(request: NextRequest) {
       token,
       refreshToken,
       channelIds,
+      channelNames,
       isActive,
       autoRefresh,
     } = body;
@@ -151,6 +161,7 @@ export async function PUT(request: NextRequest) {
     if (method && ["bot", "user"].includes(method)) source.method = method;
     if (refreshToken !== undefined) source.refreshToken = refreshToken;
     if (channelIds && channelIds.length > 0) source.channelIds = channelIds;
+    if (channelNames !== undefined) source.channelNames = channelNames;
     if (isActive !== undefined) source.isActive = isActive;
     if (autoRefresh !== undefined) source.autoRefresh = autoRefresh;
 

@@ -110,6 +110,7 @@ export interface IDiscordSource extends Document {
   token: string;
   refreshToken?: string;
   channelIds: string[];
+  channelNames?: Map<string, string>; // channelId → display name
   isActive: boolean;
   lastFetchedAt?: Date;
   lastError?: string;
@@ -274,6 +275,7 @@ const DiscordSourceSchema = new Schema<IDiscordSource>(
     token: { type: String, required: true },
     refreshToken: { type: String, default: null },
     channelIds: [{ type: String, required: true }],
+    channelNames: { type: Map, of: String, default: {} },
     isActive: { type: Boolean, default: true },
     lastFetchedAt: { type: Date, default: null },
     lastError: { type: String, default: null },

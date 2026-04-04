@@ -72,7 +72,7 @@ export async function GET(request: NextRequest) {
       getAllDiscordSources(),
     ]);
 
-    // Resolve channel names for the channel filter
+    // Resolve channel names: prefer stored names from DB, fall back to Discord API
     const allUsedChannelIds = Array.from(
       new Set([
         ...(recentDrafts || []).map((d: any) => d.channelId).filter(Boolean),
@@ -81,17 +81,36 @@ export async function GET(request: NextRequest) {
       ]),
     );
     let channelNames: Record<string, string> = {};
-    try {
-      const sources = await import("@/lib/database").then((m) =>
-        m.getAllDiscordSources(),
-      );
-      const nameMap = await fetchChannelNames(allUsedChannelIds, sources);
-      channelNames = Object.fromEntries(nameMap);
-    } catch (err) {
-      console.warn(
-        "Failed to resolve channel names:",
-        err instanceof Error ? err.message : err,
-      );
+    // First: use stored channel names from DiscordSource.channelNames
+    for (const src of discordSources) {
+      const srcNames = (src as any).channelNames;
+      if (srcNames && typeof srcNames === "object") {
+        if (srcNames instanceof Map) {
+          for (const [k, v] of srcNames) {
+            if (v) channelNames[k] = v;
+          }
+        } else {
+          for (const [k, v] of Object.entries(srcNames)) {
+            if (v) channelNames[k] = v as string;
+          }
+        }
+      }
+    }
+    // Second: for any IDs not yet resolved, fetch from Discord API
+    const unresolvedIds = allUsedChannelIds.filter((id) => !channelNames[id]);
+    if (unresolvedIds.length > 0) {
+      try {
+        const nameMap = await fetchChannelNames(unresolvedIds, discordSources);
+        const apiNames = Object.fromEntries(nameMap);
+        for (const [k, v] of Object.entries(apiNames)) {
+          if (v && !channelNames[k]) channelNames[k] = v;
+        }
+      } catch (err) {
+        console.warn(
+          "Failed to resolve channel names from API:",
+          err instanceof Error ? err.message : err,
+        );
+      }
     }
 
     // Enrich open positions with real-time exchange data (current price, PnL)
