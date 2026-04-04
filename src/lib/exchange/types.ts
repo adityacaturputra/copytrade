@@ -2,11 +2,18 @@
 // All exchange implementations must implement this interface.
 // This allows swapping between MEXC, OKX, Binance, etc. seamlessly.
 
+import {
+  OrderSide,
+  ExchangeOrderType,
+  PositionSide,
+  MarginType,
+} from "@/lib/enums";
+
 /** Normalized order parameters across all exchanges */
 export interface OrderParams {
   symbol: string;
-  side: "BUY" | "SELL";
-  type: "LIMIT" | "MARKET";
+  side: OrderSide;
+  type: ExchangeOrderType;
   quantity: number;
   price?: number;
   leverage?: number;
@@ -18,9 +25,9 @@ export interface OrderParams {
 export interface PositionInfo {
   symbol: string;
   positionId: string;
-  side: "LONG" | "SHORT";
+  side: PositionSide;
   leverage: number;
-  marginType: "isolated" | "cross";
+  marginType: MarginType;
   entryPrice: number;
   quantity: number;
   margin: number;
@@ -61,7 +68,7 @@ export interface OrderResult {
 export interface OpenOrderInfo {
   orderId: string;
   symbol: string;
-  side: "BUY" | "SELL";
+  side: OrderSide;
   type: string; // "limit", "market", "conditional", etc.
   price?: number;
   quantity: number;
@@ -75,7 +82,7 @@ export interface OpenOrderInfo {
 export interface AlgoOrderInfo {
   orderId: string;
   symbol: string;
-  side: "BUY" | "SELL";
+  side: OrderSide;
   type: string; // "tp", "sl", "conditional"
   triggerPrice: number;
   executePrice?: number;
@@ -89,7 +96,7 @@ export interface AlgoOrderInfo {
 export interface HistoricalOrder {
   orderId: string;
   symbol: string;
-  side: "BUY" | "SELL";
+  side: OrderSide;
   type: string;
   price: number;
   quantity: number;
@@ -144,8 +151,8 @@ export interface ExchangeClient {
   setLeverage(
     symbol: string,
     leverage: number,
-    marginType?: "isolated" | "cross",
-    side?: "BUY" | "SELL",
+    marginType?: MarginType,
+    side?: OrderSide,
   ): Promise<void>;
 
   // ─── Stop Loss / Take Profit ────────────────────────────────────────
@@ -153,14 +160,14 @@ export interface ExchangeClient {
     symbol: string,
     triggerPrice: number,
     executePrice: number,
-    side: "BUY" | "SELL",
+    side: OrderSide,
     quantity: number,
   ): Promise<string>;
   placeTakeProfit(
     symbol: string,
     triggerPrice: number,
     executePrice: number,
-    side: "BUY" | "SELL",
+    side: OrderSide,
     quantity: number,
   ): Promise<string>;
 

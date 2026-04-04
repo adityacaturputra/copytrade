@@ -1,22 +1,19 @@
+import {
+  TradeAction,
+  SignalOrderType,
+  PositionDecision,
+  MarketCondition,
+} from "@/lib/enums";
+
 export interface TradingSignal {
-  action:
-    | "BUY"
-    | "SELL"
-    | "CLOSE"
-    | "CANCEL"
-    | "HOLD"
-    | "TP"
-    | "SL"
-    | "UPDATE_SL"
-    | "UPDATE_TP"
-    | "ADD_TP";
+  action: TradeAction;
   symbol: string;
   entryPrice?: number;
   takeProfitTargets?: number[];
   stopLoss?: number;
   leverage?: number;
   positionSize?: number;
-  orderType?: "market" | "limit";
+  orderType?: SignalOrderType;
   /** Risk-Reward ratio extracted from signal (e.g., 3 means 3R / 3:1 RR) */
   defaultRR?: number;
   timeframe?: string;
@@ -36,14 +33,14 @@ export interface BulkMessageInput {
 }
 
 export interface PositionAnalysis {
-  decision: "CLOSE" | "HOLD" | "MOVE_SL" | "PARTIAL_CLOSE" | "UPDATE_TP";
+  decision: PositionDecision;
   symbol: string;
   reason: string;
   newStopLoss?: number;
   newTakeProfit?: number;
   closePercentage?: number;
   confidence: number;
-  currentMarketCondition: string;
+  currentMarketCondition: MarketCondition;
 }
 
 export interface BulkSignalResult {

@@ -24,6 +24,19 @@ import { TradingSignal, BulkMessageInput } from "./ai/types";
 import { ExchangeFactory } from "./exchange/ExchangeFactory";
 import { calculateRiskBasedPosition, getRiskConfig } from "./risk";
 import { getSignalConfig } from "./signal-config";
+import {
+  TradeAction,
+  PositionSide,
+  OrderSide,
+  ExchangeOrderType,
+  SignalOrderType,
+  PositionStatus,
+  TradingMode,
+  actionToSide,
+  actionToOrderSide,
+  closeSideForPosition,
+  signalToExchangeOrderType,
+} from "./enums";
 
 /**
  * Auto-calculate Take Profit targets based on RR (Risk-Reward) ratio.

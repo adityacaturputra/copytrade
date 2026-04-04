@@ -11,6 +11,7 @@ import {
   buildBulkSignalParserPrompt,
   buildPositionAnalysisPrompt,
 } from "./AIFactory";
+import { MarketCondition } from "@/lib/enums";
 
 export class KimiAnalyzer implements AISignalAnalyzer {
   private apiKeys: string[];
@@ -180,7 +181,7 @@ export class KimiAnalyzer implements AISignalAnalyzer {
         symbol,
         reason: "Failed to parse AI analysis, defaulting to HOLD",
         confidence: 0,
-        currentMarketCondition: "UNKNOWN",
+        currentMarketCondition: MarketCondition.NEUTRAL,
       };
     }
   }
