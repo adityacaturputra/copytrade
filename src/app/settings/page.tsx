@@ -81,6 +81,25 @@ const defaultSignalConfig: SignalConfigType = {
   timeWindowHours: 24,
 };
 
+const RECOMMENDED_SCHEDULES: Record<
+  string,
+  { label: string; description: string }
+> = {
+  "signal-check": {
+    label: "Every 5 minutes",
+    description:
+      "Check Discord for new signals frequently. Recommended: 5 min.",
+  },
+  "position-monitor": {
+    label: "Every 30 minutes",
+    description: "Monitor open positions for changes. Recommended: 30 min.",
+  },
+  "tp-sl-monitor": {
+    label: "Every 5 minutes",
+    description: "Place TP/SL for filled limit orders. Recommended: 5 min.",
+  },
+};
+
 export default function SettingsPage() {
   const [sources, setSources] = useState<DiscordSource[]>([]);
   const [loading, setLoading] = useState(true);
@@ -133,6 +152,63 @@ export default function SettingsPage() {
   const [signalSaving, setSignalSaving] = useState(false);
   const [signalError, setSignalError] = useState<string | null>(null);
   const [signalSuccess, setSignalSuccess] = useState(false);
+
+  // Cron settings state
+  const [cronBaseUrl, setCronBaseUrl] = useState("");
+  const [cronJobs, setCronJobs] = useState<
+    Array<{
+      id: string;
+      type: string;
+      enabled: boolean;
+      title: string;
+      url: string;
+      schedule: {
+        minutes: number;
+        hours: number[];
+        mdays: number[];
+        months: number[];
+        wdays: number[];
+      };
+    }>
+  >([
+    {
+      type: "signal-check",
+      enabled: true,
+      title: "CopyTrade — Signal Check",
+      url: "/api/cron/signal-check",
+      id: "",
+      schedule: { minutes: 5, hours: [], mdays: [], months: [], wdays: [] },
+    },
+    {
+      type: "position-monitor",
+      enabled: true,
+      title: "CopyTrade — Position Monitor",
+      url: "/api/cron/position-monitor",
+      id: "",
+      schedule: { minutes: 30, hours: [], mdays: [], months: [], wdays: [] },
+    },
+    {
+      type: "tp-sl-monitor",
+      enabled: true,
+      title: "CopyTrade — TP/SL Monitor",
+      url: "/api/cron/tp-sl-monitor",
+      id: "",
+      schedule: { minutes: 5, hours: [], mdays: [], months: [], wdays: [] },
+    },
+  ]);
+  const [cronSaving, setCronSaving] = useState(false);
+  const [cronError, setCronError] = useState<string | null>(null);
+  const [cronSuccess, setCronSuccess] = useState(false);
+  const [cronPulling, setCronPulling] = useState(false);
+  const [cronLiveStatus, setCronLiveStatus] = useState<
+    Array<{
+      type: string;
+      title: string;
+      enabled: boolean;
+      url: string;
+      status: "active" | "missing";
+    }>
+  >([]);
 
   // Proxy state
   const [proxyConfig, setProxyConfig] = useState<{
@@ -262,11 +338,84 @@ export default function SettingsPage() {
     }
   };
 
+  const fetchCronSettings = useCallback(async () => {
+    try {
+      const res = await fetch("/api/cron-settings");
+      const json = await res.json();
+      if (json.success) {
+        if (json.settings?.baseUrl) setCronBaseUrl(json.settings.baseUrl);
+        if (json.settings?.jobs?.length > 0) setCronJobs(json.settings.jobs);
+        if (json.liveStatus) setCronLiveStatus(json.liveStatus);
+      }
+    } catch {
+      // Use defaults
+    }
+  }, []);
+
+  const handleCronSave = async () => {
+    // Client-side validation
+    if (!cronBaseUrl || !cronBaseUrl.startsWith("http")) {
+      setCronError(
+        "Base URL is required. Click '☁️ Sync from Cloud' first to auto-detect your deployment URL, or enter it manually.",
+      );
+      return;
+    }
+
+    setCronSaving(true);
+    setCronError(null);
+    setCronSuccess(false);
+    try {
+      const res = await fetch("/api/cron-settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ baseUrl: cronBaseUrl, jobs: cronJobs }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setCronSuccess(true);
+        if (json.settings?.jobs) setCronJobs(json.settings.jobs);
+        // Refresh live status
+        await fetchCronSettings();
+        setTimeout(() => setCronSuccess(false), 3000);
+      } else {
+        setCronError(json.error || "Failed to sync cron jobs");
+      }
+    } catch (err) {
+      setCronError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setCronSaving(false);
+    }
+  };
+
+  const handleCronPull = async () => {
+    setCronPulling(true);
+    setCronError(null);
+    setCronSuccess(false);
+    try {
+      const res = await fetch("/api/cron-settings", { method: "PUT" });
+      const json = await res.json();
+      if (json.success) {
+        if (json.settings?.baseUrl) setCronBaseUrl(json.settings.baseUrl);
+        if (json.settings?.jobs) setCronJobs(json.settings.jobs);
+        if (json.liveStatus) setCronLiveStatus(json.liveStatus);
+        setCronSuccess(true);
+        setTimeout(() => setCronSuccess(false), 3000);
+      } else {
+        setCronError(json.error || "Failed to pull from cloud");
+      }
+    } catch (err) {
+      setCronError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setCronPulling(false);
+    }
+  };
+
   useEffect(() => {
     fetchSources();
     fetchSettings();
     fetchProxies();
-  }, [fetchSources, fetchSettings, fetchProxies]);
+    fetchCronSettings();
+  }, [fetchSources, fetchSettings, fetchProxies, fetchCronSettings]);
 
   const handleSignalSave = async () => {
     setSignalSaving(true);
@@ -2079,6 +2228,204 @@ export default function SettingsPage() {
               "💾 Save Signal Settings"
             )}
           </button>
+        </div>
+
+        {/* Cron Job Scheduler */}
+        <div className="card border-teal-700/50">
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-lg">⏰</span>
+            <h3 className="text-sm font-semibold text-slate-300">
+              Cron Job Scheduler
+            </h3>
+          </div>
+          <p className="text-xs text-slate-400 mb-4">
+            Configure cron-job.org to automatically trigger your API endpoints.
+            This ensures signals are checked, positions are monitored, and TP/SL
+            are placed even when you're not actively using the dashboard.
+          </p>
+
+          {/* Base URL */}
+          <div className="mb-4">
+            <label className="block text-sm text-slate-400 mb-1">
+              Deployment Base URL *
+            </label>
+            <input
+              type="url"
+              value={cronBaseUrl}
+              onChange={(e) => setCronBaseUrl(e.target.value)}
+              placeholder="https://your-app.vercel.app"
+              className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-teal-500 focus:outline-none"
+            />
+            <p className="text-xs text-slate-500 mt-1">
+              Your Vercel deployment URL (no trailing slash). Example:
+              https://copytrade.vercel.app
+            </p>
+          </div>
+
+          {/* Live Status */}
+          {cronLiveStatus.length > 0 && (
+            <div className="mb-4 bg-slate-800/50 border border-slate-700 rounded-lg p-3">
+              <p className="text-xs text-slate-400 font-semibold mb-2">
+                📊 Live Status (cron-job.org)
+              </p>
+              <div className="space-y-1.5">
+                {cronLiveStatus.map((job) => (
+                  <div
+                    key={job.type}
+                    className="flex items-center justify-between text-xs"
+                  >
+                    <span className="text-slate-300">
+                      {job.type === "signal-check"
+                        ? "🔍"
+                        : job.type === "position-monitor"
+                          ? "📊"
+                          : "🎯"}{" "}
+                      {job.type}
+                    </span>
+                    <span
+                      className={
+                        job.status === "active"
+                          ? "text-emerald-400"
+                          : "text-red-400"
+                      }
+                    >
+                      {job.status === "active" ? "✅ Active" : "❌ Missing"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Job configs */}
+          <div className="space-y-3 mb-4">
+            {cronJobs.map((job, idx) => {
+              const recommended = RECOMMENDED_SCHEDULES[job.type];
+              return (
+                <div
+                  key={job.type}
+                  className="bg-slate-800/50 border border-slate-700 rounded-lg p-3"
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <span>
+                        {job.type === "signal-check"
+                          ? "🔍"
+                          : job.type === "position-monitor"
+                            ? "📊"
+                            : "🎯"}
+                      </span>
+                      <span className="text-sm text-white font-medium">
+                        {job.title.replace("CopyTrade — ", "")}
+                      </span>
+                      {job.id && (
+                        <span className="text-[10px] text-slate-500 font-mono">
+                          ID: {job.id}
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => {
+                        const updated = [...cronJobs];
+                        updated[idx] = {
+                          ...updated[idx],
+                          enabled: !updated[idx].enabled,
+                        };
+                        setCronJobs(updated);
+                      }}
+                      className={`text-xs px-2 py-1 rounded border transition ${
+                        job.enabled
+                          ? "border-emerald-700/50 text-emerald-400 bg-emerald-900/20"
+                          : "border-slate-600 text-slate-500 bg-slate-800"
+                      }`}
+                    >
+                      {job.enabled ? "✅ On" : "⏸ Off"}
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs text-slate-500 mb-1">
+                        Endpoint
+                      </label>
+                      <code className="text-xs text-slate-400 bg-slate-900 px-2 py-1 rounded block">
+                        {job.url}
+                      </code>
+                    </div>
+                    <div>
+                      <label className="block text-xs text-slate-500 mb-1">
+                        Interval (minutes)
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="1440"
+                        value={job.schedule.minutes}
+                        onChange={(e) => {
+                          const updated = [...cronJobs];
+                          updated[idx] = {
+                            ...updated[idx],
+                            schedule: {
+                              ...updated[idx].schedule,
+                              minutes: parseInt(e.target.value) || 5,
+                            },
+                          };
+                          setCronJobs(updated);
+                        }}
+                        className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-white focus:border-teal-500 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                  {recommended && (
+                    <p className="text-[10px] text-teal-400/70 mt-1.5">
+                      💡 Recommended: {recommended.label} —{" "}
+                      {recommended.description}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {cronError && (
+            <div className="bg-red-900/30 border border-red-700/50 rounded-lg px-4 py-3 text-sm text-red-300 mb-3">
+              ⚠️ {cronError}
+            </div>
+          )}
+          {cronSuccess && (
+            <div className="bg-emerald-900/30 border border-emerald-700/50 rounded-lg px-4 py-3 text-sm text-emerald-300 mb-3">
+              ✅ Cron jobs synced successfully!
+            </div>
+          )}
+          <div className="flex flex-wrap gap-3">
+            <button
+              onClick={handleCronSave}
+              disabled={cronSaving || !cronBaseUrl}
+              className="bg-teal-600 hover:bg-teal-700 disabled:opacity-50 px-6 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2"
+            >
+              {cronSaving ? (
+                <>
+                  <div className="spinner w-4 h-4 border-2" /> Syncing to
+                  cron-job.org...
+                </>
+              ) : (
+                "💾 Save & Sync Cron Jobs"
+              )}
+            </button>
+            <button
+              onClick={handleCronPull}
+              disabled={cronPulling}
+              className="bg-slate-600 hover:bg-slate-500 disabled:opacity-50 px-6 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2"
+            >
+              {cronPulling ? (
+                <>
+                  <div className="spinner w-4 h-4 border-2" /> Pulling from
+                  cloud...
+                </>
+              ) : (
+                "☁️ Sync from Cloud"
+              )}
+            </button>
+          </div>
         </div>
 
         {/* Danger Zone — Reset All */}

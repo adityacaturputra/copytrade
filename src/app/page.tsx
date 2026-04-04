@@ -193,6 +193,22 @@ export default function Dashboard() {
     } catch {}
   }, []);
 
+  // Check cron setup on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/cron-settings");
+        const json = await res.json();
+        if (json.success && json.setupCheck && !json.setupCheck.allConfigured) {
+          setCronWarning({
+            allConfigured: false,
+            missing: json.setupCheck.missing,
+          });
+        }
+      } catch {}
+    })();
+  }, []);
+
   useEffect(() => {
     fetchData();
     fetchCronStatus();
@@ -206,6 +222,10 @@ export default function Dashboard() {
 
   const [showCronMenu, setShowCronMenu] = useState(false);
   const cronMenuRef = useRef<HTMLDivElement>(null);
+  const [cronWarning, setCronWarning] = useState<{
+    allConfigured: boolean;
+    missing: string[];
+  } | null>(null);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -408,6 +428,17 @@ export default function Dashboard() {
                   {tradingMode === "auto" ? "🤖" : "👆"}
                 </span>
               </div>
+
+              {/* Cron Status Warning */}
+              {cronWarning && (
+                <a
+                  href="/settings"
+                  className="bg-amber-600/20 border border-amber-600/40 hover:bg-amber-600/30 px-2 py-1.5 rounded-lg text-xs transition flex items-center gap-1 text-amber-300"
+                  title={`${cronWarning.missing.length} cron job(s) not configured. Click to set up.`}
+                >
+                  ⏰ <span className="hidden sm:inline">Setup Cron</span>
+                </a>
+              )}
 
               {/* Cron Actions Dropdown */}
               <div className="relative" ref={cronMenuRef}>
