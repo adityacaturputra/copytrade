@@ -368,38 +368,44 @@ export default function Dashboard() {
     <div className="min-h-screen">
       {/* Header */}
       <header className="border-b border-slate-700 bg-dark-100 sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-3 sm:py-4">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="text-2xl">📈</div>
+            <div className="flex items-center gap-2 sm:gap-3">
+              <div className="text-xl sm:text-2xl">📈</div>
               <div>
-                <h1 className="text-xl font-bold text-white">CopyTrade</h1>
-                <p className="text-xs text-slate-400">
+                <h1 className="text-lg sm:text-xl font-bold text-white">
+                  CopyTrade
+                </h1>
+                <p className="text-[10px] sm:text-xs text-slate-400 hidden sm:block">
                   AI-Powered Discord Signal Copier
                 </p>
               </div>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1.5 sm:gap-3">
               {/* Trading Mode Toggle */}
-              <div className="flex items-center gap-2 bg-slate-800 rounded-lg px-3 py-2">
-                <span className="text-xs text-slate-400">Mode:</span>
+              <div className="flex items-center gap-1.5 sm:gap-2 bg-slate-800 rounded-lg px-2 sm:px-3 py-1.5 sm:py-2">
+                <span className="text-[10px] sm:text-xs text-slate-400 hidden sm:inline">
+                  Mode:
+                </span>
                 <button
                   onClick={toggleMode}
                   disabled={switchingMode}
-                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                  className={`relative inline-flex h-5 w-9 sm:h-6 sm:w-11 items-center rounded-full transition-colors ${
                     tradingMode === "auto" ? "bg-green-600" : "bg-slate-600"
                   }`}
                 >
                   <span
-                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                      tradingMode === "auto" ? "translate-x-6" : "translate-x-1"
+                    className={`inline-block h-3.5 w-3.5 sm:h-4 sm:w-4 transform rounded-full bg-white transition-transform ${
+                      tradingMode === "auto"
+                        ? "translate-x-4 sm:translate-x-6"
+                        : "translate-x-1"
                     }`}
                   />
                 </button>
                 <span
-                  className={`text-xs font-semibold ${tradingMode === "auto" ? "text-green-400" : "text-amber-400"}`}
+                  className={`text-[10px] sm:text-xs font-semibold ${tradingMode === "auto" ? "text-green-400" : "text-amber-400"}`}
                 >
-                  {tradingMode === "auto" ? "🤖 AUTO" : "👆 MANUAL"}
+                  {tradingMode === "auto" ? "🤖" : "👆"}
                 </span>
               </div>
 
@@ -407,9 +413,9 @@ export default function Dashboard() {
               <div className="relative" ref={cronMenuRef}>
                 <button
                   onClick={() => setShowCronMenu(!showCronMenu)}
-                  className="bg-primary-600 hover:bg-primary-700 px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2"
+                  className="bg-primary-600 hover:bg-primary-700 px-2.5 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition flex items-center gap-1 sm:gap-2"
                 >
-                  ⚡ Actions
+                  ⚡ <span className="hidden sm:inline">Actions</span>
                   <svg
                     className="w-3 h-3"
                     fill="currentColor"
@@ -419,14 +425,14 @@ export default function Dashboard() {
                   </svg>
                 </button>
                 {showCronMenu && (
-                  <div className="absolute right-0 mt-2 w-56 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-20 overflow-hidden">
+                  <div className="absolute right-0 mt-2 w-52 sm:w-56 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-20 overflow-hidden">
                     <button
                       onClick={() => {
                         triggerCron("signal-check");
                         setShowCronMenu(false);
                       }}
                       disabled={triggeringCron === "signal-check"}
-                      className="w-full text-left px-4 py-3 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center gap-3 text-sm"
+                      className="w-full text-left px-3 sm:px-4 py-2.5 sm:py-3 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center gap-2 sm:gap-3 text-sm"
                     >
                       {triggeringCron === "signal-check" ? (
                         <div className="spinner w-4 h-4 border-2" />
@@ -448,7 +454,7 @@ export default function Dashboard() {
                         setShowCronMenu(false);
                       }}
                       disabled={triggeringCron === "position-monitor"}
-                      className="w-full text-left px-4 py-3 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center gap-3 text-sm border-t border-slate-700/50"
+                      className="w-full text-left px-3 sm:px-4 py-2.5 sm:py-3 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center gap-2 sm:gap-3 text-sm border-t border-slate-700/50"
                     >
                       {triggeringCron === "position-monitor" ? (
                         <div className="spinner w-4 h-4 border-2" />
@@ -470,7 +476,7 @@ export default function Dashboard() {
                         setShowCronMenu(false);
                       }}
                       disabled={triggeringCron === "tp-sl-monitor"}
-                      className="w-full text-left px-4 py-3 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center gap-3 text-sm border-t border-slate-700/50"
+                      className="w-full text-left px-3 sm:px-4 py-2.5 sm:py-3 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center gap-2 sm:gap-3 text-sm border-t border-slate-700/50"
                     >
                       {triggeringCron === "tp-sl-monitor" ? (
                         <div className="spinner w-4 h-4 border-2" />
@@ -491,19 +497,19 @@ export default function Dashboard() {
               </div>
               <a
                 href="/agent"
-                className="bg-purple-700 hover:bg-purple-600 px-3 py-2 rounded-lg text-sm transition flex items-center gap-1"
+                className="bg-purple-700 hover:bg-purple-600 px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm transition flex items-center gap-1"
               >
-                🤖 Agent
+                🤖 <span className="hidden sm:inline">Agent</span>
               </a>
               <a
                 href="/settings"
-                className="bg-slate-700 hover:bg-slate-600 px-3 py-2 rounded-lg text-sm transition"
+                className="bg-slate-700 hover:bg-slate-600 px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm transition"
               >
                 ⚙️
               </a>
               <button
                 onClick={fetchData}
-                className="bg-slate-700 hover:bg-slate-600 px-3 py-2 rounded-lg text-sm transition"
+                className="bg-slate-700 hover:bg-slate-600 px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm transition"
               >
                 🔄
               </button>
@@ -550,25 +556,30 @@ export default function Dashboard() {
 
         {/* Exchange Connection Status */}
         <div
-          className={`rounded-lg px-4 py-3 flex items-center gap-3 ${
+          className={`rounded-lg px-3 sm:px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 ${
             data?.account
               ? "bg-slate-800/50 border border-slate-700"
               : "bg-red-900/30 border border-red-700/50"
           }`}
         >
-          <div className="flex items-center gap-2">
-            <span
-              className={`w-3 h-3 rounded-full ${data?.account ? "bg-green-500 pulse-dot" : "bg-red-500 animate-pulse"}`}
-            />
-            <span className="text-sm font-medium">
-              Exchange:{" "}
-              <span className="text-white uppercase">
-                {data?.exchangeProvider || "unknown"}
+          <div className="flex items-center justify-between sm:justify-start gap-2">
+            <div className="flex items-center gap-2">
+              <span
+                className={`w-3 h-3 rounded-full shrink-0 ${data?.account ? "bg-green-500 pulse-dot" : "bg-red-500 animate-pulse"}`}
+              />
+              <span className="text-sm font-medium">
+                Exchange:{" "}
+                <span className="text-white uppercase">
+                  {data?.exchangeProvider || "unknown"}
+                </span>
               </span>
-            </span>
+            </div>
+            {data?.exchangeProvider === "okx" && (
+              <span className="badge badge-warning sm:ml-0">DEMO MODE</span>
+            )}
           </div>
           {data?.account ? (
-            <div className="flex items-center gap-4 ml-4 text-sm">
+            <div className="flex flex-wrap items-center gap-2 sm:gap-4 sm:ml-4 text-xs sm:text-sm">
               <span>
                 Balance:{" "}
                 <span className="text-white font-mono font-bold">
@@ -596,7 +607,7 @@ export default function Dashboard() {
               )}
             </div>
           ) : (
-            <div className="ml-4 text-sm">
+            <div className="sm:ml-4 text-xs sm:text-sm">
               <span className="text-red-300">
                 ⚠️{" "}
                 {data?.exchangeError?.toLowerCase().includes("ip whitelist")
@@ -611,9 +622,6 @@ export default function Dashboard() {
               </span>
             </div>
           )}
-          {data?.exchangeProvider === "okx" && (
-            <span className="ml-auto badge badge-warning">DEMO MODE</span>
-          )}
         </div>
 
         {/* Cron Status Panel */}
@@ -626,7 +634,7 @@ export default function Dashboard() {
         )}
 
         {/* Stats Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2 sm:gap-4">
           <StatCard
             label="Total Signals"
             value={stats.totalMessages.toString()}
@@ -805,7 +813,7 @@ export default function Dashboard() {
         <div className="card">
           {/* Channel Filter */}
           {channelIdArray.length > 0 && (
-            <div className="flex items-center gap-3 mb-4 pb-3 border-b border-slate-700/50">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 mb-4 pb-3 border-b border-slate-700/50">
               <span className="text-xs text-slate-400 uppercase tracking-wider font-medium">
                 📺 Channel Filter:
               </span>
@@ -852,16 +860,16 @@ export default function Dashboard() {
             </div>
           )}
 
-          <div className="flex border-b border-slate-700 mb-4">
+          <div className="flex overflow-x-auto -mx-4 sm:mx-0 px-4 sm:px-0 border-b border-slate-700 mb-4 gap-0 scrollbar-hide">
             <button
               onClick={() => setActiveTab("drafts")}
-              className={`px-4 py-2 text-sm font-medium border-b-2 transition flex items-center gap-1 ${
+              className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium border-b-2 transition flex items-center gap-1 whitespace-nowrap ${
                 activeTab === "drafts"
                   ? "border-primary-500 text-primary-400"
                   : "border-transparent text-slate-400 hover:text-slate-300"
               }`}
             >
-              📝 Draft Trades
+              📝 Drafts
               {data?.pendingDrafts && data.pendingDrafts.length > 0 && (
                 <span className="bg-primary-600 text-white text-xs font-bold px-1.5 py-0.5 rounded-full">
                   {data.pendingDrafts.length}
@@ -870,17 +878,17 @@ export default function Dashboard() {
             </button>
             <button
               onClick={() => setActiveTab("positions")}
-              className={`px-4 py-2 text-sm font-medium border-b-2 transition ${
+              className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium border-b-2 transition whitespace-nowrap ${
                 activeTab === "positions"
                   ? "border-primary-500 text-primary-400"
                   : "border-transparent text-slate-400 hover:text-slate-300"
               }`}
             >
-              📊 All Positions
+              📊 Positions
             </button>
             <button
               onClick={() => setActiveTab("signals")}
-              className={`px-4 py-2 text-sm font-medium border-b-2 transition ${
+              className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium border-b-2 transition whitespace-nowrap ${
                 activeTab === "signals"
                   ? "border-primary-500 text-primary-400"
                   : "border-transparent text-slate-400 hover:text-slate-300"
@@ -890,7 +898,7 @@ export default function Dashboard() {
             </button>
             <button
               onClick={() => setActiveTab("logs")}
-              className={`px-4 py-2 text-sm font-medium border-b-2 transition ${
+              className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium border-b-2 transition whitespace-nowrap ${
                 activeTab === "logs"
                   ? "border-primary-500 text-primary-400"
                   : "border-transparent text-slate-400 hover:text-slate-300"
@@ -1150,51 +1158,34 @@ function DraftCard({
       >
         <button
           onClick={() => setIsExpanded(true)}
-          className="w-full px-4 py-3 flex items-center justify-between text-left hover:brightness-110 transition"
+          className="w-full px-3 sm:px-4 py-3 flex items-center justify-between text-left hover:brightness-110 transition gap-2"
         >
-          <div className="flex items-center gap-2">
-            <span>{resolvedStyle.icon}</span>
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 min-w-0">
+            <span className="shrink-0">{resolvedStyle.icon}</span>
             <span
-              className={`badge ${draft.side === "LONG" ? "badge-success" : "badge-danger"}`}
+              className={`badge shrink-0 ${draft.side === "LONG" ? "badge-success" : "badge-danger"}`}
             >
               {draft.action}
             </span>
             <span className="font-medium text-white">{draft.symbol}</span>
-            {orderType && (
-              <span
-                className={`text-xs px-1.5 py-0.5 rounded ${orderType === "limit" ? "bg-purple-700/50 text-purple-300" : "bg-blue-700/50 text-blue-300"}`}
-              >
-                {orderType === "limit" ? "📌 Limit" : "⚡ Market"}
-              </span>
-            )}
-            <span className="badge badge-warning">{draft.leverage}x</span>
+            <span className="badge badge-warning shrink-0">
+              {draft.leverage}x
+            </span>
             {draft.entryPrice && (
-              <span className="text-xs text-slate-400">
+              <span className="text-xs text-slate-400 hidden sm:inline">
                 Entry:{" "}
                 <span className="font-mono text-slate-300">
                   {draft.entryPrice}
                 </span>
               </span>
             )}
-            {draft.stopLoss && (
-              <span className="text-xs text-slate-400">
-                SL:{" "}
-                <span className="font-mono text-danger">{draft.stopLoss}</span>
-              </span>
-            )}
-            {draft.takeProfitTargets && draft.takeProfitTargets.length > 0 && (
-              <span className="text-xs text-slate-400">
-                TP:{" "}
-                <span className="font-mono text-success">
-                  {draft.takeProfitTargets.join(", ")}
-                </span>
-              </span>
-            )}
           </div>
-          <div className="flex items-center gap-3">
-            <span className="text-xs text-slate-500">by @{draft.author}</span>
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+            <span className="text-xs text-slate-500 hidden sm:inline">
+              by @{draft.author}
+            </span>
             {draft.resolvedAt && (
-              <span className="text-xs text-slate-500">
+              <span className="text-xs text-slate-500 hidden sm:inline">
                 {new Date(draft.resolvedAt).toLocaleString()}
               </span>
             )}
@@ -1215,17 +1206,17 @@ function DraftCard({
       }`}
     >
       {/* Header */}
-      <div className="p-4">
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex-1">
-            <div className="flex items-center gap-2 mb-2">
+      <div className="p-3 sm:p-4">
+        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 sm:gap-4">
+          <div className="flex-1 min-w-0">
+            <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 mb-2">
               {!isPending && <span>{resolvedStyle.icon}</span>}
               <span
                 className={`badge ${draft.side === "LONG" ? "badge-success" : "badge-danger"}`}
               >
                 {draft.action}
               </span>
-              <span className="text-lg font-bold text-white">
+              <span className="text-base sm:text-lg font-bold text-white">
                 {draft.symbol}
               </span>
               <span className="badge badge-warning">{draft.leverage}x</span>
@@ -1301,11 +1292,11 @@ function DraftCard({
             {/* RR Editor — shown when no TP but has entry + SL */}
             {canCalcTPFromRR && isPending && (
               <div className="rounded-lg p-3 mb-3 text-xs bg-blue-900/20 border border-blue-700/30">
-                <div className="flex items-center gap-3 mb-2">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 mb-2">
                   <span className="font-semibold text-blue-300">
                     📐 No TP — Set RR (Risk-Reward)
                   </span>
-                  <div className="flex items-center gap-1">
+                  <div className="flex flex-wrap items-center gap-1">
                     {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((rr) => (
                       <button
                         key={rr}
@@ -1408,21 +1399,16 @@ function DraftCard({
             )}
 
             {/* Author & Time */}
-            <div className="flex items-center gap-3 text-xs text-slate-500">
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-xs text-slate-500">
               <span>👤 @{draft.author}</span>
               {draft.discordTimestamp ? (
                 <span className="text-blue-400">
-                  💬 Discord:{" "}
-                  {new Date(draft.discordTimestamp).toLocaleString()}
+                  💬 {new Date(draft.discordTimestamp).toLocaleString()}
                 </span>
               ) : null}
-              <span>
-                🕐 Drafted: {new Date(draft.createdAt).toLocaleString()}
-              </span>
+              <span>🕐 {new Date(draft.createdAt).toLocaleString()}</span>
               {draft.resolvedAt && !isPending && (
-                <span>
-                  ✅ Resolved: {new Date(draft.resolvedAt).toLocaleString()}
-                </span>
+                <span>✅ {new Date(draft.resolvedAt).toLocaleString()}</span>
               )}
               {draft.messageUrl && (
                 <a
@@ -1431,21 +1417,21 @@ function DraftCard({
                   rel="noopener noreferrer"
                   className="text-primary-400 hover:text-primary-300 underline"
                 >
-                  🔗 Discord Message
+                  🔗 Discord
                 </a>
               )}
               <button
                 onClick={() => setShowDetails(!showDetails)}
                 className="text-slate-400 hover:text-white transition"
               >
-                {showDetails ? "▼ Hide" : "▶ Show"} original message
+                {showDetails ? "▼ Hide" : "▶ Show"} original
               </button>
             </div>
           </div>
 
           {/* Action Buttons — only for pending */}
           {isPending && (
-            <div className="flex flex-col gap-2 min-w-[120px]">
+            <div className="flex sm:flex-col gap-2 sm:min-w-[120px]">
               <button
                 onClick={() =>
                   onAccept(
@@ -1455,7 +1441,7 @@ function DraftCard({
                   )
                 }
                 disabled={acting}
-                className="bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold px-4 py-2 rounded-lg text-sm transition flex items-center justify-center gap-1"
+                className="flex-1 sm:flex-none bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold px-4 py-2 rounded-lg text-sm transition flex items-center justify-center gap-1"
               >
                 {acting ? <div className="spinner w-4 h-4 border-2" /> : "✅"}
                 Accept{canCalcTPFromRR ? ` (${customRR}RR)` : ""}
@@ -1463,7 +1449,7 @@ function DraftCard({
               <button
                 onClick={() => onReject(draft._id, "reject")}
                 disabled={acting}
-                className="bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold px-4 py-2 rounded-lg text-sm transition flex items-center justify-center gap-1"
+                className="flex-1 sm:flex-none bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold px-4 py-2 rounded-lg text-sm transition flex items-center justify-center gap-1"
               >
                 ❌ Reject
               </button>
@@ -1472,7 +1458,7 @@ function DraftCard({
 
           {/* Collapse button for resolved */}
           {isResolved && (
-            <div className="flex flex-col gap-2 min-w-[120px]">
+            <div className="flex flex-col gap-2 sm:min-w-[120px]">
               <button
                 onClick={() => setIsExpanded(false)}
                 className="bg-slate-700 hover:bg-slate-600 text-white font-semibold px-4 py-2 rounded-lg text-sm transition flex items-center justify-center gap-1"

@@ -239,20 +239,23 @@ export default function AgentChatPage() {
     <div className="flex flex-col h-screen">
       {/* Header */}
       <header className="border-b border-slate-700 bg-dark-100 shrink-0">
-        <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <a href="/" className="text-slate-400 hover:text-white transition">
-              ← Dashboard
+        <div className="max-w-5xl mx-auto px-3 sm:px-4 py-2 sm:py-3 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <a
+              href="/"
+              className="text-slate-400 hover:text-white transition text-sm shrink-0"
+            >
+              ← <span className="hidden sm:inline">Dashboard</span>
             </a>
-            <div className="w-px h-6 bg-slate-700" />
-            <div className="flex items-center gap-2">
-              <span className="text-2xl">🤖</span>
-              <div>
-                <h1 className="text-lg font-bold text-white">
+            <div className="w-px h-5 sm:h-6 bg-slate-700" />
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-xl sm:text-2xl shrink-0">🤖</span>
+              <div className="min-w-0">
+                <h1 className="text-base sm:text-lg font-bold text-white truncate">
                   AI Trading Agent
                 </h1>
-                <p className="text-xs text-slate-400">
-                  Real-time streaming • Agentic AI with exchange access
+                <p className="text-[10px] sm:text-xs text-slate-400 truncate">
+                  Real-time streaming • Agentic AI
                 </p>
               </div>
             </div>

@@ -553,30 +553,32 @@ export default function SettingsPage() {
   return (
     <div className="min-h-screen">
       <header className="border-b border-slate-700 bg-dark-100 sticky top-0 z-10">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
+        <div className="max-w-5xl mx-auto px-3 sm:px-6 lg:px-8 py-3 sm:py-4">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
               <a
                 href="/"
-                className="text-slate-400 hover:text-white transition"
+                className="text-slate-400 hover:text-white transition text-sm shrink-0"
               >
-                ← Dashboard
+                ← <span className="hidden sm:inline">Dashboard</span>
               </a>
-              <div className="w-px h-6 bg-slate-700" />
-              <h1 className="text-xl font-bold text-white">⚙️ Settings</h1>
+              <div className="w-px h-5 sm:h-6 bg-slate-700" />
+              <h1 className="text-base sm:text-xl font-bold text-white truncate">
+                ⚙️ Settings
+              </h1>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
               <button
                 onClick={() => checkHealth()}
                 disabled={checkingHealth !== null}
-                className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2"
+                className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 px-2 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition flex items-center gap-1 sm:gap-2"
               >
                 {checkingHealth === "all" ? (
                   <div className="spinner w-4 h-4 border-2" />
                 ) : (
                   "🩺"
                 )}
-                Check All Health
+                <span className="hidden sm:inline">Check All Health</span>
               </button>
               <button
                 onClick={() => {
@@ -585,9 +587,9 @@ export default function SettingsPage() {
                   setShowForm(true);
                   setFormError(null);
                 }}
-                className="bg-primary-600 hover:bg-primary-700 px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2"
+                className="bg-primary-600 hover:bg-primary-700 px-2 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition flex items-center gap-1 sm:gap-2"
               >
-                ➕ Add Source
+                ➕ <span className="hidden sm:inline">Add Source</span>
               </button>
             </div>
           </div>
@@ -852,8 +854,8 @@ export default function SettingsPage() {
                         : "border-slate-700"
                   }`}
                 >
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex-1">
+                  <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 sm:gap-4">
+                    <div className="flex-1 min-w-0">
                       {/* Header */}
                       <div className="flex items-center gap-2 mb-2">
                         <span
@@ -989,7 +991,7 @@ export default function SettingsPage() {
                     </div>
 
                     {/* Actions */}
-                    <div className="flex flex-col gap-2 min-w-[140px]">
+                    <div className="flex flex-row sm:flex-col gap-2 sm:min-w-[140px] flex-wrap">
                       <button
                         onClick={() =>
                           handleToggleActive(source, !source.isActive)
