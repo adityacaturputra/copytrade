@@ -817,7 +817,7 @@ export async function executeSignal(
         }
       }
 
-      const sl = signal.stopLoss;
+      const sl = effectiveSL;
 
       // Place ALL TP targets on the exchange (not just the first one)
       // Split quantity evenly across TP levels, giving remainder to the last TP
@@ -898,7 +898,7 @@ export async function executeSignal(
         quantity: orderResult.quantity || orderQuantity,
         leverage: orderLeverage,
         takeProfitTargets: tpTargetObjects,
-        stopLossPrice: signal.stopLoss || undefined,
+        stopLossPrice: effectiveSL || undefined,
         orderId: orderResult.orderId,
         status: positionStatus,
         channelId: channelId || undefined,

@@ -378,18 +378,43 @@ export async function POST(
         const allTps = draft.takeProfitTargets || [];
         const sl = draft.stopLoss;
 
-        // Place ALL TP targets on the exchange
-        for (const tp of allTps) {
+        // Split quantity evenly across TP levels (same logic as executor)
+        const tpQuantities: number[] = [];
+        if (allTps.length > 0) {
+          const precision = 4;
+          const multiplier = Math.pow(10, precision);
+          const totalUnits = Math.round(filledQty * multiplier);
+          const baseUnits = Math.floor(totalUnits / allTps.length);
+
+          let allocated = 0;
+          for (let i = 0; i < allTps.length; i++) {
+            if (i === allTps.length - 1) {
+              tpQuantities.push(
+                Math.round((filledQty - allocated) * multiplier) / multiplier,
+              );
+            } else {
+              const qty = baseUnits / multiplier;
+              tpQuantities.push(qty);
+              allocated =
+                Math.round((allocated + qty) * multiplier) / multiplier;
+            }
+          }
+        }
+
+        // Place ALL TP targets on the exchange with split quantities
+        for (let i = 0; i < allTps.length; i++) {
+          const tp = allTps[i];
+          const tpQty = tpQuantities[i];
           try {
             const tpId = await exchange.placeTakeProfit(
               draft.symbol,
               tp,
               tp,
               closeSide,
-              filledQty,
+              tpQty,
             );
             console.log(
-              `[${requestId}] 🎯 Take Profit set at ${tp} (plan order ${tpId})`,
+              `[${requestId}] 🎯 Take Profit ${i + 1}/${allTps.length} set at ${tp} (qty: ${tpQty}/${filledQty}, plan order ${tpId})`,
             );
           } catch (tpErr) {
             console.warn(
