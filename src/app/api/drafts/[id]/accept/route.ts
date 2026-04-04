@@ -418,7 +418,13 @@ export async function POST(
         }
 
         // Save position
-        console.log(`[${requestId}] 💾 Saving position to database...`);
+        // For LIMIT orders, use "pending" status since the order may not be filled yet
+        // The monitor will detect when the order fills and update to "open"
+        const positionStatus = orderType === "LIMIT" ? "pending" : "open";
+
+        console.log(
+          `[${requestId}] 💾 Saving position to database (status: ${positionStatus})...`,
+        );
         try {
           position = await Position.create({
             symbol: draft.symbol,
@@ -432,7 +438,7 @@ export async function POST(
             ),
             stopLossPrice: draft.stopLoss || undefined,
             orderId: orderResult.orderId,
-            status: "open",
+            status: positionStatus,
             channelId: draft.channelId || undefined,
             messageId: draft.messageId,
             signalData: draft.signalData,

@@ -592,7 +592,9 @@ export async function executeSignal(
     case "SELL": {
       // ─── Max positions check ─────────────────────────────────────────
       if (riskCfg.maxPositions > 0) {
-        const openCount = await Position.countDocuments({ status: "open" });
+        const openCount = await Position.countDocuments({
+          status: { $in: ["open", "pending"] },
+        });
         if (openCount >= riskCfg.maxPositions) {
           console.warn(
             `🚫 Max positions reached (${openCount}/${riskCfg.maxPositions}) — skipping ${signal.action} ${signal.symbol}`,
@@ -885,6 +887,10 @@ export async function executeSignal(
       const tpTargetObjects = buildTPTargets(tpTargets, filledQty);
 
       // Save position to DB
+      // For LIMIT orders, use "pending" status since the order may not be filled yet
+      // The monitor will detect when the order fills and update to "open"
+      const positionStatus = orderType === "LIMIT" ? "pending" : "open";
+
       const position = await Position.create({
         symbol: signal.symbol,
         side,
@@ -894,7 +900,7 @@ export async function executeSignal(
         takeProfitTargets: tpTargetObjects,
         stopLossPrice: signal.stopLoss || undefined,
         orderId: orderResult.orderId,
-        status: "open",
+        status: positionStatus,
         channelId: channelId || undefined,
         sourceName: sourceName || undefined,
         messageId,
@@ -902,7 +908,7 @@ export async function executeSignal(
       });
 
       console.log(
-        `✅ Opened ${side} position: ${signal.symbol} @ ${entryPrice || "market"}`,
+        `✅ ${orderType === "LIMIT" ? "Placed limit order for" : "Opened"} ${side} position: ${signal.symbol} @ ${entryPrice || "market"} (status: ${positionStatus})`,
       );
       return position;
     }

@@ -59,7 +59,7 @@ export interface IPosition extends Document {
   stopLossPrice?: number;
   orderId?: string;
   pnl: number;
-  status: "open" | "closed";
+  status: "pending" | "open" | "closed";
   channelId?: string;
   sourceName?: string;
   messageId?: string;
@@ -199,7 +199,11 @@ const PositionSchema = new Schema<IPosition>(
     stopLossPrice: { type: Number, default: null },
     orderId: { type: String, default: null },
     pnl: { type: Number, default: 0 },
-    status: { type: String, enum: ["open", "closed"], default: "open" },
+    status: {
+      type: String,
+      enum: ["pending", "open", "closed"],
+      default: "open",
+    },
     channelId: { type: String, default: null },
     sourceName: { type: String, default: null },
     messageId: { type: String, default: null },

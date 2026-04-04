@@ -41,6 +41,11 @@ export async function GET(request: NextRequest) {
       exchangeError = msg;
     }
 
+    // Fetch pending positions (limit orders waiting to fill)
+    const pendingPositions = await Position.find({ status: "pending" })
+      .sort({ createdAt: -1 })
+      .lean();
+
     const [
       stats,
       openPositions,
@@ -73,15 +78,20 @@ export async function GET(request: NextRequest) {
         ...(recentDrafts || []).map((d: any) => d.channelId).filter(Boolean),
         ...(allPositions || []).map((p: any) => p.channelId).filter(Boolean),
         ...(recentMessages || []).map((m: any) => m.channelId).filter(Boolean),
-      ])
+      ]),
     );
     let channelNames: Record<string, string> = {};
     try {
-      const sources = await import("@/lib/database").then((m) => m.getAllDiscordSources());
+      const sources = await import("@/lib/database").then((m) =>
+        m.getAllDiscordSources(),
+      );
       const nameMap = await fetchChannelNames(allUsedChannelIds, sources);
       channelNames = Object.fromEntries(nameMap);
     } catch (err) {
-      console.warn("Failed to resolve channel names:", err instanceof Error ? err.message : err);
+      console.warn(
+        "Failed to resolve channel names:",
+        err instanceof Error ? err.message : err,
+      );
     }
 
     // Enrich open positions with real-time exchange data (current price, PnL)
@@ -199,6 +209,9 @@ export async function GET(request: NextRequest) {
         pendingDrafts: channelFilter
           ? pendingDrafts.filter(chFilter)
           : pendingDrafts,
+        pendingPositions: channelFilter
+          ? pendingPositions.filter(chFilter)
+          : pendingPositions,
         recentDrafts: channelFilter
           ? recentDrafts.filter(chFilter)
           : recentDrafts,

@@ -133,6 +133,7 @@ interface DashboardData {
   exchangeProvider: string | null;
   exchangeError: string | null;
   openPositions: Position[];
+  pendingPositions: Position[];
   recentMessages: Message[];
   recentLogs: Log[];
   allPositions: Position[];
@@ -641,6 +642,81 @@ export default function Dashboard() {
                 </tbody>
               </table>
             </div>
+          </div>
+        )}
+
+        {/* Pending Limit Orders */}
+        {data?.pendingPositions && data.pendingPositions.length > 0 && (
+          <div className="card border-amber-700/30">
+            <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+              <span className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" />
+              <span className="text-amber-400">Pending Limit Orders</span>
+              <span className="text-sm font-normal text-slate-400">
+                ({data.pendingPositions.length} waiting to fill)
+              </span>
+            </h2>
+            <div className="overflow-x-auto">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Symbol</th>
+                    <th>Side</th>
+                    <th>Limit Price</th>
+                    <th>Qty</th>
+                    <th>Leverage</th>
+                    <th>TP</th>
+                    <th>SL</th>
+                    <th>Status</th>
+                    <th>Created</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.pendingPositions.map((pos) => (
+                    <tr key={pos._id || pos.id} className="opacity-80">
+                      <td className="font-medium">{pos.symbol}</td>
+                      <td>
+                        <span
+                          className={`badge ${pos.side === "LONG" ? "badge-success" : "badge-danger"}`}
+                        >
+                          {pos.side}
+                        </span>
+                      </td>
+                      <td className="font-mono">
+                        {pos.entryPrice?.toFixed(2)}
+                      </td>
+                      <td>{pos.quantity}</td>
+                      <td>{pos.leverage}x</td>
+                      <td className="text-success">
+                        {pos.takeProfitTargets
+                          ?.filter((t: any) => t.status === "pending")
+                          .map(
+                            (t: any, i: number) =>
+                              `TP${i + 1}: ${t.price.toFixed(2)}`,
+                          )
+                          .join(", ") || "-"}
+                      </td>
+                      <td className="text-danger">
+                        {pos.stopLossPrice?.toFixed(2) || "-"}
+                      </td>
+                      <td>
+                        <span className="inline-flex items-center gap-1.5 badge badge-warning">
+                          <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" />
+                          Pending
+                        </span>
+                      </td>
+                      <td className="text-slate-400 text-xs">
+                        {new Date(pos.openedAt).toLocaleString()}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="text-xs text-slate-500 mt-3">
+              ⏳ These limit orders are placed on the exchange and waiting for
+              the price to reach the entry level. SL and TP are already set on
+              the exchange.
+            </p>
           </div>
         )}
 
