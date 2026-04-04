@@ -91,6 +91,61 @@ function autoCalculateSLFromRR(
 }
 
 /**
+ * Split a total quantity evenly across multiple TP levels,
+ * respecting the exchange's lot size and quantity decimals.
+ *
+ * Each allocation is rounded down to the nearest lotSz multiple,
+ * and the last level gets the remainder so the total is exact.
+ *
+ * @param totalQty  - Total filled quantity to split
+ * @param numLevels - Number of TP levels
+ * @param getSpecs  - Async function returning instrument specs (lotSz, qtyDecimals)
+ * @returns Array of quantities, one per TP level
+ */
+async function splitQuantityForTPs(
+  totalQty: number,
+  numLevels: number,
+  getSpecs: () => Promise<{ lotSz: number; qtyDecimals: number }>,
+): Promise<number[]> {
+  if (numLevels <= 0) return [];
+  if (numLevels === 1) return [totalQty];
+
+  let lotSz = 1;
+  let qtyDecimals = 4;
+  try {
+    const specs = await getSpecs();
+    lotSz = specs.lotSz;
+    qtyDecimals = specs.qtyDecimals;
+  } catch {
+    // Fallback to defaults
+  }
+
+  const mult = Math.pow(10, qtyDecimals);
+  const totalUnits = Math.round(totalQty * mult);
+  const lotUnits = Math.max(1, Math.round(lotSz * mult));
+  const baseLotUnits =
+    Math.floor(Math.floor(totalUnits / numLevels) / lotUnits) * lotUnits;
+
+  const quantities: number[] = [];
+  let allocated = 0;
+
+  for (let i = 0; i < numLevels; i++) {
+    if (i === numLevels - 1) {
+      quantities.push((totalUnits - allocated) / mult);
+    } else {
+      quantities.push(baseLotUnits / mult);
+      allocated += baseLotUnits;
+    }
+  }
+
+  console.log(
+    `📊 TP qty split (lotSz=${lotSz}, qtyDecimals=${qtyDecimals}): [${quantities.map((q) => q.toFixed(qtyDecimals)).join(", ")}] total=${quantities.reduce((a, b) => a + b, 0).toFixed(qtyDecimals)} (filledQty=${totalQty.toFixed(qtyDecimals)})`,
+  );
+
+  return quantities;
+}
+
+/**
  * Sanitize leverage value from AI response.
  * AI may return leverage as "10x", "10-25x", or other string formats.
  * This extracts the first valid number and ensures it's a plain number.
@@ -850,31 +905,12 @@ export async function executeSignal(
 
       const sl = effectiveSL;
 
-      // Place ALL TP targets on the exchange (not just the first one)
-      // Split quantity evenly across TP levels, giving remainder to the last TP
-      // to ensure total always equals filledQty exactly.
-      // e.g., 0.01 / 3 → [0.0033, 0.0033, 0.0034]
-      const tpQuantities: number[] = [];
-      if (tpTargets.length > 0) {
-        const precision = 4; // Support up to 4 decimal places (e.g., 0.0033 BTC)
-        const multiplier = Math.pow(10, precision);
-        const totalUnits = Math.round(filledQty * multiplier);
-        const baseUnits = Math.floor(totalUnits / tpTargets.length);
-
-        let allocated = 0;
-        for (let i = 0; i < tpTargets.length; i++) {
-          if (i === tpTargets.length - 1) {
-            // Last TP gets the remainder to ensure total = filledQty
-            tpQuantities.push(
-              Math.round((filledQty - allocated) * multiplier) / multiplier,
-            );
-          } else {
-            const qty = baseUnits / multiplier;
-            tpQuantities.push(qty);
-            allocated = Math.round((allocated + qty) * multiplier) / multiplier;
-          }
-        }
-      }
+      // Split quantity across TP levels using lot-size-aware rounding
+      const tpQuantities = await splitQuantityForTPs(
+        filledQty,
+        tpTargets.length,
+        () => exchange.getInstrumentSpecs(signal.symbol),
+      );
 
       for (let i = 0; i < tpTargets.length; i++) {
         const tp = tpTargets[i];

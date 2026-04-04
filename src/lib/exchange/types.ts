@@ -184,4 +184,26 @@ export interface ExchangeClient {
   ): Promise<{ cancelled: string[]; errors: string[] }>;
   /** Get recent order history (filled/cancelled) */
   getOrderHistory(symbol?: string, limit?: number): Promise<HistoricalOrder[]>;
+
+  // ─── Instrument Specs ────────────────────────────────────────────────
+  /** Get instrument specifications (lot size, contract value, etc.) */
+  getInstrumentSpecs(symbol: string): Promise<InstrumentSpecs>;
+}
+
+/** Instrument specifications from the exchange */
+export interface InstrumentSpecs {
+  /** Contract value per contract (e.g., 0.01 BTC for BTC-USDT-SWAP) */
+  ctVal: number;
+  /** Lot size — minimum quantity increment in contracts (e.g., 1) */
+  lotSz: number;
+  /** Minimum order size in contracts */
+  minSz: number;
+  /** Contract value currency (e.g., "BTC") */
+  ctValCcy: string;
+  /** Price tick size (e.g., 0.1 for BTC-USDT-SWAP) */
+  tickSz: number;
+  /** Number of decimal places for quantity (derived from lotSz) */
+  qtyDecimals: number;
+  /** Number of decimal places for price (derived from tickSz) */
+  priceDecimals: number;
 }

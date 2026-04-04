@@ -383,4 +383,19 @@ export class PaperExchange implements ExchangeClient {
     };
     return map[interval] || 3_600_000;
   }
+
+  async getInstrumentSpecs(
+    symbol: string,
+  ): Promise<import("./types").InstrumentSpecs> {
+    // Paper trading stub — uses simplified defaults
+    return {
+      ctVal: 1,
+      lotSz: 1,
+      minSz: 1,
+      ctValCcy: "",
+      tickSz: 0.01,
+      qtyDecimals: 2,
+      priceDecimals: 2,
+    };
+  }
 }

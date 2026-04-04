@@ -10,6 +10,7 @@ import {
   OpenOrderInfo,
   AlgoOrderInfo,
   HistoricalOrder,
+  InstrumentSpecs,
 } from "./types";
 import { getProxyAgent } from "../proxy/ProxyFactory";
 
@@ -40,6 +41,13 @@ export class OkxExchange implements ExchangeClient {
   private passphrase: string;
   private simulated: boolean;
   private client: AxiosInstance;
+
+  /** Cache instrument specs to avoid repeated API calls */
+  private specsCache = new Map<
+    string,
+    { specs: InstrumentSpecs; ts: number }
+  >();
+  private static SPECS_CACHE_TTL = 30 * 60 * 1000; // 30 minutes
 
   constructor(
     apiKey: string,
@@ -1212,5 +1220,67 @@ export class OkxExchange implements ExchangeClient {
       );
     }
     return [];
+  }
+
+  // ─── Instrument Specs ────────────────────────────────────────────────
+
+  /**
+   * Get instrument specifications (lot size, contract value, tick size, etc.).
+   * Results are cached for 30 minutes to avoid repeated API calls.
+   *
+   * OKX API: GET /api/v5/public/instruments?instType=SWAP&instId=XXX
+   * Docs: https://www.okx.com/docs-v5/en/#rest-api-public-data-get-instruments
+   */
+  async getInstrumentSpecs(symbol: string): Promise<InstrumentSpecs> {
+    const instId = this.toOkxSymbol(symbol);
+
+    // Check cache
+    const cached = this.specsCache.get(instId);
+    if (cached && Date.now() - cached.ts < OkxExchange.SPECS_CACHE_TTL) {
+      return cached.specs;
+    }
+
+    // Fetch from API
+    const path = `/api/v5/public/instruments?instType=SWAP&instId=${instId}`;
+    const response = await this.client.get(path);
+    const data = response.data;
+
+    if (data.code !== "0" || !data.data?.[0]) {
+      throw new Error(
+        `Failed to get instrument specs for ${instId}: ${data.msg || "not found"}`,
+      );
+    }
+
+    const inst = data.data[0];
+    const lotSz = parseFloat(inst.lotSz || "1");
+    const tickSz = parseFloat(inst.tickSz || "0.1");
+    const ctVal = parseFloat(inst.ctVal || "1");
+
+    // Derive decimal places from lotSz and tickSz
+    const qtyDecimals = inst.lotSz?.includes(".")
+      ? inst.lotSz.split(".")[1].replace(/0+$/, "").length
+      : 0;
+    const priceDecimals = inst.tickSz?.includes(".")
+      ? inst.tickSz.split(".")[1].replace(/0+$/, "").length
+      : 0;
+
+    const specs: InstrumentSpecs = {
+      ctVal,
+      lotSz,
+      minSz: parseFloat(inst.minSz || "1"),
+      ctValCcy: inst.ctValCcy || "",
+      tickSz,
+      qtyDecimals,
+      priceDecimals,
+    };
+
+    // Cache it
+    this.specsCache.set(instId, { specs, ts: Date.now() });
+
+    console.log(
+      `[OKX] 📋 Instrument specs: ${instId} ctVal=${ctVal} lotSz=${lotSz} minSz=${inst.minSz} tickSz=${tickSz} qtyDecimals=${qtyDecimals}`,
+    );
+
+    return specs;
   }
 }

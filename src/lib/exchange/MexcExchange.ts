@@ -538,4 +538,19 @@ export class MexcExchange implements ExchangeClient {
     }
     return [];
   }
+
+  async getInstrumentSpecs(
+    symbol: string,
+  ): Promise<import("./types").InstrumentSpecs> {
+    // MEXC stub — not yet implemented
+    return {
+      ctVal: 1,
+      lotSz: 1,
+      minSz: 1,
+      ctValCcy: "",
+      tickSz: 0.01,
+      qtyDecimals: 0,
+      priceDecimals: 2,
+    };
+  }
 }
