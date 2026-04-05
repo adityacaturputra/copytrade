@@ -1801,6 +1801,12 @@ function ImageModal({
 }
 
 function PositionsTab({ positions }: { positions: Position[] }) {
+  const [positionFilter, setPositionFilter] = useState<"open" | "closed">("open");
+
+  const openPositions = positions.filter((p) => p.status === "open");
+  const closedPositions = positions.filter((p) => p.status === "closed");
+  const displayPositions = positionFilter === "open" ? openPositions : closedPositions;
+
   if (positions.length === 0) {
     return (
       <div className="text-center py-8 text-slate-400">
@@ -1811,56 +1817,117 @@ function PositionsTab({ positions }: { positions: Position[] }) {
   }
 
   return (
-    <div className="overflow-x-auto">
-      <table className="data-table">
-        <thead>
-          <tr>
-            <th>Symbol</th>
-            <th>Side</th>
-            <th>Entry</th>
-            <th>Current</th>
-            <th>Qty</th>
-            <th>Leverage</th>
-            <th>PnL</th>
-            <th>Status</th>
-            <th>Close Reason</th>
-            <th>Opened</th>
-          </tr>
-        </thead>
-        <tbody>
-          {positions.map((pos) => (
-            <tr key={pos._id || pos.id}>
-              <td className="font-medium">{pos.symbol}</td>
-              <td>
-                <span
-                  className={`badge ${pos.side === "LONG" ? "badge-success" : "badge-danger"}`}
-                >
-                  {pos.side}
-                </span>
-              </td>
-              <td>{pos.entryPrice?.toFixed(4)}</td>
-              <td>{pos.currentPrice?.toFixed(4) || "-"}</td>
-              <td>{pos.quantity}</td>
-              <td>{pos.leverage}x</td>
-              <td
-                className={`font-mono ${(pos.pnl || 0) >= 0 ? "text-success" : "text-danger"}`}
-              >
-                {(pos.pnl || 0) >= 0 ? "+" : ""}
-                {pos.pnl?.toFixed(2) || "0.00"}
-              </td>
-              <td>
-                <StatusBadge status={pos.status} />
-              </td>
-              <td className="text-xs text-slate-400">
-                {pos.closeReason || "-"}
-              </td>
-              <td className="text-xs text-slate-400">
-                {new Date(pos.openedAt).toLocaleString()}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div>
+      {/* Open / Closed sub-tabs */}
+      <div className="flex gap-0 border-b border-slate-700 mb-4">
+        <button
+          onClick={() => setPositionFilter("open")}
+          className={`px-4 py-2 text-xs sm:text-sm font-medium border-b-2 transition flex items-center gap-1.5 whitespace-nowrap ${
+            positionFilter === "open"
+              ? "border-green-500 text-green-400"
+              : "border-transparent text-slate-400 hover:text-slate-300"
+          }`}
+        >
+          🔓 Open
+          <span className={`text-xs font-bold px-1.5 py-0.5 rounded-full ${
+            positionFilter === "open"
+              ? "bg-green-600/30 text-green-300"
+              : "bg-slate-700 text-slate-400"
+          }`}>
+            {openPositions.length}
+          </span>
+        </button>
+        <button
+          onClick={() => setPositionFilter("closed")}
+          className={`px-4 py-2 text-xs sm:text-sm font-medium border-b-2 transition flex items-center gap-1.5 whitespace-nowrap ${
+            positionFilter === "closed"
+              ? "border-slate-400 text-slate-300"
+              : "border-transparent text-slate-400 hover:text-slate-300"
+          }`}
+        >
+          📋 Closed
+          <span className={`text-xs font-bold px-1.5 py-0.5 rounded-full ${
+            positionFilter === "closed"
+              ? "bg-slate-600/30 text-slate-300"
+              : "bg-slate-700 text-slate-400"
+          }`}>
+            {closedPositions.length}
+          </span>
+        </button>
+      </div>
+
+      {displayPositions.length === 0 ? (
+        <div className="text-center py-8 text-slate-400">
+          <div className="text-4xl mb-2">
+            {positionFilter === "open" ? "📭" : "📋"}
+          </div>
+          <p>
+            {positionFilter === "open"
+              ? "No open positions."
+              : "No closed positions yet."}
+          </p>
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Side</th>
+                <th>Entry</th>
+                {positionFilter === "open" && <th>Current</th>}
+                <th>Qty</th>
+                <th>Leverage</th>
+                <th>PnL</th>
+                {positionFilter === "closed" && <th>Close Reason</th>}
+                <th>Opened</th>
+                {positionFilter === "closed" && <th>Closed</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {displayPositions.map((pos) => (
+                <tr key={pos._id || pos.id}>
+                  <td className="font-medium">{pos.symbol}</td>
+                  <td>
+                    <span
+                      className={`badge ${pos.side === "LONG" ? "badge-success" : "badge-danger"}`}
+                    >
+                      {pos.side}
+                    </span>
+                  </td>
+                  <td>{pos.entryPrice?.toFixed(4)}</td>
+                  {positionFilter === "open" && (
+                    <td>{pos.currentPrice?.toFixed(4) || "-"}</td>
+                  )}
+                  <td>{pos.quantity}</td>
+                  <td>{pos.leverage}x</td>
+                  <td
+                    className={`font-mono ${(pos.pnl || 0) >= 0 ? "text-success" : "text-danger"}`}
+                  >
+                    {(pos.pnl || 0) >= 0 ? "+" : ""}
+                    {pos.pnl?.toFixed(2) || "0.00"}
+                  </td>
+                  {positionFilter === "closed" && (
+                    <td className="text-xs text-slate-400">
+                      {pos.closeReason || "-"}
+                    </td>
+                  )}
+                  <td className="text-xs text-slate-400">
+                    {new Date(pos.openedAt).toLocaleString()}
+                  </td>
+                  {positionFilter === "closed" && (
+                    <td className="text-xs text-slate-400">
+                      {pos.closedAt
+                        ? new Date(pos.closedAt).toLocaleString()
+                        : "-"}
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
