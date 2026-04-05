@@ -3,7 +3,7 @@ name: Deploy Copytrade
 on:
   push:
     branches: [main]
-  workflow_dispatch: # manual trigger from GitHub UI or API
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -16,10 +16,13 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_SSH_PORT }}
+          envs: PM2_APP_NAME
           script: |
+            export PATH="/root/.nvm/versions/node/v22.22.2/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
             cd /root/copytrade
             git pull origin main
             npm install
             npm run build
             pm2 restart ${{ secrets.PM2_APP_NAME }}
+            pm2 save
             echo "Deploy done at $(date)"
