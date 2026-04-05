@@ -144,6 +144,7 @@ export interface ISignalConfig extends Document {
   timeWindowHours: number; // default 24 — only process messages within this many hours
   batchSize: number; // default 5 — how many messages to send to AI per bulk request
   includeImageUrls: boolean; // default false — whether to include images in AI prompts
+  visionAIEnabled: boolean; // default false — enable Gemini Vision pre-layer for image analysis
   updatedAt: Date;
 }
 
@@ -318,6 +319,7 @@ const SignalConfigSchema = new Schema<ISignalConfig>(
     timeWindowHours: { type: Number, default: 24, min: 1, max: 720 },
     batchSize: { type: Number, default: 5, min: 1, max: 50 },
     includeImageUrls: { type: Boolean, default: false },
+    visionAIEnabled: { type: Boolean, default: false },
   },
   { timestamps: { createdAt: false, updatedAt: true } },
 );

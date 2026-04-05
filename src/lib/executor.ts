@@ -21,6 +21,7 @@ import {
 } from "./discord";
 import { AIFactory } from "./ai/AIFactory";
 import { TradingSignal, BulkMessageInput } from "./ai/types";
+import { preprocessImagesWithVision } from "./ai/GeminiVisionAnalyzer";
 import { ExchangeFactory } from "./exchange/ExchangeFactory";
 import { calculateRiskBasedPosition, getRiskConfig } from "./risk";
 import { getSignalConfig } from "./signal-config";
@@ -364,13 +365,41 @@ export async function runSignalCheck(): Promise<{
         const batch = newMessages.slice(i, i + batchSize);
 
         // Build BulkMessageInput[] — AI returns messageId so we can map back
-        const bulkInputs: BulkMessageInput[] = batch.map((msg) => ({
-          messageId: msg.messageId,
-          content: msg.originalContent || msg.content,
-          ...(signalConfig.includeImageUrls && msg.imageUrls?.length > 0
-            ? { imageUrls: msg.imageUrls }
-            : {}),
-        }));
+        // Vision AI pre-layer: extract text from chart images before main AI
+        const bulkInputs: BulkMessageInput[] = [];
+
+        for (const msg of batch) {
+          let content = msg.originalContent || msg.content;
+          const imageUrls = msg.imageUrls || [];
+
+          // If vision AI is enabled and message has images, preprocess through Gemini Vision
+          if (signalConfig.visionAIEnabled && imageUrls.length > 0) {
+            try {
+              const { enhancedContent } = await preprocessImagesWithVision(
+                content,
+                imageUrls,
+              );
+              if (enhancedContent !== content) {
+                console.log(
+                  `👁️ Vision AI enhanced message ${msg.messageId} with chart data`,
+                );
+              }
+              content = enhancedContent;
+            } catch (visionErr) {
+              console.warn(
+                `⚠️ Vision AI failed for ${msg.messageId}, using original content: ${visionErr instanceof Error ? visionErr.message : String(visionErr)}`,
+              );
+            }
+          }
+
+          bulkInputs.push({
+            messageId: msg.messageId,
+            content,
+            ...(signalConfig.includeImageUrls && imageUrls.length > 0
+              ? { imageUrls }
+              : {}),
+          });
+        }
 
         let batchResults: Array<{
           messageId: string;

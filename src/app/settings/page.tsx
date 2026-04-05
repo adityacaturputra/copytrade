@@ -148,6 +148,7 @@ export default function SettingsPage() {
     timeWindowHours: 24,
     batchSize: 5,
     includeImageUrls: false,
+    visionAIEnabled: false,
   });
   const [signalSaving, setSignalSaving] = useState(false);
   const [signalError, setSignalError] = useState<string | null>(null);
@@ -277,6 +278,7 @@ export default function SettingsPage() {
             timeWindowHours: json.signal.timeWindowHours,
             batchSize: json.signal.batchSize || 5,
             includeImageUrls: json.signal.includeImageUrls || false,
+            visionAIEnabled: json.signal.visionAIEnabled || false,
           });
       }
     } catch {
@@ -2136,6 +2138,34 @@ export default function SettingsPage() {
                 be sent to the AI (vision model) for additional context
                 alongside the text. Requires a vision-capable AI model (e.g.,
                 GLM glm-4v-plus).
+              </span>
+            </label>
+          </div>
+
+          {/* Vision AI Pre-Processing toggle */}
+          <div className="flex items-center gap-3 mb-4 bg-slate-800/50 border border-slate-700 rounded-lg p-3">
+            <input
+              type="checkbox"
+              id="visionAIEnabled"
+              checked={signalCfg.visionAIEnabled}
+              onChange={(e) =>
+                setSignalCfg({
+                  ...signalCfg,
+                  visionAIEnabled: e.target.checked,
+                })
+              }
+              className="rounded border-slate-600 bg-slate-800 text-blue-600 focus:ring-blue-500 w-4 h-4"
+            />
+            <label htmlFor="visionAIEnabled" className="text-sm text-slate-300">
+              <span className="font-medium">
+                🔮 Gemini Vision AI — Chart Image Pre-Processing
+              </span>
+              <span className="block text-xs text-slate-500 mt-0.5">
+                Uses Gemini 2.5 Flash to analyze chart images and extract Entry,
+                TP, SL price levels as text before forwarding to your main AI.
+                This runs as a pre-processing layer. Requires{" "}
+                <code className="text-slate-400">GEMINI_API_KEY</code> in
+                environment variables. Very cheap (~Rp 1/image).
               </span>
             </label>
           </div>

@@ -7,6 +7,7 @@ export interface SignalConfigType {
   timeWindowHours: number; // only process messages within this window (default 24)
   batchSize: number; // how many messages to send to AI per bulk request (default 5)
   includeImageUrls: boolean; // whether to include images in AI prompts (default false)
+  visionAIEnabled: boolean; // enable Gemini Vision pre-layer for image-to-text (default false)
 }
 
 // ─── Defaults ─────────────────────────────────────────────────────────────────
@@ -16,6 +17,7 @@ const DEFAULT_SIGNAL_CONFIG: SignalConfigType = {
   timeWindowHours: 24,
   batchSize: 5,
   includeImageUrls: false,
+  visionAIEnabled: false,
 };
 
 // ─── DB Helpers ───────────────────────────────────────────────────────────────
@@ -32,6 +34,7 @@ export async function getSignalConfig(): Promise<SignalConfigType> {
         timeWindowHours: settings.timeWindowHours,
         batchSize: settings.batchSize,
         includeImageUrls: settings.includeImageUrls ?? false,
+        visionAIEnabled: settings.visionAIEnabled ?? false,
       };
     }
   } catch (err) {
@@ -60,6 +63,9 @@ export async function setSignalConfig(
   if (config.includeImageUrls !== undefined) {
     update.includeImageUrls = config.includeImageUrls;
   }
+  if (config.visionAIEnabled !== undefined) {
+    update.visionAIEnabled = config.visionAIEnabled;
+  }
   const doc = await SignalConfigModel.findOneAndUpdate({}, update, {
     upsert: true,
     new: true,
@@ -69,5 +75,6 @@ export async function setSignalConfig(
     timeWindowHours: doc.timeWindowHours,
     batchSize: doc.batchSize,
     includeImageUrls: doc.includeImageUrls ?? false,
+    visionAIEnabled: doc.visionAIEnabled ?? false,
   };
 }
