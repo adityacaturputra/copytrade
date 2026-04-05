@@ -960,7 +960,7 @@ export default function Dashboard() {
           {activeTab === "signals" && (
             <SignalsTab messages={filteredMessages} />
           )}
-          {activeTab === "logs" && <LogsTab logs={data?.recentLogs || []} />}
+          {activeTab === "logs" && <LogsTab />}
         </div>
       </main>
 
@@ -1975,22 +1975,53 @@ function SignalsTab({ messages }: { messages: Message[] }) {
   );
 }
 
-function LogsTab({ logs }: { logs: Log[] }) {
+function LogsTab() {
   const [hideCronNoise, setHideCronNoise] = useState(true);
+  const [page, setPage] = useState(1);
+  const [logs, setLogs] = useState<Log[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const limit = 50;
 
-  // Routine cron log actions that create noise (start/end heartbeats)
-  const isCronNoise = (log: Log) =>
-    log.type === "cron" &&
-    (log.action.endsWith("_start") ||
-      log.action.endsWith("_end"));
+  const fetchLogs = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({
+        page: String(page),
+        limit: String(limit),
+        hideCronNoise: String(hideCronNoise),
+      });
+      const res = await fetch(`/api/logs?${params}`);
+      const json = await res.json();
+      if (json.success) {
+        setLogs(json.data.logs);
+        setTotalCount(json.data.totalCount);
+        setTotalPages(json.data.totalPages);
+      }
+    } catch {}
+    setLoading(false);
+  }, [page, hideCronNoise]);
 
-  const visibleLogs = hideCronNoise
-    ? logs.filter((log) => !isCronNoise(log))
-    : logs;
+  useEffect(() => {
+    fetchLogs();
+  }, [fetchLogs]);
 
-  const cronNoiseCount = logs.filter(isCronNoise).length;
+  // Reset to page 1 when filter changes
+  useEffect(() => {
+    setPage(1);
+  }, [hideCronNoise]);
 
-  if (logs.length === 0) {
+  if (loading && logs.length === 0) {
+    return (
+      <div className="text-center py-8 text-slate-400">
+        <div className="spinner mx-auto mb-3" />
+        <p>Loading logs...</p>
+      </div>
+    );
+  }
+
+  if (!loading && totalCount === 0) {
     return (
       <div className="text-center py-8 text-slate-400">
         <div className="text-4xl mb-2">📝</div>
@@ -1998,6 +2029,9 @@ function LogsTab({ logs }: { logs: Log[] }) {
       </div>
     );
   }
+
+  const from = (page - 1) * limit + 1;
+  const to = Math.min(page * limit, totalCount);
 
   return (
     <div>
@@ -2013,74 +2047,84 @@ function LogsTab({ logs }: { logs: Log[] }) {
             }`}
             title={
               hideCronNoise
-                ? `Showing important logs. ${cronNoiseCount} routine cron logs hidden.`
+                ? "Hiding routine cron start/end logs. Click to show all."
                 : "Showing all logs including routine cron heartbeats."
             }
           >
             <span>{hideCronNoise ? "🙈" : "👁️"}</span>
             <span>Cron noise</span>
-            {hideCronNoise && cronNoiseCount > 0 && (
-              <span className="bg-slate-600 text-slate-300 text-[10px] px-1.5 py-0.5 rounded-full">
-                -{cronNoiseCount}
-              </span>
-            )}
           </button>
         </div>
         <span className="text-xs text-slate-500">
-          {visibleLogs.length} of {logs.length} logs
+          {from}–{to} of {totalCount} logs
         </span>
       </div>
 
       {/* Log entries */}
       <div className="space-y-2 max-h-[500px] overflow-y-auto">
-        {visibleLogs.length === 0 ? (
-          <div className="text-center py-8 text-slate-400">
-            <div className="text-4xl mb-2">🔇</div>
-            <p>All {logs.length} logs are routine cron noise.</p>
-            <button
-              onClick={() => setHideCronNoise(false)}
-              className="text-primary-400 hover:text-primary-300 text-xs mt-2 underline"
-            >
-              Show all logs
-            </button>
+        {loading && (
+          <div className="flex items-center justify-center py-2">
+            <div className="spinner w-4 h-4 border-2" />
           </div>
-        ) : (
-          visibleLogs.map((log) => (
-            <div
-              key={log._id || log.id}
-              className={`border rounded-lg p-3 text-sm ${log.error ? "border-red-900/50 bg-red-950/20" : "border-slate-700"}`}
-            >
-              <div className="flex items-center justify-between mb-1">
-                <div className="flex items-center gap-2">
-                  <span className="badge badge-info">{log.type}</span>
-                  <span className="text-slate-300">{log.action}</span>
-                  {log.symbol && (
-                    <span className="text-primary-400 font-medium">
-                      {log.symbol}
-                    </span>
-                  )}
-                  {log.result && (
-                    <span
-                      className={`badge ${log.result === "success" || log.result === "executed" ? "badge-success" : log.result === "error" || log.result === "rejected" ? "badge-danger" : "badge-neutral"}`}
-                    >
-                      {log.result}
-                    </span>
-                  )}
-                </div>
-                <span className="text-xs text-slate-500">
-                  {new Date(log.createdAt || log.created_at || "").toLocaleString()}
-                </span>
-              </div>
-              {log.details && (
-                <p className="text-slate-400 text-xs mt-1">{log.details}</p>
-              )}
-              {log.error && (
-                <p className="text-red-400 text-xs mt-1">Error: {log.error}</p>
-              )}
-            </div>
-          ))
         )}
+        {logs.map((log) => (
+          <div
+            key={log._id || log.id}
+            className={`border rounded-lg p-3 text-sm ${log.error ? "border-red-900/50 bg-red-950/20" : "border-slate-700"}`}
+          >
+            <div className="flex items-center justify-between mb-1">
+              <div className="flex items-center gap-2">
+                <span className="badge badge-info">{log.type}</span>
+                <span className="text-slate-300">{log.action}</span>
+                {log.symbol && (
+                  <span className="text-primary-400 font-medium">
+                    {log.symbol}
+                  </span>
+                )}
+                {log.result && (
+                  <span
+                    className={`badge ${log.result === "success" || log.result === "executed" ? "badge-success" : log.result === "error" || log.result === "rejected" ? "badge-danger" : "badge-neutral"}`}
+                  >
+                    {log.result}
+                  </span>
+                )}
+              </div>
+              <span className="text-xs text-slate-500">
+                {new Date(log.createdAt || log.created_at || "").toLocaleString()}
+              </span>
+            </div>
+            {log.details && (
+              <p className="text-slate-400 text-xs mt-1">{log.details}</p>
+            )}
+            {log.error && (
+              <p className="text-red-400 text-xs mt-1">Error: {log.error}</p>
+            )}
+          </div>
+        ))}
       </div>
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between mt-3 pt-3 border-t border-slate-700/50">
+          <button
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={page <= 1 || loading}
+            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium border border-slate-700 text-slate-300 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
+          >
+            ← Prev
+          </button>
+          <span className="text-xs text-slate-400">
+            Page {page} of {totalPages}
+          </span>
+          <button
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            disabled={page >= totalPages || loading}
+            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium border border-slate-700 text-slate-300 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
+          >
+            Next →
+          </button>
+        </div>
+      )}
     </div>
   );
 }
