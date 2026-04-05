@@ -364,6 +364,15 @@ export default function Dashboard() {
   }
   const channelIdArray = Array.from(allChannelIds).sort();
 
+  // Compute which account info to display based on selected filter
+  const displayAccount =
+    selectedAccountId !== "all"
+      ? data?.accounts?.find((a) => a.accountId === selectedAccountId) || null
+      : null;
+  const displayAccountInfo = displayAccount?.account || data?.account || null;
+  const displayExchangeError =
+    displayAccount?.exchangeError || data?.exchangeError || null;
+
   return (
     <div className="min-h-screen">
       {/* Header */}
@@ -589,31 +598,31 @@ export default function Dashboard() {
               <span className="badge badge-warning sm:ml-0">DEMO MODE</span>
             )}
           </div>
-          {data?.account ? (
+          {displayAccountInfo ? (
             <div className="flex flex-wrap items-center gap-2 sm:gap-4 sm:ml-4 text-xs sm:text-sm">
               <span>
                 Balance:{" "}
                 <span className="text-white font-mono font-bold">
-                  {data.account.totalBalance?.toFixed(2)}{" "}
-                  {data.account.currency}
+                  {displayAccountInfo.totalBalance?.toFixed(2)}{" "}
+                  {displayAccountInfo.currency}
                 </span>
               </span>
               <span>
                 Available:{" "}
                 <span className="text-white font-mono">
-                  {data.account.availableBalance?.toFixed(2)}
+                  {displayAccountInfo.availableBalance?.toFixed(2)}
                 </span>
               </span>
-              {data.account.unrealizedPnl !== 0 && (
+              {displayAccountInfo.unrealizedPnl !== 0 && (
                 <span
                   className={
-                    data.account.unrealizedPnl >= 0
+                    displayAccountInfo.unrealizedPnl >= 0
                       ? "text-success"
                       : "text-danger"
                   }
                 >
-                  PnL: {data.account.unrealizedPnl >= 0 ? "+" : ""}
-                  {data.account.unrealizedPnl?.toFixed(2)}
+                  PnL: {displayAccountInfo.unrealizedPnl >= 0 ? "+" : ""}
+                  {displayAccountInfo.unrealizedPnl?.toFixed(2)}
                 </span>
               )}
             </div>
@@ -621,14 +630,14 @@ export default function Dashboard() {
             <div className="sm:ml-4 text-xs sm:text-sm">
               <span className="text-red-300">
                 ⚠️{" "}
-                {data?.exchangeError?.toLowerCase().includes("ip whitelist")
+                {displayExchangeError?.toLowerCase().includes("ip whitelist")
                   ? `Your IP is not in the OKX API key whitelist. Go to OKX → Profile → API Management → Edit your key → Add your current IP or disable IP restriction.`
-                  : data?.exchangeError?.toLowerCase().includes("enotfound") ||
-                      data?.exchangeError
+                  : displayExchangeError?.toLowerCase().includes("enotfound") ||
+                      displayExchangeError
                         ?.toLowerCase()
                         .includes("econnrefused")
                     ? `OKX servers are unreachable from your network (ISP blocking). Enable VPN to connect.`
-                    : data?.exchangeError ||
+                    : displayExchangeError ||
                       "Check your API keys and network connection."}
               </span>
             </div>
@@ -987,6 +996,8 @@ export default function Dashboard() {
               onReject={handleDraftAction}
               riskConfig={data?.riskConfig || null}
               accountBalance={
+                displayAccountInfo?.availableBalance ||
+                displayAccountInfo?.totalBalance ||
                 data?.account?.availableBalance ||
                 data?.account?.totalBalance ||
                 0
@@ -1007,7 +1018,13 @@ export default function Dashboard() {
               refreshKey={refreshKey}
             />
           )}
-          {activeTab === "logs" && <LogsTab />}
+          {activeTab === "logs" && (
+            <LogsTab
+              channelIdFilter={selectedChannelId}
+              accountIdFilter={selectedAccountId}
+              refreshKey={refreshKey}
+            />
+          )}
         </div>
       </main>
 
@@ -2258,7 +2275,15 @@ function SignalsTab({
   );
 }
 
-function LogsTab() {
+function LogsTab({
+  channelIdFilter,
+  accountIdFilter,
+  refreshKey,
+}: {
+  channelIdFilter: string;
+  accountIdFilter: string;
+  refreshKey: number;
+}) {
   const [hideCronNoise, setHideCronNoise] = useState(true);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
@@ -2275,6 +2300,8 @@ function LogsTab() {
         limit: String(pageSize),
         hideCronNoise: String(hideCronNoise),
       });
+      if (channelIdFilter !== "all") params.set("channelId", channelIdFilter);
+      if (accountIdFilter !== "all") params.set("accountId", accountIdFilter);
       const res = await fetch(`/api/logs?${params}`);
       const json = await res.json();
       if (json.success) {
@@ -2284,16 +2311,21 @@ function LogsTab() {
       }
     } catch {}
     setLoading(false);
-  }, [page, pageSize, hideCronNoise]);
+  }, [page, pageSize, hideCronNoise, channelIdFilter, accountIdFilter]);
 
   useEffect(() => {
     fetchLogs();
   }, [fetchLogs]);
 
+  useEffect(() => {
+    fetchLogs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey]);
+
   // Reset to page 1 when filter changes
   useEffect(() => {
     setPage(1);
-  }, [hideCronNoise, pageSize]);
+  }, [hideCronNoise, pageSize, channelIdFilter, accountIdFilter]);
 
   if (loading && logs.length === 0) {
     return (

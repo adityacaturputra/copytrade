@@ -197,11 +197,20 @@ export async function runSignalCheck(): Promise<{
     // 3. Load all processed message IDs from DB (for pagination stop condition)
     const processedDocs = await ProcessedMessage.find(
       {},
-      { messageId: 1 },
+      { messageId: 1, accountId: 1 },
     ).lean();
-    const processedMessageIds = new Set(processedDocs.map((d) => d.messageId));
+    // Build per-account processed message sets so that the same messageId
+    // can be processed by different accounts (they may share channels).
+    const processedByAccount = new Map<string, Set<string>>();
+    const allProcessedIds = new Set<string>();
+    for (const doc of processedDocs) {
+      const aid = doc.accountId?.toString() || "null";
+      if (!processedByAccount.has(aid)) processedByAccount.set(aid, new Set());
+      processedByAccount.get(aid)!.add(doc.messageId);
+      allProcessedIds.add(doc.messageId);
+    }
     console.log(
-      `📦 Found ${processedMessageIds.size} previously processed messages in DB`,
+      `📦 Found ${allProcessedIds.size} previously processed messages in DB (${processedByAccount.size} accounts)`,
     );
 
     // 4. Fetch messages from all active accounts via SourceFactory
@@ -247,11 +256,15 @@ export async function runSignalCheck(): Promise<{
             ...((account.sourceData as Record<string, unknown>) || {}),
           };
 
+          // Use per-account processed set so the same messageId can be
+          // fetched/processed by different accounts that share channels.
+          const perAccountProcessed =
+            processedByAccount.get(account._id.toString()) || new Set<string>();
           const messages = await provider.fetchMessages(
             config,
             signalConfig.fetchLimit,
             signalConfig.timeWindowHours,
-            processedMessageIds,
+            perAccountProcessed,
           );
 
           // Ensure sourceId/sourceName are set
@@ -309,14 +322,24 @@ export async function runSignalCheck(): Promise<{
     });
 
     // ─── Bulk processing ────────────────────────────────────────────────────
-    // Filter out already-processed messages in one query
+    // Filter out already-processed messages using (messageId, accountId) pair
+    // so the same messageId can be processed independently by different accounts.
     const existingProcessed = await ProcessedMessage.find(
-      { messageId: { $in: allMessages.map((m) => m.messageId) } },
-      { messageId: 1 },
+      {
+        $or: allMessages.map((m) => ({
+          messageId: m.messageId,
+          accountId: m.sourceId || null,
+        })),
+      },
+      { messageId: 1, accountId: 1 },
     ).lean();
-    const existingIds = new Set(existingProcessed.map((d) => d.messageId));
+    const existingKeys = new Set(
+      existingProcessed.map(
+        (d) => `${d.messageId}::${d.accountId?.toString() || "null"}`,
+      ),
+    );
     const newMessages = allMessages.filter(
-      (m) => !existingIds.has(m.messageId),
+      (m) => !existingKeys.has(`${m.messageId}::${m.sourceId || "null"}`),
     );
 
     if (newMessages.length === 0) {
@@ -429,7 +452,10 @@ export async function runSignalCheck(): Promise<{
           try {
             if (!signal || !signal.action || signal.action === "HOLD") {
               await ProcessedMessage.updateOne(
-                { messageId: msg.messageId },
+                {
+                  messageId: msg.messageId,
+                  accountId: msg.sourceId || null,
+                },
                 { status: "ignored", processedAt: new Date() },
               );
               continue;
@@ -454,7 +480,10 @@ export async function runSignalCheck(): Promise<{
               }
 
               await ProcessedMessage.updateOne(
-                { messageId: msg.messageId },
+                {
+                  messageId: msg.messageId,
+                  accountId: msg.sourceId || null,
+                },
                 {
                   signalType: "CANCEL",
                   parsedSignal: JSON.stringify(signal),
@@ -528,7 +557,10 @@ export async function runSignalCheck(): Promise<{
 
             // Update message with parsed signal
             await ProcessedMessage.updateOne(
-              { messageId: msg.messageId },
+              {
+                messageId: msg.messageId,
+                accountId: msg.sourceId || null,
+              },
               {
                 signalType: signal.action,
                 parsedSignal: JSON.stringify(signal),
@@ -562,7 +594,10 @@ export async function runSignalCheck(): Promise<{
               result.drafted++;
 
               await ProcessedMessage.updateOne(
-                { messageId: msg.messageId },
+                {
+                  messageId: msg.messageId,
+                  accountId: msg.sourceId || null,
+                },
                 { status: "drafted" },
               );
 

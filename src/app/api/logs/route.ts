@@ -14,6 +14,7 @@ export async function GET(request: NextRequest) {
       Math.max(1, parseInt(searchParams.get("limit") || "50", 10)),
     );
     const hideCronNoise = searchParams.get("hideCronNoise") !== "false";
+    const accountId = searchParams.get("accountId");
 
     // Build base query — optionally exclude routine cron heartbeat logs
     const baseFilter: Record<string, unknown> = {};
@@ -22,6 +23,11 @@ export async function GET(request: NextRequest) {
         { type: { $ne: "cron" } },
         { action: { $not: /(_start|_end)$/ } },
       ];
+    }
+
+    // Filter by accountId when specified
+    if (accountId && accountId !== "all") {
+      baseFilter.accountId = accountId;
     }
 
     const [logs, totalCount] = await Promise.all([
