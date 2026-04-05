@@ -21,6 +21,7 @@ import mongoose from "mongoose";
 import dotenv from "dotenv";
 import path from "path";
 import { ExchangeFactory } from "../src/lib/exchange/ExchangeFactory";
+import { Account } from "../src/lib/database";
 
 // Load .env
 dotenv.config({ path: path.resolve(process.cwd(), ".env") });
@@ -41,10 +42,18 @@ const YELLOW = "\x1b[33m";
 const BOLD = "\x1b[1m";
 const CRESET = "\x1b[0m";
 
-function log(msg: string) { console.log(CYAN + "[RESET]" + CRESET + " " + msg); }
-function warn(msg: string) { console.log(YELLOW + "[RESET]" + CRESET + " " + msg); }
-function error(msg: string) { console.log(RED + "[RESET]" + CRESET + " " + msg); }
-function success(msg: string) { console.log(GREEN + "[RESET]" + CRESET + " " + msg); }
+function log(msg: string) {
+  console.log(CYAN + "[RESET]" + CRESET + " " + msg);
+}
+function warn(msg: string) {
+  console.log(YELLOW + "[RESET]" + CRESET + " " + msg);
+}
+function error(msg: string) {
+  console.log(RED + "[RESET]" + CRESET + " " + msg);
+}
+function success(msg: string) {
+  console.log(GREEN + "[RESET]" + CRESET + " " + msg);
+}
 
 // Collections to clear
 const COLLECTIONS_TO_CLEAR = [
@@ -52,10 +61,16 @@ const COLLECTIONS_TO_CLEAR = [
   "positions",
   "tradelogs",
   "drafttrades",
-  "tradingmodes",
-  "risksettings",
 ];
-const PRESERVED_COLLECTIONS = ["discordsources"];
+const PRESERVED_COLLECTIONS = [
+  "accounts",
+  "cronsettings",
+  "discordsources",
+  "proxysettings",
+  "risksettings",
+  "signalconfigs",
+  "tradingmodes",
+];
 
 // Main
 async function main() {
@@ -73,25 +88,36 @@ async function main() {
   // Step 1: Reset Database
   if (!skipDb && !resetFundsOnly) {
     log(BOLD + "Step 1: Resetting Database..." + CRESET);
-    const uri = process.env.MONGODB_URI || "mongodb://localhost:27017/copytrade";
+    const uri =
+      process.env.MONGODB_URI || "mongodb://localhost:27017/copytrade";
     log("  Connecting to: " + uri);
 
     try {
       await mongoose.connect(uri);
       success("  Connected to MongoDB");
       const db = mongoose.connection.db;
-      if (!db) { error("  Failed to get database reference"); process.exit(1); }
+      if (!db) {
+        error("  Failed to get database reference");
+        process.exit(1);
+      }
 
       const collections = await db.listCollections().toArray();
       const collectionNames = collections.map((c) => c.name);
-      log("  Found " + collectionNames.length + " collections: " + (collectionNames.join(", ") || "(none)"));
+      log(
+        "  Found " +
+          collectionNames.length +
+          " collections: " +
+          (collectionNames.join(", ") || "(none)"),
+      );
       console.log();
 
       for (const colName of COLLECTIONS_TO_CLEAR) {
         if (collectionNames.includes(colName)) {
           const count = await db.collection(colName).countDocuments();
           if (dryRun) {
-            warn("  [DRY] Would drop: " + colName + " (" + count + " documents)");
+            warn(
+              "  [DRY] Would drop: " + colName + " (" + count + " documents)",
+            );
           } else {
             await db.collection(colName).drop();
             success("  Dropped: " + colName + " (" + count + " documents)");
@@ -111,7 +137,10 @@ async function main() {
       await mongoose.disconnect();
       success("  Disconnected from MongoDB");
     } catch (err) {
-      error("  Database error: " + (err instanceof Error ? err.message : String(err)));
+      error(
+        "  Database error: " +
+          (err instanceof Error ? err.message : String(err)),
+      );
     }
     console.log();
   } else if (!resetFundsOnly) {
@@ -119,60 +148,105 @@ async function main() {
     console.log();
   }
 
-  // Step 2: Close Exchange Positions
+  // Step 2: Close Exchange Positions (iterate over DB accounts)
   if (!skipExchange && !resetFundsOnly) {
     log(BOLD + "Step 2: Resetting Exchange Positions..." + CRESET);
-    const provider = process.env.EXCHANGE_PROVIDER || "paper";
-    log("  Exchange provider: " + provider);
 
-    if (provider === "paper") {
-      warn("  Paper exchange detected - positions are in-memory and reset on server restart");
-      console.log();
-    } else {
-      try {
-        const exchange = ExchangeFactory.getClient();
+    try {
+      // Re-connect to load accounts
+      const uri =
+        process.env.MONGODB_URI || "mongodb://localhost:27017/copytrade";
+      await mongoose.connect(uri);
+      const accounts = await Account.find({ isActive: true }).lean();
+      log("  Found " + accounts.length + " active accounts");
 
-        log("  Fetching account info...");
-        try {
-          const account = await exchange.getAccountInfo();
-          log("  Balance: $" + account.totalBalance.toFixed(2) + " (available: $" + account.availableBalance.toFixed(2) + ", unrealized PnL: $" + account.unrealizedPnl.toFixed(2) + ")");
-        } catch { warn("  Could not fetch account info"); }
+      if (accounts.length === 0) {
+        warn("  No active accounts with exchange credentials");
+      } else {
+        for (const acct of accounts) {
+          if (!acct.exchangeData) {
+            log('  Account "' + acct.name + '": no exchangeData, skipped');
+            continue;
+          }
+          const provider = (acct.tradingPlatform as string) || "paper";
+          log('  Account "' + acct.name + '" (' + provider + "):");
 
-        log("  Fetching open positions...");
-        const positions = await exchange.getOpenPositions();
-        log("  Open positions: " + positions.length);
-        for (const pos of positions) {
-          log("     - " + pos.symbol + " " + pos.side + " | qty: " + pos.quantity + " | entry: " + pos.entryPrice + " | PnL: $" + pos.unrealizedPnl.toFixed(2));
-        }
-
-        if (positions.length === 0) {
-          success("  No open positions to close");
-        } else if (dryRun) {
-          warn("  [DRY] Would close " + positions.length + " position(s): " + positions.map((p) => p.symbol).join(", "));
-        } else {
-          const result = await exchange.closeAllPositions();
-          if (result.closed.length > 0) success("  Closed positions: " + result.closed.join(", "));
-          if (result.errors.length > 0) error("  Errors: " + result.errors.join(", "));
-        }
-
-        if (provider === "okx") {
-          log("  Cancelling algo orders (TP/SL)...");
-          if (dryRun) { warn("  [DRY] Would cancel all pending algo orders"); }
-          else { await cancelOkxAlgoOrders(); }
-        }
-
-        if (!dryRun) {
-          log("  Fetching updated account info...");
           try {
-            const account = await exchange.getAccountInfo();
-            success("  Updated balance: $" + account.totalBalance.toFixed(2) + " (available: $" + account.availableBalance.toFixed(2) + ")");
-          } catch { warn("  Could not fetch updated account info"); }
+            const exchange = ExchangeFactory.getClientForAccount({
+              provider: provider as any,
+              ...acct.exchangeData,
+            });
+
+            log("    Fetching account info...");
+            try {
+              const info = await exchange.getAccountInfo();
+              log(
+                "    Balance: $" +
+                  info.totalBalance.toFixed(2) +
+                  " (available: $" +
+                  info.availableBalance.toFixed(2) +
+                  ")",
+              );
+            } catch {
+              warn("    Could not fetch account info");
+            }
+
+            const positions = await exchange.getOpenPositions();
+            log("    Open positions: " + positions.length);
+            for (const pos of positions) {
+              log(
+                "      - " +
+                  pos.symbol +
+                  " " +
+                  pos.side +
+                  " | qty: " +
+                  pos.quantity +
+                  " | PnL: $" +
+                  pos.unrealizedPnl.toFixed(2),
+              );
+            }
+
+            if (positions.length === 0) {
+              success("    No open positions to close");
+            } else if (dryRun) {
+              warn(
+                "    [DRY] Would close " + positions.length + " position(s)",
+              );
+            } else {
+              const result = await exchange.closeAllPositions();
+              if (result.closed.length > 0)
+                success("    Closed: " + result.closed.join(", "));
+              if (result.errors.length > 0)
+                error("    Errors: " + result.errors.join(", "));
+            }
+
+            if (provider === "okx") {
+              log("    Cancelling algo orders (TP/SL)...");
+              if (dryRun) {
+                warn("    [DRY] Would cancel all pending algo orders");
+              } else {
+                await cancelOkxAlgoOrders(acct.exchangeData);
+              }
+            }
+          } catch (err) {
+            error(
+              '    Account "' +
+                acct.name +
+                '" error: ' +
+                (err instanceof Error ? err.message : String(err)),
+            );
+          }
         }
-      } catch (err) {
-        error("  Exchange error: " + (err instanceof Error ? err.message : String(err)));
       }
-      console.log();
+
+      await mongoose.disconnect();
+    } catch (err) {
+      error(
+        "  Exchange error: " +
+          (err instanceof Error ? err.message : String(err)),
+      );
     }
+    console.log();
   } else if (!resetFundsOnly) {
     log(BOLD + "Step 2: Skipped (--skip-exchange)" + CRESET);
     console.log();
@@ -185,10 +259,16 @@ async function main() {
     const simulated = process.env.OKX_SIMULATED === "true";
 
     if (provider !== "okx") {
-      warn("  Fund reset only works with OKX exchange (current: " + provider + ")");
+      warn(
+        "  Fund reset only works with OKX exchange (current: " + provider + ")",
+      );
     } else if (!simulated) {
-      warn("  Fund reset only works with OKX Simulated Trading (set OKX_SIMULATED=true)");
-      warn("  Cannot reset funds on a real OKX account - that would be real money!");
+      warn(
+        "  Fund reset only works with OKX Simulated Trading (set OKX_SIMULATED=true)",
+      );
+      warn(
+        "  Cannot reset funds on a real OKX account - that would be real money!",
+      );
     } else {
       if (dryRun) {
         warn("  [DRY] Would reset demo account to initial balance via OKX API");
@@ -212,19 +292,28 @@ async function main() {
 }
 
 // OKX Algo Order Cancellation
-async function cancelOkxAlgoOrders() {
+async function cancelOkxAlgoOrders(exchangeData?: {
+  apiKey?: string;
+  secretKey?: string;
+  passphrase?: string;
+  simulated?: boolean;
+}) {
   try {
     const axios = (await import("axios")).default;
     const CryptoJS = (await import("crypto-js")).default;
-    const apiKey = process.env.OKX_API_KEY;
-    const secretKey = process.env.OKX_SECRET_KEY;
-    const passphrase = process.env.OKX_PASSPHRASE;
-    if (!apiKey || !secretKey || !passphrase) { warn("  OKX credentials not configured, skipping"); return; }
+    const apiKey = exchangeData?.apiKey || process.env.OKX_API_KEY;
+    const secretKey = exchangeData?.secretKey || process.env.OKX_SECRET_KEY;
+    const passphrase = exchangeData?.passphrase || process.env.OKX_PASSPHRASE;
+    if (!apiKey || !secretKey || !passphrase) {
+      warn("  OKX credentials not configured, skipping");
+      return;
+    }
     const sk: string = secretKey;
     const ak: string = apiKey;
     const pp: string = passphrase;
 
-    const simulated = process.env.OKX_SIMULATED === "true";
+    const simulated =
+      exchangeData?.simulated ?? process.env.OKX_SIMULATED === "true";
     const baseUrl = process.env.OKX_BASE_URL || "https://www.okx.com";
     const timestamp = new Date().toISOString().replace(/\.\d{3}Z$/, ".000Z");
     const method = "POST";
@@ -246,10 +335,15 @@ async function cancelOkxAlgoOrders() {
     if (data.code === "0") {
       success("  Cancelled algo orders: " + JSON.stringify(data.data));
     } else {
-      warn("  Algo order cancellation: " + (data.msg || "no pending algo orders"));
+      warn(
+        "  Algo order cancellation: " + (data.msg || "no pending algo orders"),
+      );
     }
   } catch (err) {
-    warn("  Could not cancel algo orders: " + (err instanceof Error ? err.message : String(err)));
+    warn(
+      "  Could not cancel algo orders: " +
+        (err instanceof Error ? err.message : String(err)),
+    );
   }
 }
 
@@ -262,7 +356,10 @@ async function resetOkxDemoFunds() {
     const secretKey = process.env.OKX_SECRET_KEY;
     const passphrase = process.env.OKX_PASSPHRASE;
     const baseUrl = process.env.OKX_BASE_URL || "https://www.okx.com";
-    if (!apiKey || !secretKey || !passphrase) { error("  OKX credentials not configured"); return; }
+    if (!apiKey || !secretKey || !passphrase) {
+      error("  OKX credentials not configured");
+      return;
+    }
     const sk: string = secretKey;
     const ak: string = apiKey;
     const pp: string = passphrase;
@@ -274,7 +371,11 @@ async function resetOkxDemoFunds() {
     function getTimestamp(): string {
       return new Date().toISOString().replace(/\.\d{3}Z$/, ".000Z");
     }
-    function authHeaders(method: string, requestPath: string, body?: string): Record<string, string> {
+    function authHeaders(
+      method: string,
+      requestPath: string,
+      body?: string,
+    ): Record<string, string> {
       const ts = getTimestamp();
       return {
         "Content-Type": "application/json",
@@ -290,10 +391,14 @@ async function resetOkxDemoFunds() {
     log("  Fetching current demo balance...");
     try {
       const balPath = "/api/v5/account/balance";
-      const balResp = await axios.get(baseUrl + balPath, { headers: authHeaders("GET", balPath) });
+      const balResp = await axios.get(baseUrl + balPath, {
+        headers: authHeaders("GET", balPath),
+      });
       const bal = balResp.data.data && balResp.data.data[0];
       if (bal) log("  Current equity: $" + parseFloat(bal.totalEq).toFixed(2));
-    } catch { warn("  Could not fetch current balance"); }
+    } catch {
+      warn("  Could not fetch current balance");
+    }
 
     // Try reset endpoints
     log("  Resetting demo account to initial state...");
@@ -306,17 +411,26 @@ async function resetOkxDemoFunds() {
       try {
         const resetBody = JSON.stringify({});
         const resetHeaders = authHeaders("POST", ep, resetBody);
-        const response = await axios.post(baseUrl + ep, resetBody, { headers: resetHeaders });
+        const response = await axios.post(baseUrl + ep, resetBody, {
+          headers: resetHeaders,
+        });
         const data = response.data;
         if (data.code === "0") {
-          success("  Demo account reset via " + ep + ": " + JSON.stringify(data.data));
+          success(
+            "  Demo account reset via " + ep + ": " + JSON.stringify(data.data),
+          );
           resetOk = true;
           break;
         } else {
           warn("  " + ep + " failed: " + (data.msg || data.code));
         }
       } catch (err) {
-        warn("  " + ep + " error: " + (err instanceof Error ? err.message : String(err)));
+        warn(
+          "  " +
+            ep +
+            " error: " +
+            (err instanceof Error ? err.message : String(err)),
+        );
       }
     }
 
@@ -330,12 +444,19 @@ async function resetOkxDemoFunds() {
     log("  Verifying new balance...");
     try {
       const balPath = "/api/v5/account/balance";
-      const balResp = await axios.get(baseUrl + balPath, { headers: authHeaders("GET", balPath) });
+      const balResp = await axios.get(baseUrl + balPath, {
+        headers: authHeaders("GET", balPath),
+      });
       const bal = balResp.data.data && balResp.data.data[0];
       if (bal) success("  New equity: $" + parseFloat(bal.totalEq).toFixed(2));
-    } catch { warn("  Could not verify new balance"); }
+    } catch {
+      warn("  Could not verify new balance");
+    }
   } catch (err) {
-    error("  Demo fund reset error: " + (err instanceof Error ? err.message : String(err)));
+    error(
+      "  Demo fund reset error: " +
+        (err instanceof Error ? err.message : String(err)),
+    );
     error("  You can also reset manually at: https://www.okx.com/trade-demo");
   }
 }

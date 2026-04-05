@@ -4,25 +4,22 @@ import {
   Position,
   DraftTrade,
   TradeLog,
-  DiscordSource,
+  Account,
   getTradingMode,
-  getActiveDiscordSources,
   IPosition,
   ITPTarget,
   buildTPTargets,
   recalculateTPAllocation,
 } from "./database";
-import {
-  fetchRecentMessages,
-  fetchMessagesFromSource,
-  checkTokenHealth,
-  DiscordSourceConfig,
-  DiscordMessage,
-} from "./discord";
+import { BaseSourceMessage } from "./source/types";
+import { SourceFactory } from "./source/SourceFactory";
 import { AIFactory } from "./ai/AIFactory";
 import { TradingSignal, BulkMessageInput } from "./ai/types";
 import { preprocessImagesWithVision } from "./ai/GeminiVisionAnalyzer";
-import { ExchangeFactory } from "./exchange/ExchangeFactory";
+import {
+  ExchangeFactory,
+  ExchangeCredentials,
+} from "./exchange/ExchangeFactory";
 import { calculateRiskBasedPosition, getRiskConfig } from "./risk";
 import { getSignalConfig } from "./signal-config";
 import {
@@ -207,110 +204,96 @@ export async function runSignalCheck(): Promise<{
       `📦 Found ${processedMessageIds.size} previously processed messages in DB`,
     );
 
-    // 4. Get Discord sources (DB first, fallback to env)
-    const dbSources = await getActiveDiscordSources();
-    let allMessages: DiscordMessage[] = [];
+    // 4. Fetch messages from all active accounts via SourceFactory
+    let allMessages: BaseSourceMessage[] = [];
 
-    if (dbSources && dbSources.length > 0) {
+    const activeAccounts = await Account.find({ isActive: true })
+      .sort({ createdAt: 1 })
+      .lean();
+
+    if (!activeAccounts || activeAccounts.length === 0) {
+      console.log("⚠️ No active accounts configured — skipping message fetch");
+    } else {
       console.log(
-        `📡 Found ${dbSources.length} Discord sources in DB, fetching messages...`,
+        `📡 Found ${activeAccounts.length} active accounts, fetching messages...`,
       );
 
-      for (const source of dbSources) {
+      for (const account of activeAccounts) {
         // Filter out disabled channels
-        const disabledSet = new Set(source.disabledChannelIds || []);
-        const activeChannelIds = source.channelIds.filter(
+        const disabledSet = new Set(account.disabledChannelIds || []);
+        const activeChannelIds = account.channelIds.filter(
           (id: string) => !disabledSet.has(id),
         );
 
         if (activeChannelIds.length === 0) {
           console.log(
-            `⏭️ Source "${source.name}": all channels disabled, skipping`,
+            `⏭️ Account "${account.name}": all channels disabled, skipping`,
           );
           result.sources.push({
-            name: source.name,
-            channels: source.channelIds.length,
+            name: account.name,
+            channels: account.channelIds.length,
             healthy: true,
           });
           continue;
         }
 
-        const sourceConfig: DiscordSourceConfig = {
-          _id: (source as any)._id.toString(),
-          name: source.name,
-          method: source.method,
-          token: source.token,
-          channelIds: activeChannelIds,
-          refreshToken: source.refreshToken,
-          tokenExpiresAt: source.tokenExpiresAt,
-          autoRefresh: source.autoRefresh,
-        };
-
         try {
-          // Auto health check before fetching
-          if (source.autoRefresh) {
-            const health = await checkTokenHealth(source.method, source.token);
-            if (!health.valid) {
-              console.warn(
-                `⚠️ Source "${source.name}" token unhealthy: ${health.error}`,
-              );
-              await DiscordSource.findByIdAndUpdate(source._id, {
-                lastError: health.error,
-                isActive: health.needsRefresh ? false : source.isActive,
-              });
-              result.sources.push({
-                name: source.name,
-                channels: source.channelIds.length,
-                healthy: false,
-              });
-              continue;
-            }
-          }
+          const provider = SourceFactory.getProvider(account.sourceType);
+          const config = {
+            _id: account._id.toString(),
+            name: account.name,
+            type: account.sourceType,
+            channelIds: activeChannelIds,
+            ...((account.sourceData as Record<string, unknown>) || {}),
+          };
 
-          const messages = await fetchMessagesFromSource(
-            sourceConfig,
+          const messages = await provider.fetchMessages(
+            config,
             signalConfig.fetchLimit,
             signalConfig.timeWindowHours,
             processedMessageIds,
           );
+
+          // Ensure sourceId/sourceName are set
+          for (const m of messages) {
+            if (!m.sourceId) m.sourceId = account._id.toString();
+            if (!m.sourceName) m.sourceName = account.name;
+          }
+
           allMessages = allMessages.concat(messages);
 
-          // Update source health
-          await DiscordSource.findByIdAndUpdate(source._id, {
+          // Update account health
+          await Account.findByIdAndUpdate(account._id, {
             lastFetchedAt: new Date(),
             lastError: null,
           });
 
           result.sources.push({
-            name: source.name,
-            channels: source.channelIds.length,
+            name: account.name,
+            channels: account.channelIds.length,
             healthy: true,
           });
 
           console.log(
-            `📡 Source "${source.name}": ${messages.length} messages from ${source.channelIds.length} channels`,
+            `📡 Account "${account.name}" (${account.sourceType}): fetched ${messages.length} messages from ${activeChannelIds.length} channels`,
           );
         } catch (error) {
           const errMsg =
             error instanceof Error ? error.message : "Unknown error";
-          result.errors.push(`Source "${source.name}": ${errMsg}`);
+          result.errors.push(`Account "${account.name}": ${errMsg}`);
           result.sources.push({
-            name: source.name,
-            channels: source.channelIds.length,
+            name: account.name,
+            channels: account.channelIds.length,
             healthy: false,
           });
 
-          await DiscordSource.findByIdAndUpdate(source._id, {
+          await Account.findByIdAndUpdate(account._id, {
             lastError: errMsg,
           });
 
-          console.error(`❌ Source "${source.name}" error: ${errMsg}`);
+          console.error(`❌ Account "${account.name}" error: ${errMsg}`);
         }
       }
-    } else {
-      // Fallback to env config
-      console.log("📡 No DB sources, falling back to env config...");
-      allMessages = await fetchRecentMessages();
     }
 
     result.checked = allMessages.length;
@@ -346,6 +329,7 @@ export async function runSignalCheck(): Promise<{
       // Bulk-create pending messages
       await ProcessedMessage.insertMany(
         newMessages.map((msg) => ({
+          accountId: msg.sourceId || null,
           messageId: msg.messageId,
           channelId: msg.channelId,
           author: msg.author,
@@ -353,6 +337,7 @@ export async function runSignalCheck(): Promise<{
           signalType: null,
           parsedSignal: null,
           status: "pending" as const,
+          sourceTimestamp: msg.timestamp || null,
         })),
         { ordered: false },
       );
@@ -497,10 +482,25 @@ export async function runSignalCheck(): Promise<{
                 });
 
                 if (openPositions.length > 0) {
-                  const exchange = ExchangeFactory.getClient();
                   for (const pos of openPositions) {
                     try {
-                      await exchange.closePosition(
+                      // Resolve exchange for this position's account
+                      const posExchange = await (async () => {
+                        if (pos.accountId) {
+                          const acct = await Account.findById(
+                            pos.accountId,
+                          ).lean();
+                          if (acct?.exchangeData) {
+                            return ExchangeFactory.getClientForAccount({
+                              provider:
+                                (acct.tradingPlatform as any) || "paper",
+                              ...acct.exchangeData,
+                            });
+                          }
+                        }
+                        return ExchangeFactory.getPaperClient();
+                      })();
+                      await posExchange.closePosition(
                         pos.symbol,
                         pos.orderId,
                         pos.quantity,
@@ -544,10 +544,12 @@ export async function runSignalCheck(): Promise<{
                 msg.messageId,
                 msg.channelId,
                 msg.sourceName,
+                msg.sourceId,
               );
               result.executed++;
 
               await TradeLog.create({
+                accountId: msg.sourceId || undefined,
                 type: "signal",
                 action: signal.action,
                 symbol: signal.symbol,
@@ -556,7 +558,7 @@ export async function runSignalCheck(): Promise<{
               });
             } else {
               // Manual mode: create a draft for user review
-              await createDraft(signal, msg);
+              await createDraft(signal, msg, msg.sourceId);
               result.drafted++;
 
               await ProcessedMessage.updateOne(
@@ -565,6 +567,7 @@ export async function runSignalCheck(): Promise<{
               );
 
               await TradeLog.create({
+                accountId: msg.sourceId || undefined,
                 type: "signal",
                 action: signal.action,
                 symbol: signal.symbol,
@@ -613,6 +616,7 @@ async function createDraft(
     imageUrls: string[];
     timestamp?: Date;
   },
+  accountId?: string,
 ): Promise<void> {
   const riskCfg = await getRiskConfig();
   const side = signal.action === "SELL" ? "SHORT" : "LONG";
@@ -664,6 +668,7 @@ async function createDraft(
   }
 
   await DraftTrade.create({
+    accountId: accountId || null,
     messageId: msg.messageId,
     channelId: msg.channelId,
     messageUrl: msg.messageUrl,
@@ -682,11 +687,11 @@ async function createDraft(
     confidence: signal.confidence || 0,
     reasoning: signal.reasoning || "",
     status: "pending",
-    discordTimestamp: msg.timestamp || null,
+    sourceTimestamp: msg.timestamp || null,
   });
 
   console.log(
-    `📝 Created draft: ${signal.action} ${signal.symbol} (manual mode) — discordTimestamp: ${msg.timestamp}`,
+    `📝 Created draft: ${signal.action} ${signal.symbol} (manual mode) — sourceTimestamp: ${msg.timestamp}`,
   );
 }
 
@@ -788,6 +793,8 @@ export interface ExecuteTradeInput {
   signalData: string;
   /** Custom log prefix for request tracing (e.g. "[accept-abc123]") */
   logPrefix?: string;
+  /** Account ID — ties position to a specific account for per-account exchange */
+  accountId?: string;
 }
 
 /**
@@ -815,6 +822,7 @@ export async function executeTrade(
     sourceName,
     signalData,
     logPrefix = "",
+    accountId,
   } = input;
 
   const side = action === "SELL" ? ("SHORT" as const) : ("LONG" as const);
@@ -849,8 +857,31 @@ export async function executeTrade(
     console.warn(`${lp}⚠️ Risk management skipped: no entry price available`);
   }
 
+  // ─── Resolve exchange client (per-account or paper fallback) ────
+  let exchange;
+  if (accountId) {
+    const account = await Account.findById(accountId).lean();
+    if (account?.exchangeData) {
+      const creds: ExchangeCredentials = {
+        provider: (account.tradingPlatform as any) || "paper",
+        apiKey: account.exchangeData.apiKey,
+        secretKey: account.exchangeData.secretKey,
+        passphrase: account.exchangeData.passphrase,
+        simulated: account.exchangeData.simulated,
+      };
+      exchange = ExchangeFactory.getClientForAccount(creds);
+    } else {
+      console.warn(
+        `${lp}⚠️ Account ${accountId} has no exchangeData, using paper exchange`,
+      );
+      exchange = ExchangeFactory.getPaperClient();
+    }
+  } else {
+    console.warn(`${lp}⚠️ No accountId provided, using paper exchange`);
+    exchange = ExchangeFactory.getPaperClient();
+  }
+
   // ─── Place order via exchange ────────────────────────────────────
-  const exchange = ExchangeFactory.getClient();
 
   // Set leverage before placing order
   try {
@@ -947,6 +978,7 @@ export async function executeTrade(
   );
 
   const position = await Position.create({
+    accountId: accountId || undefined,
     symbol,
     side,
     entryPrice: entryPrice || orderResult.price || 0,
@@ -974,6 +1006,7 @@ export async function executeSignal(
   messageId: string,
   channelId?: string,
   sourceName?: string,
+  accountId?: string,
 ): Promise<IPosition | null> {
   const riskCfg = await getRiskConfig();
   const side = signal.action === "SELL" ? "SHORT" : "LONG";
@@ -1167,6 +1200,7 @@ export async function executeSignal(
         messageId,
         sourceName,
         signalData: JSON.stringify(signal),
+        accountId,
       });
 
       return position;
@@ -1179,9 +1213,21 @@ export async function executeSignal(
         status: "open",
       });
 
-      const exchange = ExchangeFactory.getClient();
+      // Resolve exchange per position (each may belong to different account)
       for (const pos of positions) {
-        await exchange.closePosition(pos.symbol, pos.orderId, pos.quantity);
+        const posExchange = await (async () => {
+          if (pos.accountId) {
+            const acct = await Account.findById(pos.accountId).lean();
+            if (acct?.exchangeData) {
+              return ExchangeFactory.getClientForAccount({
+                provider: (acct.tradingPlatform as any) || "paper",
+                ...acct.exchangeData,
+              });
+            }
+          }
+          return ExchangeFactory.getPaperClient();
+        })();
+        await posExchange.closePosition(pos.symbol, pos.orderId, pos.quantity);
 
         pos.status = "closed";
         pos.closedAt = new Date();

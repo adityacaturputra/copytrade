@@ -6,53 +6,73 @@ import { PaperExchange } from "./PaperExchange";
 export type ExchangeProvider = "mexc" | "okx" | "paper";
 
 /**
+ * ExchangeCredentials — per-account exchange configuration stored in DB.
+ */
+export interface ExchangeCredentials {
+  provider: ExchangeProvider;
+  apiKey?: string;
+  secretKey?: string;
+  passphrase?: string;
+  simulated?: boolean;
+  [key: string]: unknown;
+}
+
+/**
  * ExchangeFactory — dynamic factory for exchange clients.
  *
- * Mirrors the AIFactory pattern:
- *   - Reads EXCHANGE_PROVIDER from env (default: "mexc")
- *   - Creates a fresh adapter on every call (no stale caching)
- *   - Consumers call ExchangeFactory.getClient() and get a typed ExchangeClient
+ * All credentials come from the Account model in the database.
+ * No more env-var-based exchange configuration.
  *
  * To add a new exchange:
  *   1. Create src/lib/exchange/<Name>Exchange.ts implementing ExchangeClient
  *   2. Add the provider type above
  *   3. Add a case in createClient()
- *   4. Add env vars to .env.example
  */
 export class ExchangeFactory {
-  static getClient(provider?: ExchangeProvider): ExchangeClient {
-    const selectedProvider =
-      provider || (process.env.EXCHANGE_PROVIDER as ExchangeProvider) || "mexc";
-
-    return ExchangeFactory.createClient(selectedProvider);
+  /**
+   * Get an exchange client using account-specific credentials.
+   * Credentials come from the Account model in DB.
+   */
+  static getClientForAccount(credentials: ExchangeCredentials): ExchangeClient {
+    return ExchangeFactory.createClient(credentials.provider, credentials);
   }
 
-  private static createClient(provider: ExchangeProvider): ExchangeClient {
+  /**
+   * Get a paper trading client (no credentials needed).
+   */
+  static getPaperClient(): ExchangeClient {
+    return new PaperExchange();
+  }
+
+  private static createClient(
+    provider: ExchangeProvider,
+    creds?: ExchangeCredentials,
+  ): ExchangeClient {
     switch (provider) {
       case "paper": {
         return new PaperExchange();
       }
 
       case "okx": {
-        const apiKey = process.env.OKX_API_KEY;
-        const secretKey = process.env.OKX_SECRET_KEY;
-        const passphrase = process.env.OKX_PASSPHRASE;
+        const apiKey = creds?.apiKey;
+        const secretKey = creds?.secretKey;
+        const passphrase = creds?.passphrase;
         if (!apiKey || !secretKey || !passphrase) {
           throw new Error(
-            "OKX_API_KEY, OKX_SECRET_KEY, and OKX_PASSPHRASE must be configured",
+            "OKX apiKey, secretKey, and passphrase must be configured in account settings",
           );
         }
-        const simulated = process.env.OKX_SIMULATED === "true";
+        const simulated = creds?.simulated ?? false;
         return new OkxExchange(apiKey, secretKey, passphrase, simulated);
       }
 
       case "mexc":
       default: {
-        const apiKey = process.env.MEXC_API_KEY;
-        const secretKey = process.env.MEXC_SECRET_KEY;
+        const apiKey = creds?.apiKey;
+        const secretKey = creds?.secretKey;
         if (!apiKey || !secretKey) {
           throw new Error(
-            "MEXC_API_KEY and MEXC_SECRET_KEY must be configured",
+            "MEXC apiKey and secretKey must be configured in account settings",
           );
         }
         return new MexcExchange(apiKey, secretKey);
@@ -60,11 +80,25 @@ export class ExchangeFactory {
     }
   }
 
-  /** No-op — factory now always reads env dynamically */
-  static reset(): void {}
-
-  /** Get the currently configured provider name */
-  static getProviderName(): ExchangeProvider {
-    return (process.env.EXCHANGE_PROVIDER as ExchangeProvider) || "mexc";
+  /**
+   * @deprecated Use getClientForAccount() with per-account credentials.
+   * Legacy fallback — returns paper exchange.
+   * Used by agent/tools.ts, mexc-api.ts, risk.ts which haven't been
+   * migrated to multi-account yet.
+   */
+  static getClient(): ExchangeClient {
+    console.warn(
+      "[ExchangeFactory] getClient() is deprecated — using paper exchange as fallback. " +
+        "Migrate caller to getClientForAccount().",
+    );
+    return new PaperExchange();
   }
+
+  /** @deprecated Provider name is now per-account, not global */
+  static getProviderName(): string {
+    return "paper";
+  }
+
+  /** No-op — factory now always reads credentials dynamically */
+  static reset(): void {}
 }

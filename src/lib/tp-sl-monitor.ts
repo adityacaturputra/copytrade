@@ -1,6 +1,34 @@
-import { connectDB, Position, TradeLog, IPosition } from "./database";
-import { ExchangeFactory } from "./exchange/ExchangeFactory";
+import { connectDB, Position, TradeLog, Account, IPosition } from "./database";
+import {
+  ExchangeFactory,
+  ExchangeCredentials,
+} from "./exchange/ExchangeFactory";
+import { ExchangeClient } from "./exchange/types";
 import { splitQuantityForTPs } from "./executor";
+
+/**
+ * Resolve the exchange client for a position based on its accountId.
+ * If accountId is set, look up the Account and use its exchangeData.
+ * Otherwise, fall back to global ExchangeFactory.getClient().
+ */
+async function getExchangeForPosition(position: {
+  accountId?: string;
+}): Promise<ExchangeClient> {
+  if (position.accountId) {
+    const account = await Account.findById(position.accountId).lean();
+    if (account?.exchangeData) {
+      const creds: ExchangeCredentials = {
+        provider: (account.tradingPlatform as any) || "paper",
+        apiKey: account.exchangeData.apiKey,
+        secretKey: account.exchangeData.secretKey,
+        passphrase: account.exchangeData.passphrase,
+        simulated: account.exchangeData.simulated,
+      };
+      return ExchangeFactory.getClientForAccount(creds);
+    }
+  }
+  return ExchangeFactory.getPaperClient();
+}
 
 /**
  * TP/SL Monitor — dedicated cron job that:
@@ -37,11 +65,11 @@ export async function runTpslMonitor(): Promise<{
         `⏳ [TP/SL Monitor] Checking ${pendingPositions.length} pending positions...`,
       );
 
-      const exchange = ExchangeFactory.getClient();
-
       for (const position of pendingPositions) {
         result.checked++;
         try {
+          const exchange = await getExchangeForPosition(position);
+
           // Check if limit order is still live on exchange
           const openOrders = await exchange.getOpenOrders(position.symbol);
           const orderStillOpen = openOrders.some(
@@ -155,38 +183,50 @@ export async function runTpslMonitor(): Promise<{
     }
 
     // ─── Step 2: Place TP/SL for open positions missing them ─────────────
-    const positionsNeedingTpsl = await Position.find({
-      status: "open",
-      tpSlPlaced: { $ne: true },
-    });
+    // Use atomic findOneAndUpdate to claim each position — prevents concurrent
+    // cron instances from placing duplicate TP/SL orders (race condition fix).
+    let tpslClaimed = 0;
 
-    if (positionsNeedingTpsl.length > 0) {
-      console.log(
-        `🎯 [TP/SL Monitor] Placing TP/SL for ${positionsNeedingTpsl.length} open positions...`,
+    while (true) {
+      const position = await Position.findOneAndUpdate(
+        { status: "open", tpSlPlaced: { $ne: true } },
+        { $set: { tpSlPlaced: true } },
+        { new: true },
       );
 
-      const exchange = ExchangeFactory.getClient();
+      if (!position) break;
 
-      for (const position of positionsNeedingTpsl) {
-        result.checked++;
-        try {
-          await placeTpslForPosition(exchange, position);
-          result.tpslPlaced++;
-        } catch (tpslErr) {
-          const errMsg =
-            tpslErr instanceof Error ? tpslErr.message : String(tpslErr);
-          result.errors.push(`TP/SL ${position.symbol}: ${errMsg}`);
-          console.error(
-            `[TP/SL Monitor] Error placing TP/SL for ${position.symbol}: ${errMsg}`,
-          );
+      tpslClaimed++;
+      result.checked++;
 
-          await TradeLog.create({
-            type: "tpsl-monitor",
-            action: "tpsl_error",
-            symbol: position.symbol,
-            error: errMsg,
-          });
-        }
+      if (tpslClaimed === 1) {
+        console.log(
+          `🎯 [TP/SL Monitor] Placing TP/SL for open positions (atomic claim)...`,
+        );
+      }
+
+      try {
+        const exchange = await getExchangeForPosition(position);
+        await placeTpslForPosition(exchange, position);
+        result.tpslPlaced++;
+      } catch (tpslErr) {
+        const errMsg =
+          tpslErr instanceof Error ? tpslErr.message : String(tpslErr);
+        result.errors.push(`TP/SL ${position.symbol}: ${errMsg}`);
+        console.error(
+          `[TP/SL Monitor] Error placing TP/SL for ${position.symbol}: ${errMsg}`,
+        );
+
+        // Release the claim so it can be retried next run
+        position.tpSlPlaced = false;
+        await position.save();
+
+        await TradeLog.create({
+          type: "tpsl-monitor",
+          action: "tpsl_error",
+          symbol: position.symbol,
+          error: errMsg,
+        });
       }
     }
 
@@ -213,7 +253,7 @@ export async function runTpslMonitor(): Promise<{
  * Uses the same logic as executor.ts but reads TP/SL targets from the position document.
  */
 async function placeTpslForPosition(
-  exchange: ReturnType<typeof ExchangeFactory.getClient>,
+  exchange: ExchangeClient,
   position: IPosition & { save: () => Promise<unknown> },
 ): Promise<void> {
   const tpTargets = position.takeProfitTargets || [];
@@ -242,7 +282,6 @@ async function placeTpslForPosition(
       () => exchange.getInstrumentSpecs(position.symbol),
     );
 
-    let allTpSuccess = true;
     for (let i = 0; i < tpPrices.length; i++) {
       const tp = tpPrices[i];
       const tpQty = tpQuantities[i];
@@ -258,7 +297,6 @@ async function placeTpslForPosition(
           `🎯 [TP/SL Monitor] TP ${i + 1}/${tpPrices.length} placed at ${tp} (qty: ${tpQty}, order: ${tpId}) for ${position.symbol}`,
         );
       } catch (tpErr) {
-        allTpSuccess = false;
         console.warn(
           `⚠️ [TP/SL Monitor] Failed to place TP at ${tp} for ${position.symbol}: ${tpErr instanceof Error ? tpErr.message : String(tpErr)}`,
         );

@@ -2,20 +2,37 @@
 
 import { useState, useEffect, useCallback } from "react";
 
-interface DiscordSource {
+// ─── Types ───────────────────────────────────────────────────
+
+interface AccountData {
   _id: string;
   name: string;
-  method: "bot" | "user";
-  token: string;
-  refreshToken?: string;
+  sourceType: string;
+  sourceData: {
+    method?: string;
+    token?: string;
+    refreshToken?: string;
+    autoRefresh?: boolean;
+    tokenExpiresAt?: string;
+    botToken?: string;
+    [key: string]: unknown;
+  };
   channelIds: string[];
   channelNames?: Record<string, string>;
   disabledChannelIds?: string[];
+  tradingPlatform: string;
+  exchangeData?: {
+    apiKey?: string;
+    apiSecret?: string;
+    secretKey?: string;
+    passphrase?: string;
+    isDemo?: boolean;
+    simulated?: boolean;
+    [key: string]: unknown;
+  };
   isActive: boolean;
   lastFetchedAt?: string;
   lastError?: string;
-  tokenExpiresAt?: string;
-  autoRefresh: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -31,22 +48,40 @@ interface ChannelEntry {
   name: string;
 }
 
-interface SourceFormData {
+interface AccountFormData {
   name: string;
-  method: "bot" | "user";
+  sourceType: string;
+  // Discord
+  method: string;
   token: string;
   refreshToken: string;
-  channels: ChannelEntry[];
   autoRefresh: boolean;
+  // Telegram
+  botToken: string;
+  // Channels
+  channels: ChannelEntry[];
+  // Exchange
+  tradingPlatform: string;
+  exchangeApiKey: string;
+  exchangeApiSecret: string;
+  exchangePassphrase: string;
+  exchangeIsDemo: boolean;
 }
 
-const emptyForm: SourceFormData = {
+const emptyForm: AccountFormData = {
   name: "",
+  sourceType: "discord",
   method: "bot",
   token: "",
   refreshToken: "",
-  channels: [{ id: "", name: "" }],
   autoRefresh: true,
+  botToken: "",
+  channels: [{ id: "", name: "" }],
+  tradingPlatform: "okx",
+  exchangeApiKey: "",
+  exchangeApiSecret: "",
+  exchangePassphrase: "",
+  exchangeIsDemo: false,
 };
 
 interface RiskConfig {
@@ -88,7 +123,7 @@ const RECOMMENDED_SCHEDULES: Record<
   "signal-check": {
     label: "Every 5 minutes",
     description:
-      "Check Discord for new signals frequently. Recommended: 5 min.",
+      "Check sources for new signals frequently. Recommended: 5 min.",
   },
   "position-monitor": {
     label: "Every 30 minutes",
@@ -100,13 +135,18 @@ const RECOMMENDED_SCHEDULES: Record<
   },
 };
 
+// ─── Component ──────────────────────────────────────────────
+
 export default function SettingsPage() {
-  const [sources, setSources] = useState<DiscordSource[]>([]);
+  const [activeTab, setActiveTab] = useState<"accounts" | "system">("accounts");
+
+  // ─── Account state ────────────────────────────────────────
+  const [accounts, setAccounts] = useState<AccountData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState<SourceFormData>(emptyForm);
+  const [form, setForm] = useState<AccountFormData>(emptyForm);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [healthResults, setHealthResults] = useState<
@@ -114,35 +154,15 @@ export default function SettingsPage() {
   >({});
   const [checkingHealth, setCheckingHealth] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
-  const [showExtract, setShowExtract] = useState(false);
-  const [extractToken, setExtractToken] = useState("");
-  const [extractName, setExtractName] = useState("");
-  const [extracting, setExtracting] = useState(false);
-  const [copiedScript, setCopiedScript] = useState(false);
 
-  // Risk management state
+  // ─── Risk state ───────────────────────────────────────────
   const [riskConfig, setRiskConfigState] =
     useState<RiskConfig>(defaultRiskConfig);
   const [riskSaving, setRiskSaving] = useState(false);
   const [riskError, setRiskError] = useState<string | null>(null);
   const [riskSuccess, setRiskSuccess] = useState(false);
 
-  // Reset state
-  const [resetLoading, setResetLoading] = useState(false);
-  const [resetResult, setResetResult] = useState<{
-    success: boolean;
-    message: string;
-    results?: {
-      step: string;
-      status: string;
-      message: string;
-      details?: string[];
-    }[];
-  } | null>(null);
-  const [resetShowConfirm, setResetShowConfirm] = useState(false);
-  const [resetConfirmText, setResetConfirmText] = useState("");
-
-  // Signal config state
+  // ─── Signal config state ──────────────────────────────────
   const [signalCfg, setSignalCfg] = useState({
     fetchLimit: 10,
     timeWindowHours: 24,
@@ -154,7 +174,7 @@ export default function SettingsPage() {
   const [signalError, setSignalError] = useState<string | null>(null);
   const [signalSuccess, setSignalSuccess] = useState(false);
 
-  // Cron settings state
+  // ─── Cron state ───────────────────────────────────────────
   const [cronBaseUrl, setCronBaseUrl] = useState("");
   const [cronJobs, setCronJobs] = useState<
     Array<{
@@ -211,7 +231,7 @@ export default function SettingsPage() {
     }>
   >([]);
 
-  // Proxy state
+  // ─── Proxy state ──────────────────────────────────────────
   const [proxyConfig, setProxyConfig] = useState<{
     enabled: boolean;
     provider: "webshare" | "custom";
@@ -239,9 +259,7 @@ export default function SettingsPage() {
   const [proxyLoading, setProxyLoading] = useState(true);
   const [proxyRefreshing, setProxyRefreshing] = useState(false);
   const [proxySaving, setProxySaving] = useState(false);
-  const [showProxyPasswords, setShowProxyPasswords] = useState(false);
   const [proxyError, setProxyError] = useState<string | null>(null);
-  // Custom proxy form
   const [customProxy, setCustomProxy] = useState({
     host: "",
     port: 1080,
@@ -249,12 +267,29 @@ export default function SettingsPage() {
     password: "",
   });
 
-  const fetchSources = useCallback(async () => {
+  // ─── Reset state ──────────────────────────────────────────
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetResult, setResetResult] = useState<{
+    success: boolean;
+    message: string;
+    results?: {
+      step: string;
+      status: string;
+      message: string;
+      details?: string[];
+    }[];
+  } | null>(null);
+  const [resetShowConfirm, setResetShowConfirm] = useState(false);
+  const [resetConfirmText, setResetConfirmText] = useState("");
+
+  // ─── Fetch functions ──────────────────────────────────────
+
+  const fetchAccounts = useCallback(async () => {
     try {
-      const res = await fetch("/api/discord-sources");
+      const res = await fetch("/api/accounts");
       const json = await res.json();
       if (json.success) {
-        setSources(json.sources);
+        setAccounts(json.accounts || []);
         setError(null);
       } else {
         setError(json.error);
@@ -308,38 +343,6 @@ export default function SettingsPage() {
     }
   }, []);
 
-  const handleProxySave = async () => {
-    setProxySaving(true);
-    setProxyError(null);
-    try {
-      const body: Record<string, unknown> = {
-        enabled: proxyConfig?.enabled ?? false,
-        provider: proxyConfig?.provider ?? "webshare",
-      };
-      if (proxyConfig?.provider === "custom") {
-        body.custom = customProxy;
-      }
-      const res = await fetch("/api/proxy", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const json = await res.json();
-      if (json.success) {
-        setProxyConfig(json.config);
-        setProxyProviderInfo(json.providerInfo || null);
-      } else {
-        setProxyError(json.error || "Failed to save proxy config");
-      }
-    } catch (err) {
-      setProxyError(
-        err instanceof Error ? err.message : "Failed to save proxy config",
-      );
-    } finally {
-      setProxySaving(false);
-    }
-  };
-
   const fetchCronSettings = useCallback(async () => {
     try {
       const res = await fetch("/api/cron-settings");
@@ -354,15 +357,302 @@ export default function SettingsPage() {
     }
   }, []);
 
+  useEffect(() => {
+    fetchAccounts();
+    fetchSettings();
+    fetchProxies();
+    fetchCronSettings();
+  }, [fetchAccounts, fetchSettings, fetchProxies, fetchCronSettings]);
+
+  // ─── Account handlers ─────────────────────────────────────
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    setFormError(null);
+
+    const validChannels = form.channels.filter((c) => c.id.trim() !== "");
+    const channelIdsArray = validChannels.map((c) => c.id.trim());
+    const channelNamesMap: Record<string, string> = {};
+    validChannels.forEach((c) => {
+      if (c.name.trim()) {
+        channelNamesMap[c.id.trim()] = c.name.trim();
+      }
+    });
+
+    // Validation
+    if (!form.name || channelIdsArray.length === 0) {
+      setFormError("Name and at least one channel ID are required.");
+      setSaving(false);
+      return;
+    }
+
+    if (form.sourceType === "discord" && !editingId && !form.token) {
+      setFormError("Discord token is required for new accounts.");
+      setSaving(false);
+      return;
+    }
+
+    if (form.sourceType === "telegram" && !editingId && !form.botToken) {
+      setFormError("Telegram bot token is required for new accounts.");
+      setSaving(false);
+      return;
+    }
+
+    if (
+      form.tradingPlatform !== "paper" &&
+      !editingId &&
+      (!form.exchangeApiKey || !form.exchangeApiSecret)
+    ) {
+      setFormError("Exchange API key and secret are required.");
+      setSaving(false);
+      return;
+    }
+
+    try {
+      // Build sourceData based on sourceType
+      const sourceData: Record<string, unknown> = {};
+      if (form.sourceType === "discord") {
+        sourceData.method = form.method;
+        if (form.token) sourceData.token = form.token;
+        if (form.refreshToken) sourceData.refreshToken = form.refreshToken;
+        sourceData.autoRefresh = form.autoRefresh;
+      } else if (form.sourceType === "telegram") {
+        if (form.botToken) sourceData.botToken = form.botToken;
+      }
+
+      // Build exchangeData
+      const exchangeData: Record<string, unknown> = {};
+      if (form.tradingPlatform !== "paper") {
+        if (form.exchangeApiKey) exchangeData.apiKey = form.exchangeApiKey;
+        if (form.exchangeApiSecret)
+          exchangeData.secretKey = form.exchangeApiSecret;
+        if (form.exchangePassphrase)
+          exchangeData.passphrase = form.exchangePassphrase;
+        exchangeData.simulated = form.exchangeIsDemo;
+      }
+
+      const body = {
+        id: editingId || undefined,
+        name: form.name,
+        sourceType: form.sourceType,
+        sourceData,
+        channelIds: channelIdsArray,
+        channelNames: channelNamesMap,
+        tradingPlatform: form.tradingPlatform,
+        exchangeData,
+      };
+
+      const res = await fetch("/api/accounts", {
+        method: editingId ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      const json = await res.json();
+      if (json.success) {
+        setShowForm(false);
+        setEditingId(null);
+        setForm(emptyForm);
+        await fetchAccounts();
+      } else {
+        setFormError(json.error || "Failed to save");
+      }
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleEdit = (account: AccountData) => {
+    const sourceChannelNames = account.channelNames || {};
+    setEditingId(account._id);
+    setForm({
+      name: account.name,
+      sourceType: account.sourceType || "discord",
+      // Discord fields
+      method: (account.sourceData?.method as string) || "bot",
+      token: "", // Leave empty = keep existing
+      refreshToken: "",
+      autoRefresh: (account.sourceData?.autoRefresh as boolean) ?? true,
+      // Telegram fields
+      botToken: "",
+      // Channels
+      channels: account.channelIds.map((cid: string) => ({
+        id: cid,
+        name: sourceChannelNames[cid] || "",
+      })),
+      // Exchange
+      tradingPlatform: account.tradingPlatform || "okx",
+      exchangeApiKey: "",
+      exchangeApiSecret: "",
+      exchangePassphrase: "",
+      exchangeIsDemo:
+        (account.exchangeData?.isDemo as boolean) ??
+        (account.exchangeData?.simulated as boolean) ??
+        false,
+    });
+    setShowForm(true);
+    setFormError(null);
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm("Are you sure you want to delete this account?")) return;
+    setDeleting(id);
+    try {
+      const res = await fetch(`/api/accounts?id=${id}`, { method: "DELETE" });
+      const json = await res.json();
+      if (json.success) {
+        await fetchAccounts();
+      } else {
+        alert(`Failed: ${json.error}`);
+      }
+    } catch (err) {
+      alert(`Error: ${err instanceof Error ? err.message : "Unknown"}`);
+    } finally {
+      setDeleting(null);
+    }
+  };
+
+  const handleToggleActive = async (
+    account: AccountData,
+    newActive: boolean,
+  ) => {
+    try {
+      const res = await fetch("/api/accounts", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: account._id, isActive: newActive }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        await fetchAccounts();
+      } else {
+        alert(`Failed: ${json.error}`);
+      }
+    } catch (err) {
+      alert(`Error: ${err instanceof Error ? err.message : "Unknown"}`);
+    }
+  };
+
+  const handleToggleChannel = async (
+    account: AccountData,
+    channelId: string,
+  ) => {
+    const disabled = new Set(account.disabledChannelIds || []);
+    if (disabled.has(channelId)) {
+      disabled.delete(channelId);
+    } else {
+      disabled.add(channelId);
+    }
+    try {
+      const res = await fetch("/api/accounts", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: account._id,
+          disabledChannelIds: Array.from(disabled),
+        }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        await fetchAccounts();
+      } else {
+        alert(`Failed: ${json.error}`);
+      }
+    } catch (err) {
+      alert(`Error: ${err instanceof Error ? err.message : "Unknown"}`);
+    }
+  };
+
+  const checkHealth = async (id?: string) => {
+    setCheckingHealth(id || "all");
+    try {
+      const res = await fetch("/api/accounts/health", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: id || undefined }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        if (id) {
+          setHealthResults((prev) => ({
+            ...prev,
+            [id]: json.health,
+          }));
+        } else {
+          const newResults: Record<string, HealthStatus> = {};
+          for (const r of json.results || []) {
+            newResults[r.accountId || r.sourceId] = r.health;
+          }
+          setHealthResults(newResults);
+        }
+      }
+    } catch (err) {
+      console.error("Health check error:", err);
+    } finally {
+      setCheckingHealth(null);
+    }
+  };
+
+  // ─── Settings handlers ────────────────────────────────────
+
+  const handleRiskSave = async () => {
+    setRiskSaving(true);
+    setRiskError(null);
+    setRiskSuccess(false);
+    try {
+      const res = await fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ risk: riskConfig }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setRiskSuccess(true);
+        setTimeout(() => setRiskSuccess(false), 3000);
+      } else {
+        setRiskError(json.error || "Failed to save");
+      }
+    } catch (err) {
+      setRiskError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setRiskSaving(false);
+    }
+  };
+
+  const handleSignalSave = async () => {
+    setSignalSaving(true);
+    setSignalError(null);
+    setSignalSuccess(false);
+    try {
+      const res = await fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ signal: signalCfg }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setSignalSuccess(true);
+        setTimeout(() => setSignalSuccess(false), 3000);
+      } else {
+        setSignalError(json.error || "Failed to save");
+      }
+    } catch (err) {
+      setSignalError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setSignalSaving(false);
+    }
+  };
+
   const handleCronSave = async () => {
-    // Client-side validation
     if (!cronBaseUrl || !cronBaseUrl.startsWith("http")) {
       setCronError(
         "Base URL is required. Click '☁️ Sync from Cloud' first to auto-detect your deployment URL, or enter it manually.",
       );
       return;
     }
-
     setCronSaving(true);
     setCronError(null);
     setCronSuccess(false);
@@ -376,7 +666,6 @@ export default function SettingsPage() {
       if (json.success) {
         setCronSuccess(true);
         if (json.settings?.jobs) setCronJobs(json.settings.jobs);
-        // Refresh live status
         await fetchCronSettings();
         setTimeout(() => setCronSuccess(false), 3000);
       } else {
@@ -412,258 +701,35 @@ export default function SettingsPage() {
     }
   };
 
-  useEffect(() => {
-    fetchSources();
-    fetchSettings();
-    fetchProxies();
-    fetchCronSettings();
-  }, [fetchSources, fetchSettings, fetchProxies, fetchCronSettings]);
-
-  const handleSignalSave = async () => {
-    setSignalSaving(true);
-    setSignalError(null);
-    setSignalSuccess(false);
+  const handleProxySave = async () => {
+    setProxySaving(true);
+    setProxyError(null);
     try {
-      const res = await fetch("/api/settings", {
+      const body: Record<string, unknown> = {
+        enabled: proxyConfig?.enabled ?? false,
+        provider: proxyConfig?.provider ?? "webshare",
+      };
+      if (proxyConfig?.provider === "custom") {
+        body.custom = customProxy;
+      }
+      const res = await fetch("/api/proxy", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ signal: signalCfg }),
+        body: JSON.stringify(body),
       });
       const json = await res.json();
       if (json.success) {
-        setSignalSuccess(true);
-        setTimeout(() => setSignalSuccess(false), 3000);
+        setProxyConfig(json.config);
+        setProxyProviderInfo(json.providerInfo || null);
       } else {
-        setSignalError(json.error || "Failed to save");
+        setProxyError(json.error || "Failed to save proxy config");
       }
     } catch (err) {
-      setSignalError(err instanceof Error ? err.message : "Network error");
-    } finally {
-      setSignalSaving(false);
-    }
-  };
-
-  const handleRiskSave = async () => {
-    setRiskSaving(true);
-    setRiskError(null);
-    setRiskSuccess(false);
-    try {
-      const res = await fetch("/api/settings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ risk: riskConfig }),
-      });
-      const json = await res.json();
-      if (json.success) {
-        setRiskSuccess(true);
-        setTimeout(() => setRiskSuccess(false), 3000);
-      } else {
-        setRiskError(json.error || "Failed to save");
-      }
-    } catch (err) {
-      setRiskError(err instanceof Error ? err.message : "Network error");
-    } finally {
-      setRiskSaving(false);
-    }
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSaving(true);
-    setFormError(null);
-
-    const validChannels = form.channels.filter((c) => c.id.trim() !== "");
-    const channelIdsArray = validChannels.map((c) => c.id.trim());
-    const channelNamesMap: Record<string, string> = {};
-    validChannels.forEach((c) => {
-      if (c.name.trim()) {
-        channelNamesMap[c.id.trim()] = c.name.trim();
-      }
-    });
-
-    if (
-      !form.name ||
-      (!editingId && !form.token) ||
-      channelIdsArray.length === 0
-    ) {
-      setFormError(
-        editingId
-          ? "Name and at least one channel ID are required."
-          : "Name, token, and at least one channel ID are required.",
+      setProxyError(
+        err instanceof Error ? err.message : "Failed to save proxy config",
       );
-      setSaving(false);
-      return;
-    }
-
-    try {
-      let res: Response;
-      if (editingId) {
-        res = await fetch("/api/discord-sources", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            id: editingId,
-            name: form.name,
-            method: form.method,
-            token: form.token,
-            refreshToken: form.refreshToken || undefined,
-            channelIds: channelIdsArray,
-            channelNames: channelNamesMap,
-            autoRefresh: form.autoRefresh,
-          }),
-        });
-      } else {
-        res = await fetch("/api/discord-sources", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: form.name,
-            method: form.method,
-            token: form.token,
-            refreshToken: form.refreshToken || undefined,
-            channelIds: channelIdsArray,
-            channelNames: channelNamesMap,
-            autoRefresh: form.autoRefresh,
-          }),
-        });
-      }
-
-      const json = await res.json();
-      if (json.success) {
-        setShowForm(false);
-        setEditingId(null);
-        setForm(emptyForm);
-        await fetchSources();
-      } else {
-        setFormError(json.error || "Failed to save");
-      }
-    } catch (err) {
-      setFormError(err instanceof Error ? err.message : "Network error");
     } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleEdit = (source: DiscordSource) => {
-    const sourceChannelNames =
-      (source as DiscordSource & { channelNames?: Record<string, string> })
-        .channelNames || {};
-    setEditingId(source._id);
-    setForm({
-      name: source.name,
-      method: source.method,
-      token: "", // Leave empty = keep existing token
-      refreshToken: "", // Leave empty = keep existing
-      channels: source.channelIds.map((cid) => ({
-        id: cid,
-        name: sourceChannelNames[cid] || "",
-      })),
-      autoRefresh: source.autoRefresh,
-    });
-    setShowForm(true);
-    setFormError(null);
-  };
-
-  const handleDelete = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this Discord source?"))
-      return;
-    setDeleting(id);
-    try {
-      const res = await fetch(`/api/discord-sources?id=${id}`, {
-        method: "DELETE",
-      });
-      const json = await res.json();
-      if (json.success) {
-        await fetchSources();
-      } else {
-        alert(`Failed: ${json.error}`);
-      }
-    } catch (err) {
-      alert(`Error: ${err instanceof Error ? err.message : "Unknown"}`);
-    } finally {
-      setDeleting(null);
-    }
-  };
-
-  const handleToggleActive = async (
-    source: DiscordSource,
-    newActive: boolean,
-  ) => {
-    try {
-      const res = await fetch("/api/discord-sources", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: source._id, isActive: newActive }),
-      });
-      const json = await res.json();
-      if (json.success) {
-        await fetchSources();
-      } else {
-        alert(`Failed: ${json.error}`);
-      }
-    } catch (err) {
-      alert(`Error: ${err instanceof Error ? err.message : "Unknown"}`);
-    }
-  };
-
-  const handleToggleChannel = async (
-    source: DiscordSource,
-    channelId: string,
-  ) => {
-    const disabled = new Set(source.disabledChannelIds || []);
-    if (disabled.has(channelId)) {
-      disabled.delete(channelId);
-    } else {
-      disabled.add(channelId);
-    }
-    try {
-      const res = await fetch("/api/discord-sources", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: source._id,
-          disabledChannelIds: Array.from(disabled),
-        }),
-      });
-      const json = await res.json();
-      if (json.success) {
-        await fetchSources();
-      } else {
-        alert(`Failed: ${json.error}`);
-      }
-    } catch (err) {
-      alert(`Error: ${err instanceof Error ? err.message : "Unknown"}`);
-    }
-  };
-
-  const checkHealth = async (id?: string) => {
-    setCheckingHealth(id || "all");
-    try {
-      const res = await fetch("/api/discord-sources/health", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: id || undefined }),
-      });
-      const json = await res.json();
-      if (json.success) {
-        if (id) {
-          setHealthResults((prev) => ({
-            ...prev,
-            [id]: json.health,
-          }));
-        } else {
-          // All results
-          const newResults: Record<string, HealthStatus> = {};
-          for (const r of json.results || []) {
-            newResults[r.sourceId] = r.health;
-          }
-          setHealthResults(newResults);
-        }
-      }
-    } catch (err) {
-      console.error("Health check error:", err);
-    } finally {
-      setCheckingHealth(null);
+      setProxySaving(false);
     }
   };
 
@@ -690,6 +756,8 @@ export default function SettingsPage() {
     }
   };
 
+  // ─── Loading state ────────────────────────────────────────
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -701,8 +769,11 @@ export default function SettingsPage() {
     );
   }
 
+  // ─── Render ───────────────────────────────────────────────
+
   return (
     <div className="min-h-screen">
+      {/* Header */}
       <header className="border-b border-slate-700 bg-dark-100 sticky top-0 z-10">
         <div className="max-w-5xl mx-auto px-3 sm:px-6 lg:px-8 py-3 sm:py-4">
           <div className="flex items-center justify-between gap-2">
@@ -718,18 +789,67 @@ export default function SettingsPage() {
                 ⚙️ Settings
               </h1>
             </div>
-            <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          </div>
+        </div>
+      </header>
+
+      {/* Tab Navigation */}
+      <div className="border-b border-slate-700 bg-dark-200">
+        <div className="max-w-5xl mx-auto px-3 sm:px-6 lg:px-8">
+          <nav className="flex gap-1">
+            <button
+              onClick={() => setActiveTab("accounts")}
+              className={`px-4 py-3 text-sm font-medium border-b-2 transition ${
+                activeTab === "accounts"
+                  ? "border-primary-500 text-primary-400"
+                  : "border-transparent text-slate-400 hover:text-slate-300"
+              }`}
+            >
+              📡 Accounts
+            </button>
+            <button
+              onClick={() => setActiveTab("system")}
+              className={`px-4 py-3 text-sm font-medium border-b-2 transition ${
+                activeTab === "system"
+                  ? "border-primary-500 text-primary-400"
+                  : "border-transparent text-slate-400 hover:text-slate-300"
+              }`}
+            >
+              🔧 System Settings
+            </button>
+          </nav>
+        </div>
+      </div>
+
+      <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+        {/* ═══════════ ACCOUNTS TAB ═══════════ */}
+        {activeTab === "accounts" && (
+          <>
+            {/* Info Banner */}
+            <div className="card bg-slate-800/50 border-slate-700">
+              <h2 className="text-sm font-semibold text-slate-300 mb-2">
+                📡 Trading Accounts
+              </h2>
+              <p className="text-xs text-slate-400">
+                Each account links a signal source (Discord/Telegram) with an
+                exchange (OKX/MEXC/Paper). Signals from the source channels are
+                auto-executed on the linked exchange.
+              </p>
+            </div>
+
+            {/* Action buttons */}
+            <div className="flex items-center gap-2">
               <button
                 onClick={() => checkHealth()}
                 disabled={checkingHealth !== null}
-                className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 px-2 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition flex items-center gap-1 sm:gap-2"
+                className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 px-3 py-2 rounded-lg text-xs sm:text-sm font-medium transition flex items-center gap-1.5"
               >
                 {checkingHealth === "all" ? (
                   <div className="spinner w-4 h-4 border-2" />
                 ) : (
                   "🩺"
                 )}
-                <span className="hidden sm:inline">Check All Health</span>
+                Check Health
               </button>
               <button
                 onClick={() => {
@@ -738,1936 +858,1204 @@ export default function SettingsPage() {
                   setShowForm(true);
                   setFormError(null);
                 }}
-                className="bg-primary-600 hover:bg-primary-700 px-2 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition flex items-center gap-1 sm:gap-2"
+                className="bg-primary-600 hover:bg-primary-700 px-3 py-2 rounded-lg text-xs sm:text-sm font-medium transition flex items-center gap-1.5"
               >
-                ➕ <span className="hidden sm:inline">Add Source</span>
+                ➕ Add Account
               </button>
             </div>
-          </div>
-        </div>
-      </header>
 
-      <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-        {/* Info Banner */}
-        <div className="card bg-slate-800/50 border-slate-700">
-          <h2 className="text-sm font-semibold text-slate-300 mb-2">
-            📡 Discord Sources
-          </h2>
-          <p className="text-xs text-slate-400">
-            Configure multiple Discord servers and channels to monitor for
-            trading signals. Each source can use a Bot token (requires bot in
-            server) or a User token (personal account). Token health is checked
-            automatically before each signal fetch. If a token expires, the
-            source is disabled — update the token here to re-enable.
-          </p>
-        </div>
+            {/* Add/Edit Form */}
+            {showForm && (
+              <div className="card border-primary-700/50">
+                <h3 className="text-lg font-semibold mb-4">
+                  {editingId ? "✏️ Edit Account" : "➕ Add New Account"}
+                </h3>
+                <form onSubmit={handleSubmit} className="space-y-5">
+                  {/* ── Basic Info ── */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm text-slate-400 mb-1">
+                        Account Name *
+                      </label>
+                      <input
+                        type="text"
+                        value={form.name}
+                        onChange={(e) =>
+                          setForm({ ...form, name: e.target.value })
+                        }
+                        placeholder="e.g., VIP Signals Group"
+                        className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm text-slate-400 mb-1">
+                        Source Type *
+                      </label>
+                      <select
+                        value={form.sourceType}
+                        onChange={(e) =>
+                          setForm({
+                            ...form,
+                            sourceType: e.target.value,
+                          })
+                        }
+                        className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
+                      >
+                        <option value="discord">🤖 Discord</option>
+                        <option value="telegram">✈️ Telegram</option>
+                      </select>
+                    </div>
+                  </div>
 
-        {/* Add/Edit Form */}
-        {showForm && (
-          <div className="card border-primary-700/50">
-            <h3 className="text-lg font-semibold mb-4">
-              {editingId ? "✏️ Edit Source" : "➕ Add New Source"}
-            </h3>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* ── Source Config (Discord) ── */}
+                  {form.sourceType === "discord" && (
+                    <div className="space-y-4 border border-slate-700 rounded-lg p-4">
+                      <h4 className="text-sm font-semibold text-slate-300">
+                        🤖 Discord Configuration
+                      </h4>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm text-slate-400 mb-1">
+                            Method *
+                          </label>
+                          <select
+                            value={form.method}
+                            onChange={(e) =>
+                              setForm({
+                                ...form,
+                                method: e.target.value as "bot" | "user",
+                              })
+                            }
+                            className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
+                          >
+                            <option value="bot">
+                              🤖 Bot Token (requires bot in server)
+                            </option>
+                            <option value="user">
+                              👤 User Token (personal account)
+                            </option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-sm text-slate-400 mb-1">
+                            {editingId
+                              ? "New Token (leave empty to keep)"
+                              : "Token *"}
+                          </label>
+                          <input
+                            type="password"
+                            value={form.token}
+                            onChange={(e) =>
+                              setForm({ ...form, token: e.target.value })
+                            }
+                            placeholder={
+                              editingId
+                                ? "Leave empty to keep current token"
+                                : "Discord token"
+                            }
+                            className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm text-slate-400 mb-1">
+                            Refresh Token (optional)
+                          </label>
+                          <input
+                            type="password"
+                            value={form.refreshToken}
+                            onChange={(e) =>
+                              setForm({
+                                ...form,
+                                refreshToken: e.target.value,
+                              })
+                            }
+                            placeholder="For auto-refresh when token expires"
+                            className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none"
+                          />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            id="autoRefresh"
+                            checked={form.autoRefresh}
+                            onChange={(e) =>
+                              setForm({
+                                ...form,
+                                autoRefresh: e.target.checked,
+                              })
+                            }
+                            className="rounded border-slate-600 bg-slate-800 text-primary-600 focus:ring-primary-500"
+                          />
+                          <label
+                            htmlFor="autoRefresh"
+                            className="text-sm text-slate-400"
+                          >
+                            Auto health check before each signal fetch
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── Source Config (Telegram) ── */}
+                  {form.sourceType === "telegram" && (
+                    <div className="space-y-4 border border-slate-700 rounded-lg p-4">
+                      <h4 className="text-sm font-semibold text-slate-300">
+                        ✈️ Telegram Configuration
+                      </h4>
+                      <div>
+                        <label className="block text-sm text-slate-400 mb-1">
+                          {editingId
+                            ? "Bot Token (leave empty to keep)"
+                            : "Bot Token *"}
+                        </label>
+                        <input
+                          type="password"
+                          value={form.botToken}
+                          onChange={(e) =>
+                            setForm({ ...form, botToken: e.target.value })
+                          }
+                          placeholder={
+                            editingId
+                              ? "Leave empty to keep current token"
+                              : "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+                          }
+                          className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none"
+                        />
+                        <p className="text-xs text-slate-500 mt-1">
+                          Get this from @BotFather on Telegram
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── Channels ── */}
+                  <div className="space-y-2">
+                    <label className="block text-sm text-slate-400">
+                      Channels *
+                    </label>
+                    <div className="space-y-2">
+                      {form.channels.map((ch, idx) => (
+                        <div key={idx} className="flex gap-2">
+                          <input
+                            type="text"
+                            value={ch.id}
+                            onChange={(e) => {
+                              const updated = [...form.channels];
+                              updated[idx] = {
+                                ...updated[idx],
+                                id: e.target.value,
+                              };
+                              setForm({ ...form, channels: updated });
+                            }}
+                            placeholder={
+                              form.sourceType === "telegram"
+                                ? "@channel_username or -100xxx"
+                                : "Channel ID"
+                            }
+                            className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none font-mono"
+                          />
+                          <input
+                            type="text"
+                            value={ch.name}
+                            onChange={(e) => {
+                              const updated = [...form.channels];
+                              updated[idx] = {
+                                ...updated[idx],
+                                name: e.target.value,
+                              };
+                              setForm({ ...form, channels: updated });
+                            }}
+                            placeholder="Display name (optional)"
+                            className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none"
+                          />
+                          {form.channels.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const updated = form.channels.filter(
+                                  (_, i) => i !== idx,
+                                );
+                                setForm({ ...form, channels: updated });
+                              }}
+                              className="bg-red-600/20 text-red-400 hover:bg-red-600/30 px-2 rounded-lg text-sm transition border border-red-700/50"
+                            >
+                              ✕
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setForm({
+                            ...form,
+                            channels: [...form.channels, { id: "", name: "" }],
+                          })
+                        }
+                        className="text-xs text-primary-400 hover:text-primary-300 transition flex items-center gap-1"
+                      >
+                        ➕ Add another channel
+                      </button>
+                    </div>
+                    <p className="text-xs text-slate-500">
+                      {form.sourceType === "discord"
+                        ? "To get channel ID: Enable Developer Mode in Discord → Right click channel → Copy Channel ID"
+                        : "Use @username for public channels or numeric ID for private channels"}
+                    </p>
+                  </div>
+
+                  {/* ── Exchange Config ── */}
+                  <div className="space-y-4 border border-slate-700 rounded-lg p-4">
+                    <h4 className="text-sm font-semibold text-slate-300">
+                      💱 Exchange Configuration
+                    </h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm text-slate-400 mb-1">
+                          Exchange Platform *
+                        </label>
+                        <select
+                          value={form.tradingPlatform}
+                          onChange={(e) =>
+                            setForm({
+                              ...form,
+                              tradingPlatform: e.target.value,
+                            })
+                          }
+                          className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
+                        >
+                          <option value="okx">OKX</option>
+                          <option value="mexc">MEXC</option>
+                          <option value="paper">
+                            📝 Paper Trading (simulated)
+                          </option>
+                        </select>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          id="exchangeIsDemo"
+                          checked={form.exchangeIsDemo}
+                          onChange={(e) =>
+                            setForm({
+                              ...form,
+                              exchangeIsDemo: e.target.checked,
+                            })
+                          }
+                          className="rounded border-slate-600 bg-slate-800 text-primary-600 focus:ring-primary-500"
+                        />
+                        <label
+                          htmlFor="exchangeIsDemo"
+                          className="text-sm text-slate-400"
+                        >
+                          Demo / Simulated Trading
+                        </label>
+                      </div>
+                    </div>
+
+                    {form.tradingPlatform !== "paper" && (
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div>
+                          <label className="block text-sm text-slate-400 mb-1">
+                            {editingId
+                              ? "API Key (leave empty to keep)"
+                              : "API Key *"}
+                          </label>
+                          <input
+                            type="password"
+                            value={form.exchangeApiKey}
+                            onChange={(e) =>
+                              setForm({
+                                ...form,
+                                exchangeApiKey: e.target.value,
+                              })
+                            }
+                            placeholder={
+                              editingId ? "Leave empty to keep" : "API Key"
+                            }
+                            className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm text-slate-400 mb-1">
+                            {editingId
+                              ? "Secret Key (leave empty to keep)"
+                              : "Secret Key *"}
+                          </label>
+                          <input
+                            type="password"
+                            value={form.exchangeApiSecret}
+                            onChange={(e) =>
+                              setForm({
+                                ...form,
+                                exchangeApiSecret: e.target.value,
+                              })
+                            }
+                            placeholder={
+                              editingId ? "Leave empty to keep" : "Secret Key"
+                            }
+                            className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none font-mono"
+                          />
+                        </div>
+                        {form.tradingPlatform === "okx" && (
+                          <div>
+                            <label className="block text-sm text-slate-400 mb-1">
+                              {editingId
+                                ? "Passphrase (leave empty to keep)"
+                                : "Passphrase *"}
+                            </label>
+                            <input
+                              type="password"
+                              value={form.exchangePassphrase}
+                              onChange={(e) =>
+                                setForm({
+                                  ...form,
+                                  exchangePassphrase: e.target.value,
+                                })
+                              }
+                              placeholder={
+                                editingId ? "Leave empty to keep" : "Passphrase"
+                              }
+                              className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none font-mono"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {formError && (
+                    <div className="bg-red-900/30 border border-red-700/50 rounded-lg px-4 py-3 text-sm text-red-300">
+                      ⚠️ {formError}
+                    </div>
+                  )}
+
+                  <div className="flex gap-3">
+                    <button
+                      type="submit"
+                      disabled={saving}
+                      className="bg-primary-600 hover:bg-primary-700 disabled:opacity-50 px-6 py-2 rounded-lg text-sm font-medium transition"
+                    >
+                      {saving ? (
+                        <span className="flex items-center gap-2">
+                          <div className="spinner w-4 h-4 border-2" /> Saving...
+                        </span>
+                      ) : editingId ? (
+                        "💾 Update Account"
+                      ) : (
+                        "✅ Create Account"
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowForm(false);
+                        setEditingId(null);
+                        setForm(emptyForm);
+                        setFormError(null);
+                      }}
+                      className="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded-lg text-sm transition"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              </div>
+            )}
+
+            {/* Error */}
+            {error && (
+              <div className="bg-red-900/30 border border-red-700/50 rounded-lg px-4 py-3 text-sm text-red-300">
+                ⚠️ {error}
+              </div>
+            )}
+
+            {/* Account Cards */}
+            {accounts.length === 0 && !showForm ? (
+              <div className="card text-center py-8">
+                <p className="text-slate-400 text-lg mb-2">No accounts yet</p>
+                <p className="text-slate-500 text-sm mb-4">
+                  Add your first trading account to start receiving and
+                  executing signals.
+                </p>
+                <button
+                  onClick={() => {
+                    setEditingId(null);
+                    setForm(emptyForm);
+                    setShowForm(true);
+                    setFormError(null);
+                  }}
+                  className="bg-primary-600 hover:bg-primary-700 px-4 py-2 rounded-lg text-sm font-medium transition"
+                >
+                  ➕ Add Account
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {accounts.map((account) => {
+                  const health = healthResults[account._id];
+                  return (
+                    <div key={account._id} className="card">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          {/* Header row */}
+                          <div className="flex items-center gap-2 flex-wrap mb-2">
+                            <h3 className="text-lg font-semibold text-white truncate">
+                              {account.name}
+                            </h3>
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-slate-700 text-slate-300">
+                              {account.sourceType === "telegram"
+                                ? "✈️ Telegram"
+                                : "🤖 Discord"}
+                            </span>
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-slate-700 text-slate-300">
+                              💱{" "}
+                              {account.tradingPlatform?.toUpperCase() || "OKX"}
+                            </span>
+                            {account.exchangeData?.simulated && (
+                              <span className="text-xs px-2 py-0.5 rounded-full bg-amber-700/50 text-amber-300">
+                                DEMO
+                              </span>
+                            )}
+                            <button
+                              onClick={() =>
+                                handleToggleActive(account, !account.isActive)
+                              }
+                              className={`text-xs px-2 py-0.5 rounded-full cursor-pointer transition ${
+                                account.isActive
+                                  ? "bg-emerald-700/50 text-emerald-300"
+                                  : "bg-red-700/50 text-red-300"
+                              }`}
+                            >
+                              {account.isActive ? "● ACTIVE" : "○ DISABLED"}
+                            </button>
+                          </div>
+
+                          {/* Health */}
+                          {health && (
+                            <div
+                              className={`text-xs mb-2 ${health.valid ? "text-emerald-400" : "text-red-400"}`}
+                            >
+                              {health.valid
+                                ? "✅ Token valid"
+                                : `❌ ${health.error || "Invalid token"}`}
+                              {health.needsRefresh && " ⚠️ Needs refresh"}
+                            </div>
+                          )}
+
+                          {/* Channels */}
+                          <div className="flex flex-wrap gap-1.5">
+                            {(account.channelIds || []).map((cid: string) => {
+                              const isDisabled = (
+                                account.disabledChannelIds || []
+                              ).includes(cid);
+                              const cname = account.channelNames?.[cid] || cid;
+                              return (
+                                <button
+                                  key={cid}
+                                  onClick={() =>
+                                    handleToggleChannel(account, cid)
+                                  }
+                                  className={`text-xs px-2 py-1 rounded transition border ${
+                                    isDisabled
+                                      ? "bg-red-900/30 border-red-700/50 text-red-400 line-through"
+                                      : "bg-slate-700/50 border-slate-600/50 text-slate-300 hover:bg-slate-600/50"
+                                  }`}
+                                  title={
+                                    isDisabled
+                                      ? `Click to enable ${cid}`
+                                      : `Click to disable ${cid}`
+                                  }
+                                >
+                                  {cname}
+                                </button>
+                              );
+                            })}
+                          </div>
+
+                          {/* Meta info */}
+                          <div className="flex flex-wrap gap-3 mt-2 text-xs text-slate-500">
+                            {account.lastFetchedAt && (
+                              <span>
+                                Last fetch:{" "}
+                                {new Date(
+                                  account.lastFetchedAt,
+                                ).toLocaleString()}
+                              </span>
+                            )}
+                            {account.lastError && (
+                              <span className="text-red-400">
+                                Error: {account.lastError}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Actions */}
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            onClick={() => checkHealth(account._id)}
+                            disabled={checkingHealth !== null}
+                            className="text-slate-400 hover:text-emerald-400 transition p-1.5"
+                            title="Check health"
+                          >
+                            {checkingHealth === account._id ? (
+                              <div className="spinner w-4 h-4 border-2" />
+                            ) : (
+                              "🩺"
+                            )}
+                          </button>
+                          <button
+                            onClick={() => handleEdit(account)}
+                            className="text-slate-400 hover:text-white transition p-1.5"
+                            title="Edit"
+                          >
+                            ✏️
+                          </button>
+                          <button
+                            onClick={() => handleDelete(account._id)}
+                            disabled={deleting === account._id}
+                            className="text-slate-400 hover:text-red-400 transition p-1.5"
+                            title="Delete"
+                          >
+                            {deleting === account._id ? (
+                              <div className="spinner w-4 h-4 border-2" />
+                            ) : (
+                              "🗑️"
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        )}
+
+        {/* ═══════════ SYSTEM SETTINGS TAB ═══════════ */}
+        {activeTab === "system" && (
+          <>
+            {/* ─── Risk Management ──────────────────── */}
+            <div className="card">
+              <h2 className="text-lg font-semibold mb-4">🛡️ Risk Management</h2>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 <div>
-                  <label className="block text-sm text-slate-400 mb-1">
-                    Source Name *
+                  <label className="block text-xs text-slate-400 mb-1">
+                    Risk Per Trade (%)
                   </label>
                   <input
-                    type="text"
-                    value={form.name}
-                    onChange={(e) => setForm({ ...form, name: e.target.value })}
-                    placeholder="e.g., VIP Signals Group"
-                    className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm text-slate-400 mb-1">
-                    Method *
-                  </label>
-                  <select
-                    value={form.method}
+                    type="number"
+                    step="0.1"
+                    min="0.1"
+                    max="100"
+                    value={riskConfig.riskPerTradePercent}
                     onChange={(e) =>
-                      setForm({
-                        ...form,
-                        method: e.target.value as "bot" | "user",
+                      setRiskConfigState({
+                        ...riskConfig,
+                        riskPerTradePercent: parseFloat(e.target.value),
                       })
                     }
                     className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
-                  >
-                    <option value="bot">
-                      🤖 Bot Token (requires bot in server)
-                    </option>
-                    <option value="user">
-                      👤 User Token (personal account)
-                    </option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm text-slate-400 mb-1">
-                    {editingId ? "New Token (leave empty to keep)" : "Token *"}
-                  </label>
-                  <input
-                    type="password"
-                    value={form.token}
-                    onChange={(e) =>
-                      setForm({ ...form, token: e.target.value })
-                    }
-                    placeholder={
-                      editingId
-                        ? "Leave empty to keep current token"
-                        : "Discord token"
-                    }
-                    className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm text-slate-400 mb-1">
-                    Refresh Token (optional)
+                  <label className="block text-xs text-slate-400 mb-1">
+                    Default Position Size (USDT)
                   </label>
-                  <input
-                    type="password"
-                    value={form.refreshToken}
-                    onChange={(e) =>
-                      setForm({ ...form, refreshToken: e.target.value })
-                    }
-                    placeholder="For auto-refresh when token expires"
-                    className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm text-slate-400 mb-1">
-                  Channels *
-                </label>
-                <div className="space-y-2">
-                  {form.channels.map((ch, idx) => (
-                    <div key={idx} className="flex gap-2">
-                      <input
-                        type="text"
-                        value={ch.id}
-                        onChange={(e) => {
-                          const updated = [...form.channels];
-                          updated[idx] = {
-                            ...updated[idx],
-                            id: e.target.value,
-                          };
-                          setForm({ ...form, channels: updated });
-                        }}
-                        placeholder="Channel ID"
-                        className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none font-mono"
-                      />
-                      <input
-                        type="text"
-                        value={ch.name}
-                        onChange={(e) => {
-                          const updated = [...form.channels];
-                          updated[idx] = {
-                            ...updated[idx],
-                            name: e.target.value,
-                          };
-                          setForm({ ...form, channels: updated });
-                        }}
-                        placeholder="Display name (optional)"
-                        className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none"
-                      />
-                      {form.channels.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const updated = form.channels.filter(
-                              (_, i) => i !== idx,
-                            );
-                            setForm({ ...form, channels: updated });
-                          }}
-                          className="bg-red-600/20 text-red-400 hover:bg-red-600/30 px-2 rounded-lg text-sm transition border border-red-700/50"
-                        >
-                          ✕
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setForm({
-                        ...form,
-                        channels: [...form.channels, { id: "", name: "" }],
-                      })
-                    }
-                    className="text-xs text-primary-400 hover:text-primary-300 transition flex items-center gap-1"
-                  >
-                    ➕ Add another channel
-                  </button>
-                </div>
-                <p className="text-xs text-slate-500 mt-1">
-                  To get channel ID: Enable Developer Mode in Discord → Right
-                  click channel → Copy Channel ID
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  id="autoRefresh"
-                  checked={form.autoRefresh}
-                  onChange={(e) =>
-                    setForm({ ...form, autoRefresh: e.target.checked })
-                  }
-                  className="rounded border-slate-600 bg-slate-800 text-primary-600 focus:ring-primary-500"
-                />
-                <label htmlFor="autoRefresh" className="text-sm text-slate-400">
-                  Auto health check before each signal fetch (recommended)
-                </label>
-              </div>
-
-              {formError && (
-                <div className="bg-red-900/30 border border-red-700/50 rounded-lg px-4 py-3 text-sm text-red-300">
-                  ⚠️ {formError}
-                </div>
-              )}
-
-              <div className="flex gap-3">
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="bg-primary-600 hover:bg-primary-700 disabled:opacity-50 px-6 py-2 rounded-lg text-sm font-medium transition"
-                >
-                  {saving ? (
-                    <span className="flex items-center gap-2">
-                      <div className="spinner w-4 h-4 border-2" /> Validating &
-                      Saving...
-                    </span>
-                  ) : editingId ? (
-                    "💾 Update Source"
-                  ) : (
-                    "✅ Create Source"
-                  )}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowForm(false);
-                    setEditingId(null);
-                    setForm(emptyForm);
-                    setFormError(null);
-                  }}
-                  className="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded-lg text-sm transition"
-                >
-                  Cancel
-                </button>
-              </div>
-            </form>
-          </div>
-        )}
-
-        {/* Error */}
-        {error && (
-          <div className="card border-red-700/50 bg-red-950/20">
-            <p className="text-red-400 text-sm">⚠️ {error}</p>
-          </div>
-        )}
-
-        {/* Sources List */}
-        {sources.length === 0 ? (
-          <div className="card text-center py-12">
-            <div className="text-5xl mb-3">📡</div>
-            <h3 className="text-lg font-semibold text-white mb-2">
-              No Discord Sources Configured
-            </h3>
-            <p className="text-sm text-slate-400 mb-4 max-w-md mx-auto">
-              Add your first Discord source to start monitoring trading signal
-              channels. You can configure multiple servers and channels.
-            </p>
-            <button
-              onClick={() => {
-                setEditingId(null);
-                setForm(emptyForm);
-                setShowForm(true);
-              }}
-              className="bg-primary-600 hover:bg-primary-700 px-6 py-2 rounded-lg text-sm font-medium transition"
-            >
-              ➕ Add Your First Source
-            </button>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {sources.map((source) => {
-              const health = healthResults[source._id];
-              return (
-                <div
-                  key={source._id}
-                  className={`card border ${
-                    !source.isActive
-                      ? "border-red-700/50 bg-red-950/10"
-                      : source.lastError
-                        ? "border-amber-700/50 bg-amber-950/10"
-                        : "border-slate-700"
-                  }`}
-                >
-                  <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 sm:gap-4">
-                    <div className="flex-1 min-w-0">
-                      {/* Header */}
-                      <div className="flex items-center gap-2 mb-2">
-                        <span
-                          className={`w-2.5 h-2.5 rounded-full ${
-                            source.isActive ? "bg-green-500" : "bg-red-500"
-                          }`}
-                        />
-                        <span className="text-lg font-bold text-white">
-                          {source.name}
-                        </span>
-                        <span
-                          className={`badge ${source.method === "bot" ? "badge-info" : "badge-warning"}`}
-                        >
-                          {source.method === "bot" ? "🤖 Bot" : "👤 User"}
-                        </span>
-                        {health && (
-                          <span
-                            className={`badge ${health.valid ? "badge-success" : "badge-danger"}`}
-                          >
-                            {health.valid ? "✅ Healthy" : "❌ Unhealthy"}
-                          </span>
-                        )}
-                        {!source.isActive && (
-                          <span className="badge badge-danger">Disabled</span>
-                        )}
-                      </div>
-
-                      {/* Token */}
-                      <div className="text-sm text-slate-400 mb-1">
-                        <span className="text-slate-500">Token:</span>{" "}
-                        <code className="text-xs bg-slate-800 px-1.5 py-0.5 rounded">
-                          {source.token}
-                        </code>
-                      </div>
-
-                      {/* Channels */}
-                      <div className="mb-2">
-                        <span className="text-sm text-slate-500 block mb-1.5">
-                          Channels ({source.channelIds.length}):
-                        </span>
-                        <div className="flex flex-wrap gap-1.5">
-                          {source.channelIds.map((cid) => {
-                            const isDisabled = (
-                              source.disabledChannelIds || []
-                            ).includes(cid);
-                            const displayName = source.channelNames?.[cid];
-                            return (
-                              <button
-                                key={cid}
-                                onClick={() => handleToggleChannel(source, cid)}
-                                title={
-                                  isDisabled
-                                    ? "Click to enable this channel"
-                                    : "Click to disable this channel"
-                                }
-                                className={`text-xs px-2 py-1 rounded-md inline-flex items-center gap-1.5 transition border ${
-                                  isDisabled
-                                    ? "bg-red-900/30 border-red-700/50 text-red-400 line-through opacity-60"
-                                    : "bg-slate-800 border-slate-600 text-slate-300 hover:border-slate-500"
-                                }`}
-                              >
-                                <span
-                                  className={`w-2 h-2 rounded-full ${isDisabled ? "bg-red-500" : "bg-green-500"}`}
-                                />
-                                {displayName ? (
-                                  <>
-                                    <span
-                                      className={
-                                        isDisabled
-                                          ? "text-red-300"
-                                          : "text-primary-300"
-                                      }
-                                    >
-                                      {displayName}
-                                    </span>
-                                    <span className="text-slate-600 text-[10px]">
-                                      {cid}
-                                    </span>
-                                  </>
-                                ) : (
-                                  <span className="font-mono">{cid}</span>
-                                )}
-                              </button>
-                            );
-                          })}
-                        </div>
-                        {(source.disabledChannelIds || []).length > 0 && (
-                          <p className="text-[10px] text-amber-400 mt-1">
-                            ⚠️ {(source.disabledChannelIds || []).length}{" "}
-                            channel
-                            {(source.disabledChannelIds || []).length > 1
-                              ? "s"
-                              : ""}{" "}
-                            disabled — click to re-enable
-                          </p>
-                        )}
-                      </div>
-
-                      {/* Status info */}
-                      <div className="flex flex-wrap gap-4 text-xs text-slate-500">
-                        {source.lastFetchedAt && (
-                          <span>
-                            🕐 Last fetch:{" "}
-                            {new Date(source.lastFetchedAt).toLocaleString()}
-                          </span>
-                        )}
-                        {source.lastError && (
-                          <span className="text-red-400">
-                            ⚠️ Error: {source.lastError}
-                          </span>
-                        )}
-                        {source.autoRefresh && (
-                          <span className="text-emerald-400">
-                            🔄 Auto health check
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Health Details */}
-                      {health && !health.valid && (
-                        <div className="mt-2 bg-red-900/30 border border-red-800/50 rounded px-3 py-2 text-xs text-red-300">
-                          <p className="font-semibold mb-1">
-                            Token Health Issue:
-                          </p>
-                          <p>{health.error}</p>
-                          {health.needsRefresh && (
-                            <p className="mt-1 text-amber-300">
-                              💡 Update the token to re-enable this source.
-                            </p>
-                          )}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Actions */}
-                    <div className="flex flex-row sm:flex-col gap-2 sm:min-w-[140px] flex-wrap">
-                      <button
-                        onClick={() =>
-                          handleToggleActive(source, !source.isActive)
-                        }
-                        className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
-                          source.isActive
-                            ? "bg-red-600/20 text-red-400 hover:bg-red-600/30 border border-red-700/50"
-                            : "bg-green-600/20 text-green-400 hover:bg-green-600/30 border border-green-700/50"
-                        }`}
-                      >
-                        {source.isActive ? "⏸ Disable" : "▶ Enable"}
-                      </button>
-                      <button
-                        onClick={() => checkHealth(source._id)}
-                        disabled={checkingHealth === source._id}
-                        className="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 px-3 py-1.5 rounded-lg text-xs transition"
-                      >
-                        {checkingHealth === source._id ? (
-                          <span className="flex items-center gap-1">
-                            <div className="spinner w-3 h-3 border-2" />{" "}
-                            Checking...
-                          </span>
-                        ) : (
-                          "🩺 Health"
-                        )}
-                      </button>
-                      <button
-                        onClick={() => handleEdit(source)}
-                        className="bg-slate-700 hover:bg-slate-600 px-3 py-1.5 rounded-lg text-xs transition"
-                      >
-                        ✏️ Edit
-                      </button>
-                      <button
-                        onClick={() => handleDelete(source._id)}
-                        disabled={deleting === source._id}
-                        className="bg-red-600/20 text-red-400 hover:bg-red-600/30 disabled:opacity-50 px-3 py-1.5 rounded-lg text-xs transition border border-red-700/50"
-                      >
-                        {deleting === source._id ? (
-                          <span className="flex items-center gap-1">
-                            <div className="spinner w-3 h-3 border-2" />{" "}
-                            Deleting...
-                          </span>
-                        ) : (
-                          "🗑 Delete"
-                        )}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {/* Auto Extract Token */}
-        <div className="card border-slate-700">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-semibold text-slate-300">
-              🪄 Auto-Extract User Token
-            </h3>
-            <button
-              onClick={() => setShowExtract(!showExtract)}
-              className="text-xs text-primary-400 hover:text-primary-300 transition"
-            >
-              {showExtract ? "▼ Hide" : "▶ Show"} extraction tool
-            </button>
-          </div>
-
-          {showExtract && (
-            <div className="space-y-4">
-              <div className="bg-amber-900/30 border border-amber-700/50 rounded-lg px-4 py-3 text-xs text-amber-300">
-                <p className="font-semibold mb-1">⚠️ Important Notice</p>
-                <p>
-                  This extracts your personal Discord user token. It is against
-                  Discord ToS and could result in account termination. Use at
-                  your own risk. Never share your token with anyone.
-                </p>
-              </div>
-
-              {/* Method 1: Console Script */}
-              <div className="border border-slate-600 rounded-lg overflow-hidden">
-                <div className="bg-slate-800 px-4 py-2 flex items-center justify-between">
-                  <span className="text-sm font-medium text-slate-300">
-                    📋 Method 1: Browser Console Script
-                  </span>
-                  <button
-                    onClick={() => {
-                      const script = `(async()=>{try{const w=(window.webpackChunkdiscord_app||[]).flatMap(x=>x[1].modules||x[1]);const t=Object.values(w).find(m=>m?.exports?.default?.getToken!==void 0)?.exports?.default?.getToken();if(t){const s=(Object.values(w).find(m=>m?.exports?.default?.getGuilds)?.exports?.default?.getGuilds?.()||{});const guilds=Object.entries(s);let channels=[];guilds.forEach(([gid,g])=>{g.channels?.forEach(ch=>{if(ch.type===0||ch.type===5)channels.push(ch.id)})});const uniqueChannels=[...new Set(channels)].slice(0,20);window.copytradeToken=t;window.copytradeChannels=uniqueChannels;console.log('%c✅ Token Extracted!','color:#22c55e;font-size:16px;font-weight:bold');console.log('Token:',t);console.log('Channels:',uniqueChannels);console.log('%cCopy the token below and paste it in CopyTrade Settings:','color:#60a5fa;font-size:12px');console.log(t)}else{console.error('Could not find token. Make sure you are on discord.com/app')}}catch(e){console.error('Extraction failed:',e)}})();`;
-                      navigator.clipboard.writeText(script);
-                      setCopiedScript(true);
-                      setTimeout(() => setCopiedScript(false), 3000);
-                    }}
-                    className="bg-primary-600 hover:bg-primary-700 px-3 py-1 rounded text-xs font-medium transition"
-                  >
-                    {copiedScript ? "✅ Copied!" : "📋 Copy Script"}
-                  </button>
-                </div>
-                <div className="px-4 py-3 space-y-2">
-                  <ol className="list-decimal list-inside space-y-1.5 text-xs text-slate-400">
-                    <li>
-                      Open{" "}
-                      <a
-                        href="https://discord.com/app"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-primary-400 hover:text-primary-300 underline"
-                      >
-                        Discord Web App
-                      </a>{" "}
-                      in your browser (Chrome/Firefox/Edge)
-                    </li>
-                    <li>
-                      Press{" "}
-                      <kbd className="bg-slate-700 px-1.5 py-0.5 rounded text-slate-300">
-                        F12
-                      </kbd>{" "}
-                      or{" "}
-                      <kbd className="bg-slate-700 px-1.5 py-0.5 rounded text-slate-300">
-                        Ctrl+Shift+I
-                      </kbd>{" "}
-                      to open DevTools
-                    </li>
-                    <li>
-                      Go to the{" "}
-                      <strong className="text-slate-200">Console</strong> tab
-                    </li>
-                    <li>
-                      Click{" "}
-                      <button
-                        onClick={() => {
-                          const script = `(async()=>{try{const w=(window.webpackChunkdiscord_app||[]).flatMap(x=>x[1].modules||x[1]);const t=Object.values(w).find(m=>m?.exports?.default?.getToken!==void 0)?.exports?.default?.getToken();if(t){const s=(Object.values(w).find(m=>m?.exports?.default?.getGuilds)?.exports?.default?.getGuilds?.()||{});const guilds=Object.entries(s);let channels=[];guilds.forEach(([gid,g])=>{g.channels?.forEach(ch=>{if(ch.type===0||ch.type===5)channels.push(ch.id)})});const uniqueChannels=[...new Set(channels)].slice(0,20);window.copytradeToken=t;window.copytradeChannels=uniqueChannels;console.log('%c✅ Token Extracted!','color:#22c55e;font-size:16px;font-weight:bold');console.log('Token:',t);console.log('Channels:',uniqueChannels);console.log('%cCopy the token below and paste it in CopyTrade Settings:','color:#60a5fa;font-size:12px');console.log(t)}else{console.error('Could not find token. Make sure you are on discord.com/app')}}catch(e){console.error('Extraction failed:',e)}})();`;
-                          navigator.clipboard.writeText(script);
-                          setCopiedScript(true);
-                          setTimeout(() => setCopiedScript(false), 3000);
-                        }}
-                        className="text-primary-400 hover:text-primary-300 underline"
-                      >
-                        "Copy Script"
-                      </button>{" "}
-                      above, then paste it in the console and press Enter
-                    </li>
-                    <li>
-                      The token will appear in the console — copy it and paste
-                      below
-                    </li>
-                  </ol>
-                </div>
-              </div>
-
-              {/* Method 2: Network Tab */}
-              <div className="border border-slate-600 rounded-lg overflow-hidden">
-                <div className="bg-slate-800 px-4 py-2">
-                  <span className="text-sm font-medium text-slate-300">
-                    🌐 Method 2: Network Tab (Alternative)
-                  </span>
-                </div>
-                <div className="px-4 py-3">
-                  <ol className="list-decimal list-inside space-y-1.5 text-xs text-slate-400">
-                    <li>Open Discord Web App and DevTools (F12)</li>
-                    <li>
-                      Go to the{" "}
-                      <strong className="text-slate-200">Network</strong> tab
-                    </li>
-                    <li>Reload the page or click around in Discord</li>
-                    <li>
-                      Look for any request with an{" "}
-                      <code className="bg-slate-700 px-1 rounded">
-                        Authorization
-                      </code>{" "}
-                      header
-                    </li>
-                    <li>Copy the token value from the header</li>
-                  </ol>
-                </div>
-              </div>
-
-              {/* Paste Token Form */}
-              <div className="border border-primary-700/50 bg-primary-950/20 rounded-lg p-4">
-                <h4 className="text-sm font-semibold text-slate-200 mb-3">
-                  📥 Paste Extracted Token
-                </h4>
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-xs text-slate-400 mb-1">
-                      Source Name
-                    </label>
-                    <input
-                      type="text"
-                      value={extractName}
-                      onChange={(e) => setExtractName(e.target.value)}
-                      placeholder="e.g., My Discord Account"
-                      className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-400 mb-1">
-                      Extracted Token
-                    </label>
-                    <textarea
-                      value={extractToken}
-                      onChange={(e) => setExtractToken(e.target.value)}
-                      placeholder="Paste your Discord user token here..."
-                      rows={3}
-                      className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none font-mono text-xs"
-                    />
-                  </div>
-                  <button
-                    onClick={async () => {
-                      if (!extractToken.trim()) {
-                        alert("Please paste a token first");
-                        return;
-                      }
-                      setExtracting(true);
-                      try {
-                        const res = await fetch("/api/discord-extract", {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({
-                            token: extractToken.trim(),
-                            name: extractName.trim() || undefined,
-                          }),
-                        });
-                        const json = await res.json();
-                        if (json.success) {
-                          alert(`✅ ${json.message}`);
-                          setExtractToken("");
-                          setExtractName("");
-                          setShowExtract(false);
-                          await fetchSources();
-                        } else {
-                          alert(`❌ ${json.error}`);
-                        }
-                      } catch (err) {
-                        alert(
-                          `Error: ${err instanceof Error ? err.message : "Unknown"}`,
-                        );
-                      } finally {
-                        setExtracting(false);
-                      }
-                    }}
-                    disabled={extracting || !extractToken.trim()}
-                    className="bg-primary-600 hover:bg-primary-700 disabled:opacity-50 px-6 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2"
-                  >
-                    {extracting ? (
-                      <>
-                        <div className="spinner w-4 h-4 border-2" /> Validating
-                        & Saving...
-                      </>
-                    ) : (
-                      "🚀 Validate & Save Token"
-                    )}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Risk Management */}
-        <div className="card border-amber-700/50">
-          <div className="flex items-center gap-2 mb-4">
-            <span className="text-lg">🛡️</span>
-            <h3 className="text-sm font-semibold text-slate-300">
-              Risk Management
-            </h3>
-          </div>
-          <p className="text-xs text-slate-400 mb-4">
-            Margin is fixed at a % of your balance (e.g., 1% = $50 on a $5,000
-            account). Leverage is automatically derived from the Stop Loss
-            distance — the closer the SL, the higher the leverage needed to use
-            your allocated margin.
-          </p>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-            <div>
-              <label className="block text-sm text-slate-400 mb-1">
-                Margin Per Trade (% of Balance)
-              </label>
-              <div className="relative">
-                <input
-                  type="number"
-                  step="0.1"
-                  min="0.1"
-                  max="100"
-                  value={riskConfig.riskPerTradePercent}
-                  onChange={(e) =>
-                    setRiskConfigState({
-                      ...riskConfig,
-                      riskPerTradePercent: parseFloat(e.target.value) || 1,
-                    })
-                  }
-                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-amber-500 focus:outline-none pr-8"
-                />
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm">
-                  %
-                </span>
-              </div>
-              <p className="text-xs text-slate-500 mt-1">
-                Fixed margin per trade as % of balance. Default: 1%
-              </p>
-            </div>
-            <div className="flex items-center justify-center">
-              <div className="text-center text-xs text-slate-500 bg-slate-800/50 rounded-lg p-3 w-full border border-slate-700">
-                <p className="font-semibold text-slate-400 mb-1">
-                  💡 How it works
-                </p>
-                <p>Margin = Balance × {riskConfig.riskPerTradePercent}%</p>
-                <p>Leverage = ⌈1 / SL_distance⌉</p>
-                <p>Notional = Margin / SL_distance</p>
-              </div>
-            </div>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-            <div>
-              <label className="block text-sm text-slate-400 mb-1">
-                Min Leverage
-              </label>
-              <div className="relative">
-                <input
-                  type="number"
-                  min="1"
-                  max="125"
-                  value={riskConfig.minLeverage}
-                  onChange={(e) =>
-                    setRiskConfigState({
-                      ...riskConfig,
-                      minLeverage: parseInt(e.target.value) || 1,
-                    })
-                  }
-                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-amber-500 focus:outline-none pr-8"
-                />
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm">
-                  x
-                </span>
-              </div>
-              <p className="text-xs text-slate-500 mt-1">
-                Minimum leverage. Default: 1x
-              </p>
-            </div>
-            <div>
-              <label className="block text-sm text-slate-400 mb-1">
-                Max Leverage
-              </label>
-              <div className="relative">
-                <input
-                  type="number"
-                  min="1"
-                  max="125"
-                  value={riskConfig.maxLeverage}
-                  onChange={(e) =>
-                    setRiskConfigState({
-                      ...riskConfig,
-                      maxLeverage: parseInt(e.target.value) || 100,
-                    })
-                  }
-                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-amber-500 focus:outline-none pr-8"
-                />
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm">
-                  x
-                </span>
-              </div>
-              <p className="text-xs text-slate-500 mt-1">
-                Maximum leverage cap. Default: 100x
-              </p>
-            </div>
-          </div>
-
-          {/* Default RR for auto TP */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-            <div>
-              <label className="block text-sm text-slate-400 mb-1">
-                Default Risk-Reward Ratio (RR)
-              </label>
-              <div className="relative">
-                <input
-                  type="number"
-                  step="0.5"
-                  min="1"
-                  max="20"
-                  value={riskConfig.defaultRR}
-                  onChange={(e) =>
-                    setRiskConfigState({
-                      ...riskConfig,
-                      defaultRR: parseFloat(e.target.value) || 3,
-                    })
-                  }
-                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-amber-500 focus:outline-none pr-8"
-                />
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm">
-                  R
-                </span>
-              </div>
-              <p className="text-xs text-slate-500 mt-1">
-                When a signal has no TP, auto-calculate TP using this RR
-                multiplier from SL distance. Default: 3 (e.g., SL 2% → TP at 6%)
-              </p>
-            </div>
-            <div className="flex items-center justify-center">
-              <div className="text-center text-xs text-slate-500 bg-slate-800/50 rounded-lg p-3 w-full border border-slate-700">
-                <p className="font-semibold text-slate-400 mb-1">
-                  📏 RR Example
-                </p>
-                <p>Entry: $100 | SL: $95 (5% ↓)</p>
-                <p>Default RR: {riskConfig.defaultRR}R</p>
-                <p>
-                  → Auto TP:{" "}
-                  <span className="text-success">
-                    ${(100 + (100 - 95) * riskConfig.defaultRR).toFixed(2)}
-                  </span>{" "}
-                  ({(5 * riskConfig.defaultRR).toFixed(1)}% ↑)
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* Skip no SL toggle */}
-          <div className="flex items-center gap-3 mb-4 bg-slate-800/50 border border-slate-700 rounded-lg p-3">
-            <input
-              type="checkbox"
-              id="skipNoSL"
-              checked={riskConfig.skipNoSL}
-              onChange={(e) =>
-                setRiskConfigState({
-                  ...riskConfig,
-                  skipNoSL: e.target.checked,
-                })
-              }
-              className="rounded border-slate-600 bg-slate-800 text-amber-600 focus:ring-amber-500 w-4 h-4"
-            />
-            <label htmlFor="skipNoSL" className="text-sm text-slate-300">
-              <span className="font-medium">
-                🚫 Skip trades without Stop Loss
-              </span>
-              <span className="block text-xs text-slate-500 mt-0.5">
-                When enabled, trades that have no SL will be automatically
-                rejected (auto mode) or shown with a warning (manual mode).
-              </span>
-            </label>
-          </div>
-
-          {/* Fallback Position Size & Leverage (only used when risk calc can't apply) */}
-          <div className="bg-slate-800/30 border border-slate-700/50 rounded-lg p-3 mb-4">
-            <p className="text-xs text-slate-500 mb-3">
-              💡 <strong className="text-slate-400">Fallback values</strong> —
-              only used when risk-based sizing can't apply (e.g., no entry
-              price, can't fetch balance). Primary sizing uses margin % + SL
-              distance above.
-            </p>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm text-slate-400 mb-1">
-                  Fallback Position Size (USDT)
-                </label>
-                <div className="relative">
                   <input
                     type="number"
                     step="1"
                     min="1"
-                    max="1000000"
                     value={riskConfig.defaultPositionSize}
                     onChange={(e) =>
                       setRiskConfigState({
                         ...riskConfig,
-                        defaultPositionSize: parseFloat(e.target.value) || 50,
+                        defaultPositionSize: parseFloat(e.target.value),
                       })
                     }
-                    className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-amber-500 focus:outline-none pr-12"
+                    className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
                   />
-                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm">
-                    USDT
-                  </span>
                 </div>
-                <p className="text-xs text-slate-500 mt-1">
-                  When risk calc can't apply. Default: 50
-                </p>
-              </div>
-              <div>
-                <label className="block text-sm text-slate-400 mb-1">
-                  Fallback Leverage
-                </label>
-                <div className="relative">
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">
+                    Default Leverage
+                  </label>
                   <input
                     type="number"
                     min="1"
-                    max="125"
+                    max="200"
                     value={riskConfig.defaultLeverage}
                     onChange={(e) =>
                       setRiskConfigState({
                         ...riskConfig,
-                        defaultLeverage: parseInt(e.target.value) || 10,
+                        defaultLeverage: parseInt(e.target.value),
                       })
                     }
-                    className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-amber-500 focus:outline-none pr-8"
+                    className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
                   />
-                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm">
-                    x
-                  </span>
                 </div>
-                <p className="text-xs text-slate-500 mt-1">
-                  When risk calc can't apply. Default: 10x
-                </p>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">
+                    Max Leverage
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="200"
+                    value={riskConfig.maxLeverage}
+                    onChange={(e) =>
+                      setRiskConfigState({
+                        ...riskConfig,
+                        maxLeverage: parseInt(e.target.value),
+                      })
+                    }
+                    className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">
+                    Default Risk/Reward Ratio
+                  </label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0.5"
+                    value={riskConfig.defaultRR}
+                    onChange={(e) =>
+                      setRiskConfigState({
+                        ...riskConfig,
+                        defaultRR: parseFloat(e.target.value),
+                      })
+                    }
+                    className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">
+                    Max Open Positions
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="50"
+                    value={riskConfig.maxPositions}
+                    onChange={(e) =>
+                      setRiskConfigState({
+                        ...riskConfig,
+                        maxPositions: parseInt(e.target.value),
+                      })
+                    }
+                    className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
+                  />
+                </div>
               </div>
-            </div>
-          </div>
-
-          {/* Max Positions */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-            <div>
-              <label className="block text-sm text-slate-400 mb-1">
-                Max Concurrent Positions
-              </label>
-              <input
-                type="number"
-                min="0"
-                max="100"
-                value={riskConfig.maxPositions}
-                onChange={(e) =>
-                  setRiskConfigState({
-                    ...riskConfig,
-                    maxPositions: parseInt(e.target.value) || 0,
-                  })
-                }
-                className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-amber-500 focus:outline-none"
-              />
-              <p className="text-xs text-slate-500 mt-1">
-                Max open positions at once. Set to <strong>0</strong> for
-                unlimited. Default: 5
-              </p>
-            </div>
-          </div>
-
-          {/* Example calculation */}
-          <div className="bg-slate-800/50 border border-slate-700 rounded-lg p-3 mb-4">
-            <p className="text-xs text-slate-500 mb-2 font-semibold">
-              📐 Example Calculation (Balance: $5,000)
-            </p>
-            <div className="text-xs text-slate-400 space-y-1">
-              <p>
-                Margin:{" "}
-                <span className="text-amber-400">
-                  $
-                  {{ 1: 50, 2: 100, 5: 250 }[riskConfig.riskPerTradePercent] ??
-                    ((5000 * riskConfig.riskPerTradePercent) / 100).toFixed(2)}
-                </span>{" "}
-                ({riskConfig.riskPerTradePercent}% of $5,000)
-              </p>
-              <p>
-                If SL is <span className="text-white">2%</span> away → Leverage:{" "}
-                <span className="text-emerald-400">
-                  {Math.max(
-                    riskConfig.minLeverage,
-                    Math.min(riskConfig.maxLeverage, 50),
-                  )}
-                  x
-                </span>{" "}
-                → Notional:{" "}
-                <span className="text-emerald-400">
-                  $
-                  {(
-                    (5000 * riskConfig.riskPerTradePercent) /
-                    100 /
-                    0.02
-                  ).toFixed(2)}
-                </span>
-              </p>
-              <p>
-                If SL is <span className="text-white">5%</span> away → Leverage:{" "}
-                <span className="text-emerald-400">
-                  {Math.max(
-                    riskConfig.minLeverage,
-                    Math.min(riskConfig.maxLeverage, 20),
-                  )}
-                  x
-                </span>{" "}
-                → Notional:{" "}
-                <span className="text-emerald-400">
-                  $
-                  {(
-                    (5000 * riskConfig.riskPerTradePercent) /
-                    100 /
-                    0.05
-                  ).toFixed(2)}
-                </span>
-              </p>
-            </div>
-          </div>
-
-          {riskError && (
-            <div className="bg-red-900/30 border border-red-700/50 rounded-lg px-4 py-3 text-sm text-red-300 mb-3">
-              ⚠️ {riskError}
-            </div>
-          )}
-          {riskSuccess && (
-            <div className="bg-emerald-900/30 border border-emerald-700/50 rounded-lg px-4 py-3 text-sm text-emerald-300 mb-3">
-              ✅ Risk settings saved successfully!
-            </div>
-          )}
-          <button
-            onClick={handleRiskSave}
-            disabled={riskSaving}
-            className="bg-amber-600 hover:bg-amber-700 disabled:opacity-50 px-6 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2"
-          >
-            {riskSaving ? (
-              <>
-                <div className="spinner w-4 h-4 border-2" /> Saving...
-              </>
-            ) : (
-              "💾 Save Risk Settings"
-            )}
-          </button>
-        </div>
-
-        {/* Webshare Proxy / OKX Static IP */}
-        <div className="card border-purple-700/50">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2">
-              <span className="text-lg">🌐</span>
-              <h3 className="text-sm font-semibold text-slate-300">
-                Proxy — OKX Static IP
-              </h3>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => {
-                  setProxyRefreshing(true);
-                  fetchProxies();
-                }}
-                disabled={proxyRefreshing}
-                className="text-xs bg-purple-600 hover:bg-purple-700 disabled:opacity-50 px-3 py-1.5 rounded-lg transition flex items-center gap-1"
-              >
-                {proxyRefreshing ? (
-                  <span className="flex items-center gap-1">
-                    <div className="spinner w-3 h-3 border-2" /> Refreshing...
-                  </span>
-                ) : (
-                  "🔄 Refresh"
-                )}
-              </button>
-            </div>
-          </div>
-
-          {proxyLoading ? (
-            <div className="flex items-center gap-2 text-sm text-slate-400 py-4 justify-center">
-              <div className="spinner w-4 h-4 border-2" /> Loading proxy info...
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {/* Enable / Disable toggle */}
-              <div className="flex items-center gap-3 bg-slate-800/50 border border-slate-700 rounded-lg p-3">
+              <div className="flex items-center gap-2 mt-4">
                 <input
                   type="checkbox"
-                  id="proxyEnabled"
-                  checked={proxyConfig?.enabled ?? false}
+                  id="skipNoSL"
+                  checked={riskConfig.skipNoSL}
                   onChange={(e) =>
-                    setProxyConfig({
-                      ...proxyConfig!,
-                      enabled: e.target.checked,
-                      provider: proxyConfig?.provider ?? "webshare",
+                    setRiskConfigState({
+                      ...riskConfig,
+                      skipNoSL: e.target.checked,
                     })
                   }
-                  className="rounded border-slate-600 bg-slate-800 text-purple-600 focus:ring-purple-500 w-4 h-4"
+                  className="rounded border-slate-600 bg-slate-800 text-primary-600 focus:ring-primary-500"
                 />
-                <label
-                  htmlFor="proxyEnabled"
-                  className="text-sm text-slate-300"
-                >
-                  <span className="font-medium">
-                    🚀 Enable Proxy for OKX Requests
-                  </span>
-                  <span className="block text-xs text-slate-500 mt-0.5">
-                    Route all OKX API requests through a static IP proxy.
-                    Required for OKX API key IP whitelisting.
-                  </span>
+                <label htmlFor="skipNoSL" className="text-sm text-slate-400">
+                  Skip signals without Stop Loss
                 </label>
               </div>
-
-              {/* Provider selector */}
-              <div>
-                <label className="block text-sm text-slate-400 mb-1">
-                  Proxy Provider
-                </label>
-                <select
-                  value={proxyConfig?.provider ?? "webshare"}
-                  onChange={(e) =>
-                    setProxyConfig({
-                      ...proxyConfig!,
-                      provider: e.target.value as "webshare" | "custom",
-                      enabled: proxyConfig?.enabled ?? false,
-                    })
-                  }
-                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-purple-500 focus:outline-none"
-                >
-                  <option value="webshare">🌐 Webshare (Free Static IP)</option>
-                  <option value="custom">🔧 Custom Proxy</option>
-                </select>
-              </div>
-
-              {/* Custom proxy fields */}
-              {proxyConfig?.provider === "custom" && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs text-slate-400 mb-1">
-                      Proxy Host
-                    </label>
-                    <input
-                      type="text"
-                      value={customProxy.host}
-                      onChange={(e) =>
-                        setCustomProxy({ ...customProxy, host: e.target.value })
-                      }
-                      placeholder="e.g., 192.168.1.1"
-                      className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-purple-500 focus:outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-400 mb-1">
-                      Port
-                    </label>
-                    <input
-                      type="number"
-                      value={customProxy.port}
-                      onChange={(e) =>
-                        setCustomProxy({
-                          ...customProxy,
-                          port: parseInt(e.target.value) || 1080,
-                        })
-                      }
-                      className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-purple-500 focus:outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-400 mb-1">
-                      Username
-                    </label>
-                    <input
-                      type="text"
-                      value={customProxy.username}
-                      onChange={(e) =>
-                        setCustomProxy({
-                          ...customProxy,
-                          username: e.target.value,
-                        })
-                      }
-                      placeholder="Proxy username"
-                      className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-purple-500 focus:outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-400 mb-1">
-                      Password
-                    </label>
-                    <input
-                      type="password"
-                      value={customProxy.password}
-                      onChange={(e) =>
-                        setCustomProxy({
-                          ...customProxy,
-                          password: e.target.value,
-                        })
-                      }
-                      placeholder="Proxy password"
-                      className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-purple-500 focus:outline-none"
-                    />
-                  </div>
-                </div>
+              {riskError && (
+                <p className="text-red-400 text-xs mt-2">⚠️ {riskError}</p>
               )}
-
-              {/* Save button */}
-              {proxyError && (
-                <div className="bg-red-900/30 border border-red-700/50 rounded-lg px-4 py-3 text-sm text-red-300">
-                  ⚠️ {proxyError}
-                </div>
+              {riskSuccess && (
+                <p className="text-emerald-400 text-xs mt-2">
+                  ✅ Risk config saved
+                </p>
               )}
               <button
-                onClick={handleProxySave}
-                disabled={proxySaving}
-                className="bg-purple-600 hover:bg-purple-700 disabled:opacity-50 px-6 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2"
+                onClick={handleRiskSave}
+                disabled={riskSaving}
+                className="mt-3 bg-primary-600 hover:bg-primary-700 disabled:opacity-50 px-4 py-2 rounded-lg text-sm font-medium transition"
               >
-                {proxySaving ? (
-                  <>
-                    <div className="spinner w-4 h-4 border-2" /> Saving...
-                  </>
-                ) : (
-                  "💾 Save Proxy Settings"
-                )}
+                {riskSaving ? "Saving..." : "💾 Save Risk Config"}
               </button>
+            </div>
 
-              {/* Webshare info banner */}
-              {proxyConfig?.provider === "webshare" && (
-                <div className="bg-purple-900/20 border border-purple-700/30 rounded-lg px-4 py-3 text-xs text-purple-300">
-                  <p className="font-semibold mb-1">
-                    📋 OKX membutuhkan IP statis yang di-whitelist
-                  </p>
-                  <p>
-                    Tambahkan IP proxy di bawah ini ke OKX API Key whitelist
-                    kamu:{" "}
-                    <a
-                      href="https://www.okx.com/account/my-api"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="underline text-purple-200 hover:text-white"
-                    >
-                      OKX → Account → API → Edit API Key → Bind IP
-                    </a>
-                  </p>
+            {/* ─── Signal Configuration ────────────── */}
+            <div className="card">
+              <h2 className="text-lg font-semibold mb-4">
+                📡 Signal Configuration
+              </h2>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">
+                    Fetch Limit (messages per channel)
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="100"
+                    value={signalCfg.fetchLimit}
+                    onChange={(e) =>
+                      setSignalCfg({
+                        ...signalCfg,
+                        fetchLimit: parseInt(e.target.value),
+                      })
+                    }
+                    className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
+                  />
                 </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">
+                    Time Window (hours)
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="168"
+                    value={signalCfg.timeWindowHours}
+                    onChange={(e) =>
+                      setSignalCfg({
+                        ...signalCfg,
+                        timeWindowHours: parseInt(e.target.value),
+                      })
+                    }
+                    className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">
+                    Batch Size (signals per AI call)
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="20"
+                    value={signalCfg.batchSize}
+                    onChange={(e) =>
+                      setSignalCfg({
+                        ...signalCfg,
+                        batchSize: parseInt(e.target.value),
+                      })
+                    }
+                    className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
+                  />
+                </div>
+                <div className="flex flex-col gap-2 justify-center">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="includeImageUrls"
+                      checked={signalCfg.includeImageUrls}
+                      onChange={(e) =>
+                        setSignalCfg({
+                          ...signalCfg,
+                          includeImageUrls: e.target.checked,
+                        })
+                      }
+                      className="rounded border-slate-600 bg-slate-800 text-primary-600 focus:ring-primary-500"
+                    />
+                    <label
+                      htmlFor="includeImageUrls"
+                      className="text-sm text-slate-400"
+                    >
+                      Include image URLs in AI analysis
+                    </label>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="visionAIEnabled"
+                      checked={signalCfg.visionAIEnabled}
+                      onChange={(e) =>
+                        setSignalCfg({
+                          ...signalCfg,
+                          visionAIEnabled: e.target.checked,
+                        })
+                      }
+                      className="rounded border-slate-600 bg-slate-800 text-primary-600 focus:ring-primary-500"
+                    />
+                    <label
+                      htmlFor="visionAIEnabled"
+                      className="text-sm text-slate-400"
+                    >
+                      Enable Vision AI (Gemini chart reading)
+                    </label>
+                  </div>
+                </div>
+              </div>
+              {signalError && (
+                <p className="text-red-400 text-xs mt-2">⚠️ {signalError}</p>
               )}
+              {signalSuccess && (
+                <p className="text-emerald-400 text-xs mt-2">
+                  ✅ Signal config saved
+                </p>
+              )}
+              <button
+                onClick={handleSignalSave}
+                disabled={signalSaving}
+                className="mt-3 bg-primary-600 hover:bg-primary-700 disabled:opacity-50 px-4 py-2 rounded-lg text-sm font-medium transition"
+              >
+                {signalSaving ? "Saving..." : "💾 Save Signal Config"}
+              </button>
+            </div>
 
-              {/* Provider info (credentials + IP list) */}
-              {proxyConfig?.enabled && proxyProviderInfo && (
-                <>
-                  {/* Credentials */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div className="bg-slate-800/50 border border-slate-700 rounded-lg p-3">
-                      <p className="text-xs text-slate-500 mb-1">
-                        Proxy Username
-                      </p>
-                      <p className="text-sm text-white font-mono">
-                        {proxyProviderInfo.credentials?.username}
-                      </p>
-                    </div>
-                    <div className="bg-slate-800/50 border border-slate-700 rounded-lg p-3">
-                      <p className="text-xs text-slate-500 mb-1">
-                        Proxy Password
-                      </p>
-                      <div className="flex items-center gap-2">
-                        <p className="text-sm text-white font-mono flex-1">
-                          {showProxyPasswords
-                            ? proxyProviderInfo.credentials?.password
-                            : "••••••••••••"}
-                        </p>
-                        <button
-                          onClick={() =>
-                            setShowProxyPasswords(!showProxyPasswords)
-                          }
-                          className="text-xs text-purple-400 hover:text-purple-300 transition"
-                        >
-                          {showProxyPasswords ? "🙈 Hide" : "👁 Show"}
-                        </button>
+            {/* ─── Cron Jobs ────────────────────────── */}
+            <div className="card">
+              <h2 className="text-lg font-semibold mb-4">
+                ⏰ Cron Jobs (Scheduled Tasks)
+              </h2>
+
+              {/* Base URL */}
+              <div className="mb-4">
+                <label className="block text-xs text-slate-400 mb-1">
+                  Deployment Base URL
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="url"
+                    value={cronBaseUrl}
+                    onChange={(e) => setCronBaseUrl(e.target.value)}
+                    placeholder="https://your-app.vercel.app"
+                    className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none"
+                  />
+                  <button
+                    onClick={handleCronPull}
+                    disabled={cronPulling}
+                    className="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 px-3 py-2 rounded-lg text-sm transition whitespace-nowrap"
+                  >
+                    {cronPulling ? "..." : "☁️ Sync from Cloud"}
+                  </button>
+                </div>
+              </div>
+
+              {/* Jobs */}
+              <div className="space-y-3">
+                {cronJobs.map((job, idx) => {
+                  const recommended =
+                    RECOMMENDED_SCHEDULES[job.type]?.label || "Custom";
+                  const liveJob = cronLiveStatus.find(
+                    (l) => l.type === job.type,
+                  );
+                  return (
+                    <div
+                      key={job.type}
+                      className="bg-slate-800/50 border border-slate-700 rounded-lg p-3"
+                    >
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <input
+                            type="checkbox"
+                            checked={job.enabled}
+                            onChange={(e) => {
+                              const updated = [...cronJobs];
+                              updated[idx] = {
+                                ...updated[idx],
+                                enabled: e.target.checked,
+                              };
+                              setCronJobs(updated);
+                            }}
+                            className="rounded border-slate-600 bg-slate-800 text-primary-600 focus:ring-primary-500"
+                          />
+                          <span className="text-sm font-medium text-white">
+                            {job.title}
+                          </span>
+                          {liveJob && (
+                            <span
+                              className={`text-xs px-1.5 py-0.5 rounded ${liveJob.status === "active" ? "bg-emerald-700/50 text-emerald-300" : "bg-red-700/50 text-red-300"}`}
+                            >
+                              {liveJob.status === "active"
+                                ? "LIVE"
+                                : "NOT FOUND"}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-slate-500">Every</span>
+                          <input
+                            type="number"
+                            min="1"
+                            max="1440"
+                            value={job.schedule.minutes}
+                            onChange={(e) => {
+                              const updated = [...cronJobs];
+                              updated[idx] = {
+                                ...updated[idx],
+                                schedule: {
+                                  ...updated[idx].schedule,
+                                  minutes: parseInt(e.target.value),
+                                },
+                              };
+                              setCronJobs(updated);
+                            }}
+                            className="w-16 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-white text-center"
+                          />
+                          <span className="text-xs text-slate-500">min</span>
+                          <span className="text-xs text-slate-500">
+                            (rec: {recommended})
+                          </span>
+                        </div>
                       </div>
                     </div>
+                  );
+                })}
+              </div>
+
+              {cronError && (
+                <p className="text-red-400 text-xs mt-2">⚠️ {cronError}</p>
+              )}
+              {cronSuccess && (
+                <p className="text-emerald-400 text-xs mt-2">
+                  ✅ Cron jobs synced
+                </p>
+              )}
+              <button
+                onClick={handleCronSave}
+                disabled={cronSaving}
+                className="mt-3 bg-primary-600 hover:bg-primary-700 disabled:opacity-50 px-4 py-2 rounded-lg text-sm font-medium transition"
+              >
+                {cronSaving ? "Syncing..." : "🔄 Sync Cron Jobs to Cloud"}
+              </button>
+            </div>
+
+            {/* ─── Proxy Configuration ─────────────── */}
+            <div className="card">
+              <h2 className="text-lg font-semibold mb-4">
+                🌐 Proxy Configuration
+              </h2>
+
+              {proxyLoading ? (
+                <div className="spinner mx-auto" />
+              ) : (
+                <>
+                  <div className="flex items-center gap-2 mb-4">
+                    <input
+                      type="checkbox"
+                      checked={proxyConfig?.enabled ?? false}
+                      onChange={(e) =>
+                        setProxyConfig({
+                          ...proxyConfig,
+                          enabled: e.target.checked,
+                          provider:
+                            proxyConfig?.provider || ("webshare" as const),
+                        })
+                      }
+                      className="rounded border-slate-600 bg-slate-800 text-primary-600 focus:ring-primary-500"
+                      id="proxyEnabled"
+                    />
+                    <label
+                      htmlFor="proxyEnabled"
+                      className="text-sm text-slate-400"
+                    >
+                      Enable Proxy for Exchange API Calls
+                    </label>
                   </div>
 
-                  {/* Proxy IP List */}
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <p className="text-xs text-slate-400 font-semibold">
-                        📡 Proxy IP Addresses ({proxyProviderInfo.validCount}/
-                        {proxyProviderInfo.total} valid)
-                      </p>
-                      {proxyProviderInfo.ipList &&
-                        proxyProviderInfo.ipList.length > 0 && (
-                          <button
-                            onClick={() => {
-                              navigator.clipboard.writeText(
-                                proxyProviderInfo.ipList.join("\n"),
-                              );
-                            }}
-                            className="text-xs text-purple-400 hover:text-purple-300 transition"
-                          >
-                            📋 Copy all IPs
-                          </button>
-                        )}
-                    </div>
-                    <div className="bg-slate-800/50 border border-slate-700 rounded-lg overflow-hidden">
-                      <table className="w-full text-xs">
-                        <thead>
-                          <tr className="border-b border-slate-700 bg-slate-800/80">
-                            <th className="text-left px-3 py-2 text-slate-400 font-medium">
-                              IP Address
-                            </th>
-                            <th className="text-left px-3 py-2 text-slate-400 font-medium">
-                              Port
-                            </th>
-                            <th className="text-left px-3 py-2 text-slate-400 font-medium">
-                              Location
-                            </th>
-                            <th className="text-center px-3 py-2 text-slate-400 font-medium">
-                              Status
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {proxyProviderInfo.proxies?.map((p, i) => (
-                            <tr
-                              key={i}
-                              className={`border-b border-slate-700/50 ${p.valid ? "" : "opacity-50"}`}
-                            >
-                              <td className="px-3 py-2 font-mono text-white">
-                                {p.ip}
-                              </td>
-                              <td className="px-3 py-2 font-mono text-slate-300">
-                                {p.port}
-                              </td>
-                              <td className="px-3 py-2 text-slate-300">
-                                {p.city_name ? `${p.city_name}, ` : ""}
-                                {p.country_code}
-                              </td>
-                              <td className="px-3 py-2 text-center">
-                                {p.valid ? (
-                                  <span className="text-emerald-400">
-                                    ✅ Valid
-                                  </span>
-                                ) : (
-                                  <span className="text-red-400">
-                                    ❌ Invalid
-                                  </span>
-                                )}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-
-                  {/* OKX Whitelist Instructions */}
-                  <div className="bg-amber-900/20 border border-amber-700/30 rounded-lg px-4 py-3 text-xs text-amber-300">
-                    <p className="font-semibold mb-1">
-                      ⚡ Cara whitelist IP di OKX:
-                    </p>
-                    <ol className="list-decimal list-inside space-y-1 ml-1 text-amber-200/80">
-                      <li>
-                        Login ke{" "}
-                        <a
-                          href="https://www.okx.com/account/my-api"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="underline hover:text-white"
+                  {proxyConfig?.enabled && (
+                    <>
+                      <div className="mb-4">
+                        <label className="block text-xs text-slate-400 mb-1">
+                          Provider
+                        </label>
+                        <select
+                          value={proxyConfig?.provider || "webshare"}
+                          onChange={(e) =>
+                            setProxyConfig({
+                              ...proxyConfig,
+                              provider: e.target.value as "webshare" | "custom",
+                            })
+                          }
+                          className="w-full sm:w-64 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
                         >
-                          OKX Account → API Management
-                        </a>
-                      </li>
-                      <li>
-                        Klik <strong>Edit</strong> pada API Key yang digunakan
-                      </li>
-                      <li>
-                        Di bagian <strong>Bind IP</strong>, tambahkan IP valid
-                        dari tabel di atas
-                      </li>
-                      <li>Save changes — butuh ~5 menit untuk生效</li>
-                    </ol>
-                    <p className="mt-2 text-amber-200/60">
-                      💡 Hanya IP dengan status <strong>✅ Valid</strong> yang
-                      perlu ditambahkan. Semua proxy menggunakan username &
-                      password yang sama.
-                    </p>
-                  </div>
+                          <option value="webshare">Webshare (Static IP)</option>
+                          <option value="custom">Custom Proxy</option>
+                        </select>
+                      </div>
+
+                      {proxyConfig?.provider === "custom" && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+                          <div>
+                            <label className="block text-xs text-slate-400 mb-1">
+                              Host
+                            </label>
+                            <input
+                              type="text"
+                              value={customProxy.host}
+                              onChange={(e) =>
+                                setCustomProxy({
+                                  ...customProxy,
+                                  host: e.target.value,
+                                })
+                              }
+                              className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs text-slate-400 mb-1">
+                              Port
+                            </label>
+                            <input
+                              type="number"
+                              value={customProxy.port}
+                              onChange={(e) =>
+                                setCustomProxy({
+                                  ...customProxy,
+                                  port: parseInt(e.target.value),
+                                })
+                              }
+                              className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs text-slate-400 mb-1">
+                              Username
+                            </label>
+                            <input
+                              type="text"
+                              value={customProxy.username}
+                              onChange={(e) =>
+                                setCustomProxy({
+                                  ...customProxy,
+                                  username: e.target.value,
+                                })
+                              }
+                              className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs text-slate-400 mb-1">
+                              Password
+                            </label>
+                            <input
+                              type="password"
+                              value={customProxy.password}
+                              onChange={(e) =>
+                                setCustomProxy({
+                                  ...customProxy,
+                                  password: e.target.value,
+                                })
+                              }
+                              className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {proxyProviderInfo && (
+                        <div className="bg-slate-800/50 border border-slate-700 rounded-lg p-3 mb-4">
+                          <p className="text-xs text-slate-400 mb-1">
+                            Proxy IPs ({proxyProviderInfo.validCount}/
+                            {proxyProviderInfo.total} valid):
+                          </p>
+                          <div className="flex flex-wrap gap-1">
+                            {proxyProviderInfo.ipList.map((ip) => (
+                              <span
+                                key={ip}
+                                className="text-xs font-mono bg-slate-700 px-1.5 py-0.5 rounded text-slate-300"
+                              >
+                                {ip}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {proxyError && (
+                    <p className="text-red-400 text-xs mb-2">⚠️ {proxyError}</p>
+                  )}
+                  <button
+                    onClick={handleProxySave}
+                    disabled={proxySaving}
+                    className="bg-primary-600 hover:bg-primary-700 disabled:opacity-50 px-4 py-2 rounded-lg text-sm font-medium transition"
+                  >
+                    {proxySaving ? "Saving..." : "💾 Save Proxy Config"}
+                  </button>
                 </>
               )}
             </div>
-          )}
-        </div>
 
-        {/* Signal Fetch Settings */}
-        <div className="card border-blue-700/50">
-          <div className="flex items-center gap-2 mb-4">
-            <span className="text-lg">📡</span>
-            <h3 className="text-sm font-semibold text-slate-300">
-              Signal Fetch Settings
-            </h3>
-          </div>
-          <p className="text-xs text-slate-400 mb-4">
-            Messages are fetched page-by-page (newest → oldest) until a{" "}
-            <strong className="text-slate-300">stop condition</strong> is met:
-            either a message already in the DB is found, or a message falls
-            outside the time window. They are then processed oldest-first for
-            correct trade execution order.
-          </p>
-          {/* Include Images toggle */}
-          <div className="flex items-center gap-3 mb-4 bg-slate-800/50 border border-slate-700 rounded-lg p-3">
-            <input
-              type="checkbox"
-              id="includeImageUrls"
-              checked={signalCfg.includeImageUrls}
-              onChange={(e) =>
-                setSignalCfg({
-                  ...signalCfg,
-                  includeImageUrls: e.target.checked,
-                })
-              }
-              className="rounded border-slate-600 bg-slate-800 text-blue-600 focus:ring-blue-500 w-4 h-4"
-            />
-            <label
-              htmlFor="includeImageUrls"
-              className="text-sm text-slate-300"
-            >
-              <span className="font-medium">
-                🖼️ Include Images in AI Analysis
-              </span>
-              <span className="block text-xs text-slate-500 mt-0.5">
-                When enabled, attached chart images from Discord messages will
-                be sent to the AI (vision model) for additional context
-                alongside the text. Requires a vision-capable AI model (e.g.,
-                GLM glm-4v-plus).
-              </span>
-            </label>
-          </div>
-
-          {/* Vision AI Pre-Processing toggle */}
-          <div className="flex items-center gap-3 mb-4 bg-slate-800/50 border border-slate-700 rounded-lg p-3">
-            <input
-              type="checkbox"
-              id="visionAIEnabled"
-              checked={signalCfg.visionAIEnabled}
-              onChange={(e) =>
-                setSignalCfg({
-                  ...signalCfg,
-                  visionAIEnabled: e.target.checked,
-                })
-              }
-              className="rounded border-slate-600 bg-slate-800 text-blue-600 focus:ring-blue-500 w-4 h-4"
-            />
-            <label htmlFor="visionAIEnabled" className="text-sm text-slate-300">
-              <span className="font-medium">
-                🔮 Gemini Vision AI — Chart Image Pre-Processing
-              </span>
-              <span className="block text-xs text-slate-500 mt-0.5">
-                Uses Gemini 2.5 Flash to analyze chart images and extract Entry,
-                TP, SL price levels as text before forwarding to your main AI.
-                This runs as a pre-processing layer. Requires{" "}
-                <code className="text-slate-400">GEMINI_API_KEY</code> in
-                environment variables. Very cheap (~Rp 1/image).
-              </span>
-            </label>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-            <div>
-              <label className="block text-sm text-slate-400 mb-1">
-                Page Size (per API call)
-              </label>
-              <input
-                type="number"
-                min="1"
-                max="100"
-                value={signalCfg.fetchLimit}
-                onChange={(e) =>
-                  setSignalCfg({
-                    ...signalCfg,
-                    fetchLimit: parseInt(e.target.value) || 10,
-                  })
-                }
-                className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none"
-              />
-              <p className="text-xs text-slate-500 mt-1">
-                Messages per Discord API page request. Default: 10
+            {/* ─── Reset ────────────────────────────── */}
+            <div className="card border-red-700/50">
+              <h2 className="text-lg font-semibold mb-2 text-red-400">
+                ⚠️ Danger Zone
+              </h2>
+              <p className="text-xs text-slate-400 mb-4">
+                This will delete ALL positions, drafts, and trade logs. Account
+                configurations will be preserved.
               </p>
-            </div>
-            <div>
-              <label className="block text-sm text-slate-400 mb-1">
-                Time Window (hours)
-              </label>
-              <input
-                type="number"
-                min="1"
-                max="720"
-                value={signalCfg.timeWindowHours}
-                onChange={(e) =>
-                  setSignalCfg({
-                    ...signalCfg,
-                    timeWindowHours: parseInt(e.target.value) || 24,
-                  })
-                }
-                className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none"
-              />
-              <p className="text-xs text-slate-500 mt-1">
-                Stop fetching when older than this. Default: 24h
-              </p>
-            </div>
-            <div>
-              <label className="block text-sm text-slate-400 mb-1">
-                AI Batch Size
-              </label>
-              <input
-                type="number"
-                min="1"
-                max="20"
-                value={signalCfg.batchSize}
-                onChange={(e) =>
-                  setSignalCfg({
-                    ...signalCfg,
-                    batchSize: parseInt(e.target.value) || 5,
-                  })
-                }
-                className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none"
-              />
-              <p className="text-xs text-slate-500 mt-1">
-                Messages per AI parse call (bulk). Default: 5
-              </p>
-            </div>
-          </div>
-          {signalError && (
-            <div className="bg-red-900/30 border border-red-700/50 rounded-lg px-4 py-3 text-sm text-red-300 mb-3">
-              ⚠️ {signalError}
-            </div>
-          )}
-          {signalSuccess && (
-            <div className="bg-emerald-900/30 border border-emerald-700/50 rounded-lg px-4 py-3 text-sm text-emerald-300 mb-3">
-              ✅ Signal settings saved successfully!
-            </div>
-          )}
-          <button
-            onClick={handleSignalSave}
-            disabled={signalSaving}
-            className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 px-6 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2"
-          >
-            {signalSaving ? (
-              <>
-                <div className="spinner w-4 h-4 border-2" /> Saving...
-              </>
-            ) : (
-              "💾 Save Signal Settings"
-            )}
-          </button>
-        </div>
 
-        {/* Cron Job Scheduler */}
-        <div className="card border-teal-700/50">
-          <div className="flex items-center gap-2 mb-4">
-            <span className="text-lg">⏰</span>
-            <h3 className="text-sm font-semibold text-slate-300">
-              Cron Job Scheduler
-            </h3>
-          </div>
-          <p className="text-xs text-slate-400 mb-4">
-            Configure cron-job.org to automatically trigger your API endpoints.
-            This ensures signals are checked, positions are monitored, and TP/SL
-            are placed even when you're not actively using the dashboard.
-          </p>
-
-          {/* Base URL */}
-          <div className="mb-4">
-            <label className="block text-sm text-slate-400 mb-1">
-              Deployment Base URL *
-            </label>
-            <input
-              type="url"
-              value={cronBaseUrl}
-              onChange={(e) => setCronBaseUrl(e.target.value)}
-              placeholder="https://your-app.vercel.app"
-              className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-teal-500 focus:outline-none"
-            />
-            <p className="text-xs text-slate-500 mt-1">
-              Your Vercel deployment URL (no trailing slash). Example:
-              https://copytrade.vercel.app
-            </p>
-          </div>
-
-          {/* Live Status */}
-          {cronLiveStatus.length > 0 && (
-            <div className="mb-4 bg-slate-800/50 border border-slate-700 rounded-lg p-3">
-              <p className="text-xs text-slate-400 font-semibold mb-2">
-                📊 Live Status (cron-job.org)
-              </p>
-              <div className="space-y-1.5">
-                {cronLiveStatus.map((job) => (
-                  <div
-                    key={job.type}
-                    className="flex items-center justify-between text-xs"
-                  >
-                    <span className="text-slate-300">
-                      {job.type === "signal-check"
-                        ? "🔍"
-                        : job.type === "position-monitor"
-                          ? "📊"
-                          : "🎯"}{" "}
-                      {job.type}
-                    </span>
-                    <span
-                      className={
-                        job.status === "active"
-                          ? "text-emerald-400"
-                          : "text-red-400"
-                      }
-                    >
-                      {job.status === "active" ? "✅ Active" : "❌ Missing"}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Job configs */}
-          <div className="space-y-3 mb-4">
-            {cronJobs.map((job, idx) => {
-              const recommended = RECOMMENDED_SCHEDULES[job.type];
-              return (
-                <div
-                  key={job.type}
-                  className="bg-slate-800/50 border border-slate-700 rounded-lg p-3"
+              {!resetShowConfirm ? (
+                <button
+                  onClick={() => setResetShowConfirm(true)}
+                  className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg text-sm font-medium transition"
                 >
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2">
-                      <span>
-                        {job.type === "signal-check"
-                          ? "🔍"
-                          : job.type === "position-monitor"
-                            ? "📊"
-                            : "🎯"}
-                      </span>
-                      <span className="text-sm text-white font-medium">
-                        {job.title.replace("CopyTrade — ", "")}
-                      </span>
-                      {job.id && (
-                        <span className="text-[10px] text-slate-500 font-mono">
-                          ID: {job.id}
-                        </span>
-                      )}
-                    </div>
+                  🗑️ Reset All Data
+                </button>
+              ) : (
+                <div className="space-y-3 bg-red-900/20 border border-red-700/50 rounded-lg p-4">
+                  <p className="text-sm text-red-300">
+                    Type <strong>RESET</strong> to confirm:
+                  </p>
+                  <input
+                    type="text"
+                    value={resetConfirmText}
+                    onChange={(e) => setResetConfirmText(e.target.value)}
+                    placeholder="RESET"
+                    className="w-full sm:w-48 bg-slate-800 border border-red-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-red-500 focus:outline-none"
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleReset}
+                      disabled={resetConfirmText !== "RESET" || resetLoading}
+                      className="bg-red-600 hover:bg-red-700 disabled:opacity-50 px-4 py-2 rounded-lg text-sm font-medium transition"
+                    >
+                      {resetLoading ? "Resetting..." : "🗑️ Confirm Reset"}
+                    </button>
                     <button
                       onClick={() => {
-                        const updated = [...cronJobs];
-                        updated[idx] = {
-                          ...updated[idx],
-                          enabled: !updated[idx].enabled,
-                        };
-                        setCronJobs(updated);
+                        setResetShowConfirm(false);
+                        setResetConfirmText("");
                       }}
-                      className={`text-xs px-2 py-1 rounded border transition ${
-                        job.enabled
-                          ? "border-emerald-700/50 text-emerald-400 bg-emerald-900/20"
-                          : "border-slate-600 text-slate-500 bg-slate-800"
-                      }`}
+                      className="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded-lg text-sm transition"
                     >
-                      {job.enabled ? "✅ On" : "⏸ Off"}
+                      Cancel
                     </button>
                   </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs text-slate-500 mb-1">
-                        Endpoint
-                      </label>
-                      <code className="text-xs text-slate-400 bg-slate-900 px-2 py-1 rounded block">
-                        {job.url}
-                      </code>
-                    </div>
-                    <div>
-                      <label className="block text-xs text-slate-500 mb-1">
-                        Interval (minutes)
-                      </label>
-                      <input
-                        type="number"
-                        min="1"
-                        max="1440"
-                        value={job.schedule.minutes}
-                        onChange={(e) => {
-                          const updated = [...cronJobs];
-                          updated[idx] = {
-                            ...updated[idx],
-                            schedule: {
-                              ...updated[idx].schedule,
-                              minutes: parseInt(e.target.value) || 5,
-                            },
-                          };
-                          setCronJobs(updated);
-                        }}
-                        className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-white focus:border-teal-500 focus:outline-none"
-                      />
-                    </div>
-                  </div>
-                  {recommended && (
-                    <p className="text-[10px] text-teal-400/70 mt-1.5">
-                      💡 Recommended: {recommended.label} —{" "}
-                      {recommended.description}
-                    </p>
+                </div>
+              )}
+
+              {resetResult && (
+                <div
+                  className={`mt-3 rounded-lg p-3 text-sm ${
+                    resetResult.success
+                      ? "bg-emerald-900/30 text-emerald-300"
+                      : "bg-red-900/30 text-red-300"
+                  }`}
+                >
+                  <p>{resetResult.message}</p>
+                  {resetResult.results && (
+                    <ul className="mt-2 space-y-1 text-xs">
+                      {resetResult.results.map((r, i) => (
+                        <li key={i}>
+                          {r.status === "success" ? "✅" : "❌"} {r.step}:{" "}
+                          {r.message}
+                        </li>
+                      ))}
+                    </ul>
                   )}
                 </div>
-              );
-            })}
-          </div>
-
-          {cronError && (
-            <div className="bg-red-900/30 border border-red-700/50 rounded-lg px-4 py-3 text-sm text-red-300 mb-3">
-              ⚠️ {cronError}
-            </div>
-          )}
-          {cronSuccess && (
-            <div className="bg-emerald-900/30 border border-emerald-700/50 rounded-lg px-4 py-3 text-sm text-emerald-300 mb-3">
-              ✅ Cron jobs synced successfully!
-            </div>
-          )}
-          <div className="flex flex-wrap gap-3">
-            <button
-              onClick={handleCronSave}
-              disabled={cronSaving || !cronBaseUrl}
-              className="bg-teal-600 hover:bg-teal-700 disabled:opacity-50 px-6 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2"
-            >
-              {cronSaving ? (
-                <>
-                  <div className="spinner w-4 h-4 border-2" /> Syncing to
-                  cron-job.org...
-                </>
-              ) : (
-                "💾 Save & Sync Cron Jobs"
-              )}
-            </button>
-            <button
-              onClick={handleCronPull}
-              disabled={cronPulling}
-              className="bg-slate-600 hover:bg-slate-500 disabled:opacity-50 px-6 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2"
-            >
-              {cronPulling ? (
-                <>
-                  <div className="spinner w-4 h-4 border-2" /> Pulling from
-                  cloud...
-                </>
-              ) : (
-                "☁️ Sync from Cloud"
-              )}
-            </button>
-          </div>
-        </div>
-
-        {/* Danger Zone — Reset All */}
-        <div className="card border-red-700/50">
-          <div className="flex items-center gap-2 mb-4">
-            <span className="text-lg">☠️</span>
-            <h3 className="text-sm font-semibold text-red-400">
-              Danger Zone — Reset All
-            </h3>
-          </div>
-          <p className="text-xs text-slate-400 mb-4">
-            This will{" "}
-            <strong className="text-red-300">
-              drop all database collections
-            </strong>{" "}
-            (ProcessedMessage, Position, TradeLog, DraftTrade, TradingMode,
-            RiskSettings) and{" "}
-            <strong className="text-red-300">
-              close all open exchange positions
-            </strong>
-            . Discord sources are preserved. This action is{" "}
-            <strong className="text-red-300">irreversible</strong>.
-          </p>
-
-          {!resetShowConfirm ? (
-            <button
-              onClick={() => {
-                setResetShowConfirm(true);
-                setResetResult(null);
-              }}
-              className="bg-red-600 hover:bg-red-700 px-6 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2"
-            >
-              🔄 Reset Everything
-            </button>
-          ) : (
-            <div className="space-y-4">
-              <div className="bg-red-900/30 border border-red-700/50 rounded-lg p-4">
-                <p className="text-sm text-red-300 font-semibold mb-2">
-                  ⚠️ Are you absolutely sure?
-                </p>
-                <p className="text-xs text-slate-400 mb-3">
-                  This will permanently delete all trading data, positions,
-                  logs, and drafts. Discord source configurations will be kept.
-                  Type <strong className="text-red-300">reset</strong> to
-                  confirm.
-                </p>
-                <input
-                  type="text"
-                  value={resetConfirmText}
-                  onChange={(e) => setResetConfirmText(e.target.value)}
-                  placeholder='Type "reset" to confirm'
-                  className="w-full bg-slate-800 border border-red-700/50 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-red-500 focus:outline-none mb-3"
-                />
-                <div className="flex gap-3">
-                  <button
-                    onClick={handleReset}
-                    disabled={resetLoading || resetConfirmText !== "reset"}
-                    className="bg-red-600 hover:bg-red-700 disabled:opacity-50 px-6 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2"
-                  >
-                    {resetLoading ? (
-                      <>
-                        <div className="spinner w-4 h-4 border-2" />{" "}
-                        Resetting...
-                      </>
-                    ) : (
-                      "💥 Confirm Reset"
-                    )}
-                  </button>
-                  <button
-                    onClick={() => {
-                      setResetShowConfirm(false);
-                      setResetConfirmText("");
-                    }}
-                    disabled={resetLoading}
-                    className="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 px-4 py-2 rounded-lg text-sm transition"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Reset Result */}
-          {resetResult && (
-            <div
-              className={`mt-4 rounded-lg border p-4 ${
-                resetResult.success
-                  ? "bg-emerald-900/30 border-emerald-700/50"
-                  : "bg-red-900/30 border-red-700/50"
-              }`}
-            >
-              <p
-                className={`text-sm font-semibold mb-2 ${
-                  resetResult.success ? "text-emerald-300" : "text-red-300"
-                }`}
-              >
-                {resetResult.success ? "✅" : "❌"} {resetResult.message}
-              </p>
-              {resetResult.results && resetResult.results.length > 0 && (
-                <div className="space-y-2">
-                  {resetResult.results.map((r, i) => (
-                    <div
-                      key={i}
-                      className="bg-slate-800/50 rounded-lg p-3 border border-slate-700"
-                    >
-                      <div className="flex items-center gap-2 mb-1">
-                        <span
-                          className={`text-xs font-medium px-2 py-0.5 rounded ${
-                            r.status === "success"
-                              ? "bg-emerald-900/50 text-emerald-300"
-                              : r.status === "skipped"
-                                ? "bg-slate-700 text-slate-400"
-                                : "bg-red-900/50 text-red-300"
-                          }`}
-                        >
-                          {r.status.toUpperCase()}
-                        </span>
-                        <span className="text-sm text-white font-medium">
-                          {r.step}
-                        </span>
-                      </div>
-                      <p className="text-xs text-slate-400">{r.message}</p>
-                      {r.details && r.details.length > 0 && (
-                        <ul className="mt-1 space-y-0.5">
-                          {r.details.map((d, j) => (
-                            <li
-                              key={j}
-                              className="text-xs text-slate-500 font-mono"
-                            >
-                              • {d}
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </div>
-                  ))}
-                </div>
               )}
             </div>
-          )}
-        </div>
-
-        {/* How-to Guide */}
-        <div className="card border-slate-700">
-          <h3 className="text-sm font-semibold text-slate-300 mb-3">
-            📖 Setup Guide
-          </h3>
-          <div className="space-y-3 text-xs text-slate-400">
-            <div>
-              <h4 className="font-medium text-slate-300 mb-1">
-                🤖 Bot Token Method
-              </h4>
-              <ol className="list-decimal list-inside space-y-1 ml-2">
-                <li>
-                  Go to{" "}
-                  <a
-                    href="https://discord.com/developers/applications"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-primary-400 hover:text-primary-300 underline"
-                  >
-                    Discord Developer Portal
-                  </a>
-                </li>
-                <li>Create a new application → Bot → Copy token</li>
-                <li>
-                  Enable PRESENCE INTENT, SERVER MEMBERS INTENT, MESSAGE CONTENT
-                  INTENT
-                </li>
-                <li>
-                  Use the OAuth2 URL generator to invite bot to your server
-                  (scopes: bot, permissions: Read Messages + Read Message
-                  History)
-                </li>
-              </ol>
-            </div>
-            <div>
-              <h4 className="font-medium text-slate-300 mb-1">
-                👤 User Token Method
-              </h4>
-              <ol className="list-decimal list-inside space-y-1 ml-2">
-                <li>
-                  Use the{" "}
-                  <button
-                    onClick={() => setShowExtract(true)}
-                    className="text-primary-400 hover:text-primary-300 underline"
-                  >
-                    🪄 Auto-Extract Tool
-                  </button>{" "}
-                  above to get your token automatically
-                </li>
-                <li>
-                  Or manually find it from DevTools → Network → Authorization
-                  header
-                </li>
-                <li>No bot invite needed — works with any server you are in</li>
-                <li>
-                  ⚠️ Against Discord ToS — use at your own risk. Token may
-                  expire.
-                </li>
-              </ol>
-            </div>
-            <div>
-              <h4 className="font-medium text-slate-300 mb-1">📋 Channel ID</h4>
-              <ol className="list-decimal list-inside space-y-1 ml-2">
-                <li>Discord Settings → Advanced → Enable Developer Mode</li>
-                <li>Right-click the channel → Copy Channel ID</li>
-              </ol>
-            </div>
-          </div>
-        </div>
+          </>
+        )}
       </main>
     </div>
   );

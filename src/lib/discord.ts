@@ -201,50 +201,6 @@ export async function fetchMessagesFromSource(
   return allMessages;
 }
 
-// ==================== Legacy Public API (env-based fallback) ====================
-
-/**
- * Fetch messages using env config (fallback when no DB sources configured).
- */
-export async function fetchRecentMessages(
-  channelId?: string,
-  limit: number = 10,
-): Promise<DiscordMessage[]> {
-  const method = getDiscordMethod();
-  const channelIdToUse = channelId || process.env.DISCORD_CHANNEL_ID;
-
-  if (!channelIdToUse) {
-    throw new Error("DISCORD_CHANNEL_ID is not configured");
-  }
-
-  console.log(`📡 Fetching messages via ${method} method (env config)...`);
-
-  if (method === "user") {
-    return fetchViaUserToken(
-      process.env.DISCORD_USER_TOKEN!,
-      channelIdToUse,
-      limit,
-    );
-  }
-  return fetchViaBot(process.env.DISCORD_BOT_TOKEN!, channelIdToUse, limit);
-}
-
-// ==================== Method Detection (env fallback) ====================
-
-type DiscordMethod = "bot" | "user";
-
-function getDiscordMethod(): DiscordMethod {
-  const userToken = process.env.DISCORD_USER_TOKEN;
-  const botToken = process.env.DISCORD_BOT_TOKEN;
-
-  if (userToken) return "user";
-  if (botToken) return "bot";
-
-  throw new Error(
-    "Configure Discord sources in Settings or set DISCORD_BOT_TOKEN/DISCORD_USER_TOKEN in .env",
-  );
-}
-
 // ==================== Bot Method ====================
 
 const _botClients = new Map<string, Client>();
@@ -487,7 +443,7 @@ export async function fetchChannelNames(
     if (sourceChannelIds.length === 0) continue;
 
     try {
-      if (source.method === 'user') {
+      if (source.method === "user") {
         // Use REST API with user token
         for (const chId of sourceChannelIds) {
           if (!idSet.has(chId)) continue;
@@ -497,7 +453,8 @@ export async function fetchChannelNames(
               {
                 headers: {
                   Authorization: source.token,
-                  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+                  "User-Agent":
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
                 },
                 timeout: 5000,
               },
@@ -508,11 +465,13 @@ export async function fetchChannelNames(
               idSet.delete(chId);
             }
           } catch (err) {
-            console.warn(`Failed to fetch channel name for ${chId}:`,
-              err instanceof Error ? err.message : err);
+            console.warn(
+              `Failed to fetch channel name for ${chId}:`,
+              err instanceof Error ? err.message : err,
+            );
           }
         }
-      } else if (source.method === 'bot') {
+      } else if (source.method === "bot") {
         // Use discord.js bot client
         try {
           const client = getBotClient(source.token);
@@ -520,30 +479,36 @@ export async function fetchChannelNames(
             await client.login(source.token);
             await new Promise<void>((resolve) => {
               if (client.isReady()) resolve();
-              else client.once('ready', () => resolve());
+              else client.once("ready", () => resolve());
             });
           }
           for (const chId of sourceChannelIds) {
             if (!idSet.has(chId)) continue;
             try {
               const channel = await client.channels.fetch(chId);
-              if (channel && 'name' in channel) {
+              if (channel && "name" in channel) {
                 nameMap.set(chId, (channel as any).name);
                 idSet.delete(chId);
               }
             } catch (err) {
-              console.warn(`Failed to fetch channel name for ${chId}:`,
-                err instanceof Error ? err.message : err);
+              console.warn(
+                `Failed to fetch channel name for ${chId}:`,
+                err instanceof Error ? err.message : err,
+              );
             }
           }
         } catch (err) {
-          console.warn('Failed to initialize bot client for channel name resolution:',
-            err instanceof Error ? err.message : err);
+          console.warn(
+            "Failed to initialize bot client for channel name resolution:",
+            err instanceof Error ? err.message : err,
+          );
         }
       }
     } catch (err) {
-      console.warn(`Failed to resolve channel names via source:`,
-        err instanceof Error ? err.message : err);
+      console.warn(
+        `Failed to resolve channel names via source:`,
+        err instanceof Error ? err.message : err,
+      );
     }
   }
 

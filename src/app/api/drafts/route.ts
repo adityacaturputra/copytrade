@@ -14,15 +14,17 @@ export async function GET(request: NextRequest) {
       Math.max(1, parseInt(searchParams.get("limit") || "50", 10)),
     );
     const channelId = searchParams.get("channelId") || null;
+    const accountId = searchParams.get("accountId") || null;
     const status = searchParams.get("status") || null;
 
     const filter: Record<string, unknown> = {};
     if (channelId) filter.channelId = channelId;
+    if (accountId) filter.accountId = accountId;
     if (status) filter.status = status;
 
     const [drafts, totalCount] = await Promise.all([
       DraftTrade.find(filter)
-        .sort({ discordTimestamp: -1 })
+        .sort({ sourceTimestamp: -1 })
         .skip((page - 1) * limit)
         .limit(limit)
         .lean(),

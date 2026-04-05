@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { connectDB, DraftTrade, TradeLog } from "@/lib/database";
+import { connectDB, DraftTrade, TradeLog, Account } from "@/lib/database";
 import { TradingSignal } from "@/lib/ai/types";
 import {
   autoCalculateTPFromRR,
@@ -7,6 +7,34 @@ import {
   executeTrade,
 } from "@/lib/executor";
 import { getRiskConfig } from "@/lib/risk";
+import {
+  ExchangeFactory,
+  ExchangeCredentials,
+} from "@/lib/exchange/ExchangeFactory";
+import { ExchangeClient } from "@/lib/exchange/types";
+
+/**
+ * Resolve exchange client for a draft based on its accountId.
+ * Falls back to paper exchange if no account found.
+ */
+async function getExchangeForDraft(
+  accountId?: string,
+): Promise<ExchangeClient> {
+  if (accountId) {
+    const account = await Account.findById(accountId).lean();
+    if (account?.exchangeData) {
+      const creds: ExchangeCredentials = {
+        provider: (account.tradingPlatform as any) || "paper",
+        apiKey: account.exchangeData.apiKey,
+        secretKey: account.exchangeData.secretKey,
+        passphrase: account.exchangeData.passphrase,
+        simulated: account.exchangeData.simulated,
+      };
+      return ExchangeFactory.getClientForAccount(creds);
+    }
+  }
+  return ExchangeFactory.getPaperClient();
+}
 
 export const dynamic = "force-dynamic";
 
@@ -233,6 +261,7 @@ export async function POST(
           messageId: draft.messageId,
           signalData: draft.signalData,
           logPrefix: requestId,
+          accountId: draft.accountId || undefined,
         });
 
         positionId = position._id.toString();
@@ -243,8 +272,6 @@ export async function POST(
         console.log(`${lp} 🔒 Processing CLOSE for ${draft.symbol}...`);
 
         const { Position } = await import("@/lib/database");
-        const { ExchangeFactory } =
-          await import("@/lib/exchange/ExchangeFactory");
 
         const positions = await Position.find({
           symbol: draft.symbol,
@@ -256,12 +283,17 @@ export async function POST(
           `${lp} 📋 Found ${positions.length} open positions to close for ${draft.symbol}`,
         );
 
-        const exchange = ExchangeFactory.getClient();
+        // Resolve exchange from draft's accountId
+        const closeExchange = await getExchangeForDraft(draft.accountId);
         for (const pos of positions) {
           console.log(
             `${lp} 🔄 Closing position: id=${pos._id}, symbol=${pos.symbol}, side=${pos.side}, qty=${pos.quantity}`,
           );
-          await exchange.closePosition(pos.symbol, pos.orderId, pos.quantity);
+          await closeExchange.closePosition(
+            pos.symbol,
+            pos.orderId,
+            pos.quantity,
+          );
           pos.status = "closed";
           pos.closedAt = new Date();
           pos.closeReason = "Manual Accept Close";
@@ -326,7 +358,7 @@ export async function POST(
         }
 
         if (draft.takeProfitTargets?.length && draft.action === "ADD_TP") {
-          const exchange = ExchangeFactory.getClient();
+          const addTpExchange = await getExchangeForDraft(draft.accountId);
           const closeSide = pos.side === "LONG" ? "SELL" : "BUY";
 
           for (const newTpPrice of draft.takeProfitTargets) {
@@ -350,7 +382,7 @@ export async function POST(
             }
             // Place TP on exchange
             try {
-              const tpId = await exchange.placeTakeProfit(
+              const tpId = await addTpExchange.placeTakeProfit(
                 draft.symbol,
                 newTpPrice,
                 newTpPrice,
@@ -394,6 +426,7 @@ export async function POST(
     await draft.save();
 
     await TradeLog.create({
+      accountId: draft.accountId || undefined,
       type: "draft",
       action: `accepted_${draft.action}`,
       symbol: draft.symbol,

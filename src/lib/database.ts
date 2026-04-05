@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document, models, Model } from "mongoose";
+import { SourceType } from "./enums";
 
 // ─── Connection ────────────────────────────────────────────────────────────────
 
@@ -22,6 +23,7 @@ export async function connectDB(): Promise<void> {
 // ─── Interfaces ────────────────────────────────────────────────────────────────
 
 export interface IProcessedMessage extends Document {
+  accountId?: string;
   messageId: string;
   channelId: string;
   author: string;
@@ -35,6 +37,7 @@ export interface IProcessedMessage extends Document {
     | "failed"
     | "ignored"
     | "drafted";
+  sourceTimestamp?: Date;
   createdAt: Date;
   processedAt?: Date;
 }
@@ -49,6 +52,7 @@ export interface ITPTarget {
 }
 
 export interface IPosition extends Document {
+  accountId?: string;
   symbol: string;
   side: "LONG" | "SHORT";
   entryPrice: number;
@@ -71,6 +75,7 @@ export interface IPosition extends Document {
 }
 
 export interface ITradeLog extends Document {
+  accountId?: string;
   type: string;
   action: string;
   symbol?: string;
@@ -81,6 +86,7 @@ export interface ITradeLog extends Document {
 }
 
 export interface IDraftTrade extends Document {
+  accountId?: string;
   messageId: string;
   channelId: string;
   messageUrl: string;
@@ -100,7 +106,7 @@ export interface IDraftTrade extends Document {
   reasoning: string;
   status: "pending" | "accepted" | "rejected" | "expired";
   positionId?: string;
-  discordTimestamp?: Date;
+  sourceTimestamp?: Date;
   createdAt: Date;
   resolvedAt?: Date;
 }
@@ -118,6 +124,66 @@ export interface IDiscordSource extends Document {
   lastError?: string;
   tokenExpiresAt?: Date;
   autoRefresh: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * Account — unified configuration that ties together:
+ *   - Source type (discord/telegram) + credentials
+ *   - Channel IDs (specific to source type)
+ *   - Trading platform (okx/mexc/metatrader/etc.)
+ *
+ * This is the target model for the future. For now, existing DiscordSource
+ * data can coexist — the executor can use either Account or DiscordSource.
+ */
+export interface IAccount extends Document {
+  /** Human-readable account name (e.g., "VIP Signals → OKX") */
+  name: string;
+  /** Whether this account is active */
+  isActive: boolean;
+
+  // ─── Source Configuration ──────────────────────────────────────
+  /** Source type: discord, telegram, etc. */
+  sourceType: SourceType;
+  /** Source-specific credentials (token, method, etc.) stored as flexible object */
+  sourceData: {
+    // Discord-specific
+    method?: "bot" | "user";
+    token?: string;
+    refreshToken?: string;
+    tokenExpiresAt?: Date;
+    autoRefresh?: boolean;
+    // Telegram-specific (future)
+    phoneNumber?: string;
+    apiId?: string;
+    apiHash?: string;
+    // Generic
+    [key: string]: unknown;
+  };
+  /** Channel/group/chat IDs to monitor (specific to source type) */
+  channelIds: string[];
+  /** Display names for channels (channelId → display name) */
+  channelNames?: Map<string, string>;
+  /** Channel IDs that are temporarily disabled */
+  disabledChannelIds?: string[];
+
+  // ─── Exchange Configuration ────────────────────────────────────
+  /** Trading platform: okx, mexc, paper, etc. */
+  tradingPlatform?: string;
+  /** Exchange-specific credentials (API key, secret, etc.) */
+  exchangeData?: {
+    apiKey?: string;
+    secretKey?: string;
+    passphrase?: string;
+    simulated?: boolean;
+    [key: string]: unknown;
+  };
+
+  // ─── Health Status ─────────────────────────────────────────────
+  lastFetchedAt?: Date;
+  lastError?: string;
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -152,6 +218,7 @@ export interface ISignalConfig extends Document {
 
 const ProcessedMessageSchema = new Schema<IProcessedMessage>(
   {
+    accountId: { type: String, default: null },
     messageId: { type: String, required: true, unique: true },
     channelId: { type: String, required: true },
     author: { type: String, required: true },
@@ -170,6 +237,7 @@ const ProcessedMessageSchema = new Schema<IProcessedMessage>(
       ],
       default: "pending",
     },
+    sourceTimestamp: { type: Date, default: null },
     processedAt: { type: Date, default: null },
   },
   { timestamps: { createdAt: "createdAt", updatedAt: false } },
@@ -177,9 +245,11 @@ const ProcessedMessageSchema = new Schema<IProcessedMessage>(
 
 ProcessedMessageSchema.index({ status: 1 });
 ProcessedMessageSchema.index({ createdAt: -1 });
+ProcessedMessageSchema.index({ sourceTimestamp: -1 });
 
 const PositionSchema = new Schema<IPosition>(
   {
+    accountId: { type: String, default: null },
     symbol: { type: String, required: true, uppercase: true },
     side: { type: String, enum: ["LONG", "SHORT"], required: true },
     entryPrice: { type: Number, default: 0 },
@@ -225,6 +295,7 @@ PositionSchema.index({ symbol: 1, side: 1, channelId: 1, status: 1 });
 
 const TradeLogSchema = new Schema<ITradeLog>(
   {
+    accountId: { type: String, default: null },
     type: { type: String, required: true },
     action: { type: String, required: true },
     symbol: { type: String, default: null },
@@ -240,6 +311,7 @@ TradeLogSchema.index({ createdAt: -1 });
 
 const DraftTradeSchema = new Schema<IDraftTrade>(
   {
+    accountId: { type: String, default: null },
     messageId: { type: String, required: true },
     channelId: { type: String, required: true },
     messageUrl: { type: String, default: null },
@@ -263,7 +335,7 @@ const DraftTradeSchema = new Schema<IDraftTrade>(
       default: "pending",
     },
     positionId: { type: String, default: null },
-    discordTimestamp: { type: Date, default: null },
+    sourceTimestamp: { type: Date, default: null },
     resolvedAt: { type: Date, default: null },
   },
   { timestamps: { createdAt: "createdAt", updatedAt: false } },
@@ -291,6 +363,36 @@ const DiscordSourceSchema = new Schema<IDiscordSource>(
 );
 
 DiscordSourceSchema.index({ isActive: 1 });
+
+// ─── Account Schema ─────────────────────────────────────────────────────────
+
+const AccountSchema = new Schema<IAccount>(
+  {
+    name: { type: String, required: true },
+    isActive: { type: Boolean, default: true },
+    sourceType: {
+      type: String,
+      enum: Object.values(SourceType),
+      required: true,
+    },
+    sourceData: {
+      type: Schema.Types.Mixed,
+      required: true,
+      default: {},
+    },
+    channelIds: [{ type: String, default: [] }],
+    channelNames: { type: Map, of: String, default: {} },
+    disabledChannelIds: [{ type: String, default: [] }],
+    tradingPlatform: { type: String, default: null },
+    exchangeData: { type: Schema.Types.Mixed, default: null },
+    lastFetchedAt: { type: Date, default: null },
+    lastError: { type: String, default: null },
+  },
+  { timestamps: true },
+);
+
+AccountSchema.index({ isActive: 1 });
+AccountSchema.index({ sourceType: 1 });
 
 const TradingModeSchema = new Schema<ITradingMode>(
   {
@@ -347,6 +449,9 @@ export const TradingMode: Model<ITradingMode> =
 export const DiscordSource: Model<IDiscordSource> =
   models.DiscordSource ||
   mongoose.model<IDiscordSource>("DiscordSource", DiscordSourceSchema);
+
+export const Account: Model<IAccount> =
+  models.Account || mongoose.model<IAccount>("Account", AccountSchema);
 
 export const RiskSettings: Model<IRiskSettings> =
   models.RiskSettings ||
@@ -420,12 +525,12 @@ export function getAllPositions(limit: number = 50) {
 
 export function getPendingDrafts() {
   return DraftTrade.find({ status: "pending" })
-    .sort({ discordTimestamp: -1 })
+    .sort({ sourceTimestamp: -1 })
     .lean();
 }
 
 export function getRecentDrafts(limit: number = 50) {
-  return DraftTrade.find().sort({ discordTimestamp: -1 }).limit(limit).lean();
+  return DraftTrade.find().sort({ sourceTimestamp: -1 }).limit(limit).lean();
 }
 
 // ─── TP Percentage Helper ──────────────────────────────────────────────────

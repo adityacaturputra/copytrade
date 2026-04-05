@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { connectDB } from "@/lib/database";
+import { connectDB, Account } from "@/lib/database";
 import mongoose from "mongoose";
 import { ExchangeFactory } from "@/lib/exchange/ExchangeFactory";
 
@@ -11,9 +11,6 @@ const COLLECTIONS_TO_CLEAR = [
   "positions",
   "tradelogs",
   "drafttrades",
-  "tradingmodes",
-  "risksettings",
-  "signalconfigs",
 ];
 
 interface ResetStepResult {
@@ -64,6 +61,10 @@ export async function POST(request: NextRequest) {
               .countDocuments();
             details.push(`Preserved: discordsources (${count} docs)`);
           }
+          if (collectionNames.includes("accounts")) {
+            const count = await db.collection("accounts").countDocuments();
+            details.push(`Preserved: accounts (${count} docs)`);
+          }
 
           results.push({
             step: "Database",
@@ -87,58 +88,72 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // ─── Step 2: Close Exchange Positions ──────────────────────────────
+    // ─── Step 2: Close Exchange Positions (iterate all accounts) ─────────
     if (!skipExchange) {
-      const provider = (process.env.EXCHANGE_PROVIDER as string) || "paper";
+      try {
+        const accounts = await Account.find({ isActive: true }).lean();
 
-      if (provider === "paper") {
-        results.push({
-          step: "Exchange",
-          status: "skipped",
-          message:
-            "Paper exchange — positions are in-memory and reset on server restart",
-        });
-      } else {
-        try {
-          const exchange = ExchangeFactory.getClient();
-
-          const positions = await exchange.getOpenPositions();
-          const details: string[] = [
-            `Provider: ${provider}`,
-            `Open positions: ${positions.length}`,
-          ];
-
-          if (positions.length === 0) {
-            results.push({
-              step: "Exchange",
-              status: "success",
-              message: "No open positions to close",
-              details,
-            });
-          } else {
-            const result = await exchange.closeAllPositions();
-
-            if (result.closed.length > 0) {
-              details.push(`Closed: ${result.closed.join(", ")}`);
-            }
-            if (result.errors.length > 0) {
-              details.push(`Errors: ${result.errors.join(", ")}`);
-            }
-
-            results.push({
-              step: "Exchange",
-              status: result.errors.length > 0 ? "error" : "success",
-              message: `Closed ${result.closed.length}/${positions.length} positions`,
-              details,
-            });
-          }
-        } catch (err) {
+        if (accounts.length === 0) {
           results.push({
             step: "Exchange",
-            status: "error",
-            message: `Exchange error: ${err instanceof Error ? err.message : String(err)}`,
+            status: "skipped",
+            message: "No active accounts with exchange credentials",
+          });
+        } else {
+          const allDetails: string[] = [];
+          let totalClosed = 0;
+          let totalErrors = 0;
+
+          for (const account of accounts) {
+            if (!account.exchangeData) {
+              allDetails.push(
+                `Account "${account.name}": no exchangeData, skipped`,
+              );
+              continue;
+            }
+
+            try {
+              const exchange = ExchangeFactory.getClientForAccount({
+                provider: (account.tradingPlatform as any) || "paper",
+                ...account.exchangeData,
+              });
+              const positions = await exchange.getOpenPositions();
+              allDetails.push(
+                `Account "${account.name}" (${account.tradingPlatform}): ${positions.length} open positions`,
+              );
+
+              if (positions.length > 0) {
+                const result = await exchange.closeAllPositions();
+                totalClosed += result.closed.length;
+                totalErrors += result.errors.length;
+                if (result.closed.length > 0) {
+                  allDetails.push(`  Closed: ${result.closed.join(", ")}`);
+                }
+                if (result.errors.length > 0) {
+                  allDetails.push(`  Errors: ${result.errors.join(", ")}`);
+                }
+              }
+            } catch (err) {
+              totalErrors++;
+              allDetails.push(
+                `Account "${account.name}": ${err instanceof Error ? err.message : String(err)}`,
+              );
+            }
+          }
+
+          results.push({
+            step: "Exchange",
+            status: totalErrors > 0 ? "error" : "success",
+            message: `Closed ${totalClosed} positions across ${accounts.length} accounts`,
+            details: allDetails,
           });
         }
+      } catch (err) {
+        results.push({
+          step: "Exchange",
+          status: "error",
+          message: `Exchange error: ${err instanceof Error ? err.message : String(err)}`,
+        });
       }
     } else {
       results.push({

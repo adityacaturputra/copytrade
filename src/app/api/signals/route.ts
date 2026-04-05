@@ -14,13 +14,15 @@ export async function GET(request: NextRequest) {
       Math.max(1, parseInt(searchParams.get("limit") || "50", 10)),
     );
     const channelId = searchParams.get("channelId") || null;
+    const accountId = searchParams.get("accountId") || null;
 
     const filter: Record<string, unknown> = {};
     if (channelId) filter.channelId = channelId;
+    if (accountId) filter.accountId = accountId;
 
     const [messages, totalCount] = await Promise.all([
       ProcessedMessage.find(filter)
-        .sort({ createdAt: -1 })
+        .sort({ sourceTimestamp: -1, createdAt: -1 })
         .skip((page - 1) * limit)
         .limit(limit)
         .lean(),

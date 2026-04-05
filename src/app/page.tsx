@@ -42,6 +42,7 @@ interface Message {
   signalType?: string;
   signal_type?: string;
   status: string;
+  sourceTimestamp?: string;
   createdAt?: string;
   created_at?: string;
 }
@@ -80,7 +81,7 @@ interface DraftTrade {
   reasoning: string;
   status: "pending" | "accepted" | "rejected" | "expired";
   positionId?: string;
-  discordTimestamp?: string;
+  sourceTimestamp?: string;
   createdAt: string;
   resolvedAt?: string;
 }
@@ -120,15 +121,20 @@ interface SignalConfig {
   timeWindowHours: number;
 }
 
-interface DiscordSourceInfo {
-  _id: string;
-  name: string;
+interface AccountExchangeInfo {
+  accountId: string;
+  accountName: string;
+  sourceType: string;
+  tradingPlatform: string;
+  isDemo: boolean;
   channelIds: string[];
-  isActive: boolean;
+  account: AccountInfo | null;
+  exchangeError: string | null;
 }
 
 interface DashboardData {
   stats: Stats;
+  accounts: AccountExchangeInfo[];
   account: AccountInfo | null;
   exchangeProvider: string | null;
   exchangeError: string | null;
@@ -138,7 +144,6 @@ interface DashboardData {
   tradingMode: "auto" | "manual";
   riskConfig: RiskConfig | null;
   signalConfig: SignalConfig | null;
-  discordSources: DiscordSourceInfo[];
   channelNames: Record<string, string>;
 }
 
@@ -160,6 +165,9 @@ export default function Dashboard() {
   > | null>(null);
   const [expandedCron, setExpandedCron] = useState<string | null>(null);
   const [selectedChannelId, setSelectedChannelId] = useState<string>("all");
+  const [selectedAccountId, setSelectedAccountId] = useState<string>("all");
+  const [refreshKey, setRefreshKey] = useState(0);
+  const prevCronRunning = useRef<Record<string, boolean>>({});
 
   const fetchData = useCallback(async () => {
     try {
@@ -222,6 +230,19 @@ export default function Dashboard() {
     allConfigured: boolean;
     missing: string[];
   } | null>(null);
+
+  // Detect cron completion → bump refreshKey to auto-refresh active tab
+  useEffect(() => {
+    if (!cronStatus) return;
+    for (const [name, status] of Object.entries(cronStatus)) {
+      const wasRunning = prevCronRunning.current[name];
+      if (wasRunning && !status.running && status.result) {
+        // Cron just completed
+        setRefreshKey((k) => k + 1);
+      }
+      prevCronRunning.current[name] = status.running;
+    }
+  }, [cronStatus]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -294,6 +315,7 @@ export default function Dashboard() {
       const json = await res.json();
       if (json.success) {
         alert(`Draft ${action}ed successfully!`);
+        setRefreshKey((k) => k + 1);
         await fetchData();
       } else {
         alert(`Failed: ${json.error}`);
@@ -344,17 +366,16 @@ export default function Dashboard() {
   };
   const tradingMode = data?.tradingMode || "manual";
 
-  // ─── Collect unique channel IDs for filter ──────────────────────────
+  // ─── Collect unique channel IDs from accounts for filter ──────────
   const allChannelIds = new Set<string>();
-  for (const src of data?.discordSources || []) {
-    for (const cid of src.channelIds) {
-      allChannelIds.add(cid);
-    }
-  }
-  const channelIdArray = Array.from(allChannelIds).sort();
+  // Channel names are already resolved server-side from accounts
   const channelNameMap = new Map<string, string>(
     Object.entries(data?.channelNames || {}),
   );
+  for (const [chId] of channelNameMap) {
+    allChannelIds.add(chId);
+  }
+  const channelIdArray = Array.from(allChannelIds).sort();
 
   return (
     <div className="min-h-screen">
@@ -814,52 +835,109 @@ export default function Dashboard() {
 
         {/* Tabs */}
         <div className="card">
-          {/* Channel Filter */}
-          {channelIdArray.length > 0 && (
-            <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 mb-4 pb-3 border-b border-slate-700/50">
-              <span className="text-xs text-slate-400 uppercase tracking-wider font-medium">
-                📺 Channel Filter:
-              </span>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  onClick={() => setSelectedChannelId("all")}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
-                    selectedChannelId === "all"
-                      ? "bg-primary-600 text-white"
-                      : "bg-slate-700 text-slate-300 hover:bg-slate-600"
-                  }`}
-                >
-                  All Channels
-                </button>
-                {channelIdArray.map((chId) => {
-                  const sourceName = channelNameMap.get(chId);
-                  const shortId =
-                    chId.length > 8 ? `...${chId.slice(-6)}` : chId;
-                  return (
+          {/* Account & Channel Filters */}
+          {((data?.accounts && data.accounts.length > 0) ||
+            channelIdArray.length > 0) && (
+            <div className="flex flex-col gap-3 mb-4 pb-3 border-b border-slate-700/50">
+              {/* Account Filter */}
+              {data?.accounts && data.accounts.length > 1 && (
+                <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+                  <span className="text-xs text-slate-400 uppercase tracking-wider font-medium">
+                    📡 Account:
+                  </span>
+                  <div className="flex flex-wrap gap-2">
                     <button
-                      key={chId}
-                      onClick={() => setSelectedChannelId(chId)}
-                      title={chId}
+                      onClick={() => {
+                        setSelectedAccountId("all");
+                        setSelectedChannelId("all");
+                      }}
                       className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
-                        selectedChannelId === chId
+                        selectedAccountId === "all"
                           ? "bg-primary-600 text-white"
                           : "bg-slate-700 text-slate-300 hover:bg-slate-600"
                       }`}
                     >
-                      {sourceName ? (
-                        <span className="flex items-center gap-1.5">
-                          <span>{sourceName}</span>
-                          <span className="text-[10px] opacity-50 font-mono">
-                            {shortId}
-                          </span>
-                        </span>
-                      ) : (
-                        <span className="font-mono">{chId}</span>
-                      )}
+                      All Accounts
                     </button>
-                  );
-                })}
-              </div>
+                    {data.accounts.map((acct) => (
+                      <button
+                        key={acct.accountId}
+                        onClick={() => {
+                          setSelectedAccountId(acct.accountId);
+                          setSelectedChannelId("all");
+                        }}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1.5 ${
+                          selectedAccountId === acct.accountId
+                            ? "bg-primary-600 text-white"
+                            : "bg-slate-700 text-slate-300 hover:bg-slate-600"
+                        }`}
+                      >
+                        {acct.sourceType === "telegram" ? "✈️" : "🤖"}
+                        <span>{acct.accountName}</span>
+                        <span className="text-[10px] opacity-50 uppercase">
+                          {acct.tradingPlatform}
+                          {acct.isDemo ? " (demo)" : ""}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {/* Channel Filter */}
+              {channelIdArray.length > 0 && (
+                <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+                  <span className="text-xs text-slate-400 uppercase tracking-wider font-medium">
+                    📺 Channel:
+                  </span>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      onClick={() => setSelectedChannelId("all")}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+                        selectedChannelId === "all"
+                          ? "bg-primary-600 text-white"
+                          : "bg-slate-700 text-slate-300 hover:bg-slate-600"
+                      }`}
+                    >
+                      All Channels
+                    </button>
+                    {(selectedAccountId === "all"
+                      ? channelIdArray
+                      : channelIdArray.filter((chId) =>
+                          data?.accounts
+                            ?.find((a) => a.accountId === selectedAccountId)
+                            ?.channelIds?.includes(chId),
+                        )
+                    ).map((chId) => {
+                      const sourceName = channelNameMap.get(chId);
+                      const shortId =
+                        chId.length > 8 ? `...${chId.slice(-6)}` : chId;
+                      return (
+                        <button
+                          key={chId}
+                          onClick={() => setSelectedChannelId(chId)}
+                          title={chId}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+                            selectedChannelId === chId
+                              ? "bg-primary-600 text-white"
+                              : "bg-slate-700 text-slate-300 hover:bg-slate-600"
+                          }`}
+                        >
+                          {sourceName ? (
+                            <span className="flex items-center gap-1.5">
+                              <span>{sourceName}</span>
+                              <span className="text-[10px] opacity-50 font-mono">
+                                {shortId}
+                              </span>
+                            </span>
+                          ) : (
+                            <span className="font-mono">{chId}</span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -915,6 +993,8 @@ export default function Dashboard() {
           {activeTab === "drafts" && (
             <DraftsTab
               channelIdFilter={selectedChannelId}
+              accountIdFilter={selectedAccountId}
+              refreshKey={refreshKey}
               actingDraft={actingDraft}
               onAccept={handleDraftAction}
               onReject={handleDraftAction}
@@ -927,10 +1007,18 @@ export default function Dashboard() {
             />
           )}
           {activeTab === "positions" && (
-            <PositionsTab channelIdFilter={selectedChannelId} />
+            <PositionsTab
+              channelIdFilter={selectedChannelId}
+              accountIdFilter={selectedAccountId}
+              refreshKey={refreshKey}
+            />
           )}
           {activeTab === "signals" && (
-            <SignalsTab channelIdFilter={selectedChannelId} />
+            <SignalsTab
+              channelIdFilter={selectedChannelId}
+              accountIdFilter={selectedAccountId}
+              refreshKey={refreshKey}
+            />
           )}
           {activeTab === "logs" && <LogsTab />}
         </div>
@@ -988,6 +1076,8 @@ function StatCard({
 
 function DraftsTab({
   channelIdFilter,
+  accountIdFilter,
+  refreshKey,
   actingDraft,
   onAccept,
   onReject,
@@ -995,6 +1085,8 @@ function DraftsTab({
   accountBalance,
 }: {
   channelIdFilter: string;
+  accountIdFilter: string;
+  refreshKey: number;
   actingDraft: string | null;
   onAccept: (
     id: string,
@@ -1024,6 +1116,7 @@ function DraftsTab({
         limit: String(pageSize),
       });
       if (channelIdFilter !== "all") params.set("channelId", channelIdFilter);
+      if (accountIdFilter !== "all") params.set("accountId", accountIdFilter);
       const res = await fetch(`/api/drafts?${params}`);
       const json = await res.json();
       if (json.success) {
@@ -1033,15 +1126,20 @@ function DraftsTab({
       }
     } catch {}
     setLoading(false);
-  }, [page, pageSize, channelIdFilter]);
+  }, [page, pageSize, channelIdFilter, accountIdFilter]);
 
   useEffect(() => {
     fetchDrafts();
   }, [fetchDrafts]);
 
   useEffect(() => {
+    fetchDrafts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey]);
+
+  useEffect(() => {
     setPage(1);
-  }, [pageSize, channelIdFilter]);
+  }, [pageSize, channelIdFilter, accountIdFilter]);
 
   if (loading && drafts.length === 0) {
     return (
@@ -1068,12 +1166,23 @@ function DraftsTab({
 
   return (
     <div className="space-y-4">
-      {pendingCount > 0 && (
-        <h3 className="text-sm font-semibold text-amber-400 flex items-center gap-2">
-          <span className="w-2 h-2 bg-amber-400 rounded-full pulse-dot" />
-          Pending Review ({pendingCount})
-        </h3>
-      )}
+      <div className="flex items-center justify-between">
+        {pendingCount > 0 ? (
+          <h3 className="text-sm font-semibold text-amber-400 flex items-center gap-2">
+            <span className="w-2 h-2 bg-amber-400 rounded-full pulse-dot" />
+            Pending Review ({pendingCount})
+          </h3>
+        ) : (
+          <span />
+        )}
+        <button
+          onClick={() => fetchDrafts()}
+          disabled={loading}
+          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-slate-700 text-slate-300 hover:bg-slate-700 disabled:opacity-40 transition"
+        >
+          🔄 Refresh
+        </button>
+      </div>
       <div className="space-y-4">
         {drafts.map((draft) => (
           <DraftCard
@@ -1456,9 +1565,9 @@ function DraftCard({
             {/* Author & Time */}
             <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-xs text-slate-500">
               <span>👤 @{draft.author}</span>
-              {draft.discordTimestamp ? (
+              {draft.sourceTimestamp ? (
                 <span className="text-blue-400">
-                  💬 {new Date(draft.discordTimestamp).toLocaleString()}
+                  💬 {new Date(draft.sourceTimestamp).toLocaleString()}
                 </span>
               ) : null}
               <span>🕐 {new Date(draft.createdAt).toLocaleString()}</span>
@@ -1824,7 +1933,15 @@ function ImageModal({
   );
 }
 
-function PositionsTab({ channelIdFilter }: { channelIdFilter: string }) {
+function PositionsTab({
+  channelIdFilter,
+  accountIdFilter,
+  refreshKey,
+}: {
+  channelIdFilter: string;
+  accountIdFilter: string;
+  refreshKey: number;
+}) {
   const [positions, setPositions] = useState<Position[]>([]);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
@@ -1844,6 +1961,7 @@ function PositionsTab({ channelIdFilter }: { channelIdFilter: string }) {
         status: positionFilter,
       });
       if (channelIdFilter !== "all") params.set("channelId", channelIdFilter);
+      if (accountIdFilter !== "all") params.set("accountId", accountIdFilter);
       const res = await fetch(`/api/positions?${params}`);
       const json = await res.json();
       if (json.success) {
@@ -1853,15 +1971,20 @@ function PositionsTab({ channelIdFilter }: { channelIdFilter: string }) {
       }
     } catch {}
     setLoading(false);
-  }, [page, pageSize, positionFilter, channelIdFilter]);
+  }, [page, pageSize, positionFilter, channelIdFilter, accountIdFilter]);
 
   useEffect(() => {
     fetchPositions();
   }, [fetchPositions]);
 
   useEffect(() => {
+    fetchPositions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey]);
+
+  useEffect(() => {
     setPage(1);
-  }, [pageSize, positionFilter, channelIdFilter]);
+  }, [pageSize, positionFilter, channelIdFilter, accountIdFilter]);
 
   if (loading && positions.length === 0) {
     return (
@@ -1883,8 +2006,8 @@ function PositionsTab({ channelIdFilter }: { channelIdFilter: string }) {
 
   return (
     <div>
-      {/* Open / Closed sub-tabs */}
-      <div className="flex gap-0 border-b border-slate-700 mb-4">
+      {/* Open / Closed sub-tabs + Refresh */}
+      <div className="flex items-center gap-2 border-b border-slate-700 mb-4">
         <button
           onClick={() => setPositionFilter("open")}
           className={`px-4 py-2 text-xs sm:text-sm font-medium border-b-2 transition flex items-center gap-1.5 whitespace-nowrap ${
@@ -1922,6 +2045,14 @@ function PositionsTab({ channelIdFilter }: { channelIdFilter: string }) {
           >
             {/* closed count not shown here since we filter server-side */}
           </span>
+        </button>
+        <div className="flex-1" />
+        <button
+          onClick={() => fetchPositions()}
+          disabled={loading}
+          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-slate-700 text-slate-300 hover:bg-slate-700 disabled:opacity-40 transition mb-1"
+        >
+          🔄 Refresh
         </button>
       </div>
 
@@ -2010,7 +2141,15 @@ function PositionsTab({ channelIdFilter }: { channelIdFilter: string }) {
   );
 }
 
-function SignalsTab({ channelIdFilter }: { channelIdFilter: string }) {
+function SignalsTab({
+  channelIdFilter,
+  accountIdFilter,
+  refreshKey,
+}: {
+  channelIdFilter: string;
+  accountIdFilter: string;
+  refreshKey: number;
+}) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
@@ -2026,6 +2165,7 @@ function SignalsTab({ channelIdFilter }: { channelIdFilter: string }) {
         limit: String(pageSize),
       });
       if (channelIdFilter !== "all") params.set("channelId", channelIdFilter);
+      if (accountIdFilter !== "all") params.set("accountId", accountIdFilter);
       const res = await fetch(`/api/signals?${params}`);
       const json = await res.json();
       if (json.success) {
@@ -2035,15 +2175,20 @@ function SignalsTab({ channelIdFilter }: { channelIdFilter: string }) {
       }
     } catch {}
     setLoading(false);
-  }, [page, pageSize, channelIdFilter]);
+  }, [page, pageSize, channelIdFilter, accountIdFilter]);
 
   useEffect(() => {
     fetchMessages();
   }, [fetchMessages]);
 
   useEffect(() => {
+    fetchMessages();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey]);
+
+  useEffect(() => {
     setPage(1);
-  }, [pageSize, channelIdFilter]);
+  }, [pageSize, channelIdFilter, accountIdFilter]);
 
   if (loading && messages.length === 0) {
     return (
@@ -2065,6 +2210,15 @@ function SignalsTab({ channelIdFilter }: { channelIdFilter: string }) {
 
   return (
     <div>
+      <div className="flex items-center justify-end mb-2">
+        <button
+          onClick={() => fetchMessages()}
+          disabled={loading}
+          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-slate-700 text-slate-300 hover:bg-slate-700 disabled:opacity-40 transition"
+        >
+          🔄 Refresh
+        </button>
+      </div>
       <div className="space-y-3">
         {messages.map((msg) => (
           <div
@@ -2084,11 +2238,19 @@ function SignalsTab({ channelIdFilter }: { channelIdFilter: string }) {
                   )}
                 <StatusBadge status={msg.status} />
               </div>
-              <span className="text-xs text-slate-500">
-                {new Date(
-                  msg.createdAt || msg.created_at || "",
-                ).toLocaleString()}
-              </span>
+              <div className="flex flex-col items-end">
+                {msg.sourceTimestamp ? (
+                  <span className="text-xs text-blue-400">
+                    💬 {new Date(msg.sourceTimestamp).toLocaleString()}
+                  </span>
+                ) : null}
+                <span className="text-[10px] text-slate-600">
+                  Processed:{" "}
+                  {new Date(
+                    msg.createdAt || msg.created_at || "",
+                  ).toLocaleString()}
+                </span>
+              </div>
             </div>
             <p className="text-sm text-slate-300 whitespace-pre-wrap">
               {msg.content}
@@ -2169,6 +2331,13 @@ function LogsTab() {
       {/* Filter bar */}
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => fetchLogs()}
+            disabled={loading}
+            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-slate-700 text-slate-300 hover:bg-slate-700 disabled:opacity-40 transition"
+          >
+            🔄 Refresh
+          </button>
           <button
             onClick={() => setHideCronNoise(!hideCronNoise)}
             className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition border ${

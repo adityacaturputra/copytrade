@@ -162,3 +162,13 @@ export const MarketCondition = {
 
 export type MarketCondition =
   (typeof MarketCondition)[keyof typeof MarketCondition];
+
+// ==================== Source Type ====================
+// The type of message source (Discord, Telegram, WhatsApp, etc.)
+
+export const SourceType = {
+  DISCORD: "discord",
+  TELEGRAM: "telegram",
+} as const;
+
+export type SourceType = (typeof SourceType)[keyof typeof SourceType];
