@@ -3,29 +3,21 @@ import {
   connectDB,
   getStats,
   getOpenPositions,
-  getRecentMessages,
-  getRecentLogs,
-  getAllPositions,
   getPendingDrafts,
-  getRecentDrafts,
   getTradingMode,
   Position,
   TradeLog,
   getAllDiscordSources,
 } from "@/lib/database";
 import { ExchangeFactory } from "@/lib/exchange/ExchangeFactory";
-import { fetchChannelNames } from "@/lib/discord";
 import { getRiskConfig } from "@/lib/risk";
 import { getSignalConfig } from "@/lib/signal-config";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(request: NextRequest) {
+export async function GET() {
   try {
     await connectDB();
-
-    const { searchParams } = new URL(request.url);
-    const channelFilter = searchParams.get("channelId");
 
     // Fetch exchange account info
     let account = null;
@@ -49,11 +41,7 @@ export async function GET(request: NextRequest) {
     const [
       stats,
       openPositions,
-      recentMessages,
-      recentLogs,
-      allPositions,
       pendingDrafts,
-      recentDrafts,
       tradingMode,
       riskConfig,
       signalConfig,
@@ -61,27 +49,15 @@ export async function GET(request: NextRequest) {
     ] = await Promise.all([
       getStats(),
       getOpenPositions(),
-      getRecentMessages(20),
-      getRecentLogs(50),
-      getAllPositions(50),
       getPendingDrafts(),
-      getRecentDrafts(50),
       getTradingMode(),
       getRiskConfig(),
       getSignalConfig(),
       getAllDiscordSources(),
     ]);
 
-    // Resolve channel names: prefer stored names from DB, fall back to Discord API
-    const allUsedChannelIds = Array.from(
-      new Set([
-        ...(recentDrafts || []).map((d: any) => d.channelId).filter(Boolean),
-        ...(allPositions || []).map((p: any) => p.channelId).filter(Boolean),
-        ...(recentMessages || []).map((m: any) => m.channelId).filter(Boolean),
-      ]),
-    );
+    // Resolve channel names from DiscordSource.channelNames
     let channelNames: Record<string, string> = {};
-    // First: use stored channel names from DiscordSource.channelNames
     for (const src of discordSources) {
       const srcNames = (src as any).channelNames;
       if (srcNames && typeof srcNames === "object") {
@@ -94,22 +70,6 @@ export async function GET(request: NextRequest) {
             if (v) channelNames[k] = v as string;
           }
         }
-      }
-    }
-    // Second: for any IDs not yet resolved, fetch from Discord API
-    const unresolvedIds = allUsedChannelIds.filter((id) => !channelNames[id]);
-    if (unresolvedIds.length > 0) {
-      try {
-        const nameMap = await fetchChannelNames(unresolvedIds, discordSources);
-        const apiNames = Object.fromEntries(nameMap);
-        for (const [k, v] of Object.entries(apiNames)) {
-          if (v && !channelNames[k]) channelNames[k] = v;
-        }
-      } catch (err) {
-        console.warn(
-          "Failed to resolve channel names from API:",
-          err instanceof Error ? err.message : err,
-        );
       }
     }
 
@@ -189,10 +149,6 @@ export async function GET(request: NextRequest) {
       finalStats = await getStats();
     }
 
-    // Build channelId filter for client-facing data
-    const chFilter = (item: any) =>
-      !channelFilter || item.channelId === channelFilter;
-
     const enrichedOpenPositions = activePositions.map((pos) => {
       const exPos = exchangePositions.find((ep) => ep.symbol === pos.symbol);
       return {
@@ -210,30 +166,9 @@ export async function GET(request: NextRequest) {
         account,
         exchangeProvider,
         exchangeError,
-        openPositions: channelFilter
-          ? enrichedOpenPositions.filter(chFilter)
-          : enrichedOpenPositions,
-        recentMessages: channelFilter
-          ? recentMessages.filter(chFilter)
-          : recentMessages,
-        recentLogs,
-        allPositions: channelFilter
-          ? (syncedClosed > 0
-              ? await getAllPositions(50)
-              : allPositions
-            ).filter(chFilter)
-          : syncedClosed > 0
-            ? await getAllPositions(50)
-            : allPositions,
-        pendingDrafts: channelFilter
-          ? pendingDrafts.filter(chFilter)
-          : pendingDrafts,
-        pendingPositions: channelFilter
-          ? pendingPositions.filter(chFilter)
-          : pendingPositions,
-        recentDrafts: channelFilter
-          ? recentDrafts.filter(chFilter)
-          : recentDrafts,
+        openPositions: enrichedOpenPositions,
+        pendingDrafts,
+        pendingPositions,
         tradingMode,
         riskConfig,
         signalConfig,

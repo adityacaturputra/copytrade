@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { connectDB, DraftTrade } from "@/lib/database";
+import { connectDB, Position } from "@/lib/database";
 
 export const dynamic = "force-dynamic";
 
@@ -20,28 +20,24 @@ export async function GET(request: NextRequest) {
     if (channelId) filter.channelId = channelId;
     if (status) filter.status = status;
 
-    const [drafts, totalCount] = await Promise.all([
-      DraftTrade.find(filter)
-        .sort({ discordTimestamp: -1 })
+    const [positions, totalCount] = await Promise.all([
+      Position.find(filter)
+        .sort({ openedAt: -1 })
         .skip((page - 1) * limit)
         .limit(limit)
         .lean(),
-      DraftTrade.countDocuments(filter),
+      Position.countDocuments(filter),
     ]);
 
     const totalPages = Math.ceil(totalCount / limit);
 
     return NextResponse.json({
       success: true,
-      data: { drafts, page, limit, totalCount, totalPages },
+      data: { positions, page, limit, totalCount, totalPages },
     });
-  } catch (error) {
-    return NextResponse.json(
-      {
-        success: false,
-        error: error instanceof Error ? error.message : "Unknown error",
-      },
-      { status: 500 },
-    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    console.error("Failed to fetch positions:", msg);
+    return NextResponse.json({ success: false, error: msg }, { status: 500 });
   }
 }

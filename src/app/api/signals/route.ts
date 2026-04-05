@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { connectDB, DraftTrade } from "@/lib/database";
+import { connectDB, ProcessedMessage } from "@/lib/database";
 
 export const dynamic = "force-dynamic";
 
@@ -14,34 +14,28 @@ export async function GET(request: NextRequest) {
       Math.max(1, parseInt(searchParams.get("limit") || "50", 10)),
     );
     const channelId = searchParams.get("channelId") || null;
-    const status = searchParams.get("status") || null;
 
     const filter: Record<string, unknown> = {};
     if (channelId) filter.channelId = channelId;
-    if (status) filter.status = status;
 
-    const [drafts, totalCount] = await Promise.all([
-      DraftTrade.find(filter)
-        .sort({ discordTimestamp: -1 })
+    const [messages, totalCount] = await Promise.all([
+      ProcessedMessage.find(filter)
+        .sort({ createdAt: -1 })
         .skip((page - 1) * limit)
         .limit(limit)
         .lean(),
-      DraftTrade.countDocuments(filter),
+      ProcessedMessage.countDocuments(filter),
     ]);
 
     const totalPages = Math.ceil(totalCount / limit);
 
     return NextResponse.json({
       success: true,
-      data: { drafts, page, limit, totalCount, totalPages },
+      data: { messages, page, limit, totalCount, totalPages },
     });
-  } catch (error) {
-    return NextResponse.json(
-      {
-        success: false,
-        error: error instanceof Error ? error.message : "Unknown error",
-      },
-      { status: 500 },
-    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    console.error("Failed to fetch signals:", msg);
+    return NextResponse.json({ success: false, error: msg }, { status: 500 });
   }
 }

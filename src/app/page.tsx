@@ -134,11 +134,7 @@ interface DashboardData {
   exchangeError: string | null;
   openPositions: Position[];
   pendingPositions: Position[];
-  recentMessages: Message[];
-  recentLogs: Log[];
-  allPositions: Position[];
   pendingDrafts: DraftTrade[];
-  recentDrafts: DraftTrade[];
   tradingMode: "auto" | "manual";
   riskConfig: RiskConfig | null;
   signalConfig: SignalConfig | null;
@@ -163,7 +159,6 @@ export default function Dashboard() {
     CronRunStatus
   > | null>(null);
   const [expandedCron, setExpandedCron] = useState<string | null>(null);
-  const [selectedChannelId, setSelectedChannelId] = useState<string>("all");
 
   const fetchData = useCallback(async () => {
     try {
@@ -347,42 +342,6 @@ export default function Dashboard() {
     pendingDrafts: 0,
   };
   const tradingMode = data?.tradingMode || "manual";
-
-  // ─── Collect unique channel IDs for filter ──────────────────────────
-  const allChannelIds = new Set<string>();
-  for (const d of data?.recentDrafts || []) {
-    if (d.channelId) allChannelIds.add(d.channelId);
-  }
-  for (const p of data?.allPositions || []) {
-    if ((p as any).channelId) allChannelIds.add((p as any).channelId);
-  }
-  for (const m of data?.recentMessages || []) {
-    if ((m as any).channelId) allChannelIds.add((m as any).channelId);
-  }
-  const channelIdArray = Array.from(allChannelIds).sort();
-
-  // ─── Channel name map from Discord API (resolved server-side) ──────
-  const channelNameMap = new Map<string, string>(
-    Object.entries(data?.channelNames || {}),
-  );
-
-  // Filter helper
-  const filterByChannel = <T extends Record<string, any>>(
-    items: T[],
-    channelField: string = "channelId",
-  ): T[] => {
-    if (selectedChannelId === "all") return items;
-    return items.filter((item) => item[channelField] === selectedChannelId);
-  };
-
-  // Filtered data for tabs
-  const filteredDrafts = filterByChannel(data?.recentDrafts || []);
-  const filteredPositions = filterByChannel(data?.allPositions || []);
-  const filteredMessages = filterByChannel(
-    data?.recentMessages || [],
-    "channelId",
-  );
-  const filteredOpenPositions = filterByChannel(data?.openPositions || []);
 
   return (
     <div className="min-h-screen">
@@ -840,57 +799,8 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* Channel Filter + Tabs */}
+        {/* Tabs */}
         <div className="card">
-          {/* Channel Filter */}
-          {channelIdArray.length > 0 && (
-            <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 mb-4 pb-3 border-b border-slate-700/50">
-              <span className="text-xs text-slate-400 uppercase tracking-wider font-medium">
-                📺 Channel Filter:
-              </span>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  onClick={() => setSelectedChannelId("all")}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
-                    selectedChannelId === "all"
-                      ? "bg-primary-600 text-white"
-                      : "bg-slate-700 text-slate-300 hover:bg-slate-600"
-                  }`}
-                >
-                  All Channels
-                </button>
-                {channelIdArray.map((chId) => {
-                  const sourceName = channelNameMap.get(chId);
-                  const shortId =
-                    chId.length > 8 ? `...${chId.slice(-6)}` : chId;
-                  return (
-                    <button
-                      key={chId}
-                      onClick={() => setSelectedChannelId(chId)}
-                      title={chId}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
-                        selectedChannelId === chId
-                          ? "bg-primary-600 text-white"
-                          : "bg-slate-700 text-slate-300 hover:bg-slate-600"
-                      }`}
-                    >
-                      {sourceName ? (
-                        <span className="flex items-center gap-1.5">
-                          <span>{sourceName}</span>
-                          <span className="text-[10px] opacity-50 font-mono">
-                            {shortId}
-                          </span>
-                        </span>
-                      ) : (
-                        <span className="font-mono">{chId}</span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
           <div className="flex overflow-x-auto -mx-4 sm:mx-0 px-4 sm:px-0 border-b border-slate-700 mb-4 gap-0 scrollbar-hide">
             <button
               onClick={() => setActiveTab("drafts")}
@@ -942,7 +852,6 @@ export default function Dashboard() {
           {/* Tab Content */}
           {activeTab === "drafts" && (
             <DraftsTab
-              drafts={filteredDrafts}
               actingDraft={actingDraft}
               onAccept={handleDraftAction}
               onReject={handleDraftAction}
@@ -954,12 +863,8 @@ export default function Dashboard() {
               }
             />
           )}
-          {activeTab === "positions" && (
-            <PositionsTab positions={filteredPositions} />
-          )}
-          {activeTab === "signals" && (
-            <SignalsTab messages={filteredMessages} />
-          )}
+          {activeTab === "positions" && <PositionsTab />}
+          {activeTab === "signals" && <SignalsTab />}
           {activeTab === "logs" && <LogsTab />}
         </div>
       </main>
@@ -1015,14 +920,12 @@ function StatCard({
 }
 
 function DraftsTab({
-  drafts,
   actingDraft,
   onAccept,
   onReject,
   riskConfig,
   accountBalance,
 }: {
-  drafts: DraftTrade[];
   actingDraft: string | null;
   onAccept: (
     id: string,
@@ -1037,7 +940,49 @@ function DraftsTab({
   riskConfig: RiskConfig | null;
   accountBalance: number;
 }) {
-  if (drafts.length === 0) {
+  const [drafts, setDrafts] = useState<DraftTrade[]>([]);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [totalCount, setTotalCount] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
+  const [loading, setLoading] = useState(true);
+
+  const fetchDrafts = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({
+        page: String(page),
+        limit: String(pageSize),
+      });
+      const res = await fetch(`/api/drafts?${params}`);
+      const json = await res.json();
+      if (json.success) {
+        setDrafts(json.data.drafts);
+        setTotalCount(json.data.totalCount);
+        setTotalPages(json.data.totalPages);
+      }
+    } catch {}
+    setLoading(false);
+  }, [page, pageSize]);
+
+  useEffect(() => {
+    fetchDrafts();
+  }, [fetchDrafts]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [pageSize]);
+
+  if (loading && drafts.length === 0) {
+    return (
+      <div className="text-center py-8 text-slate-400">
+        <div className="spinner mx-auto mb-3" />
+        <p>Loading drafts...</p>
+      </div>
+    );
+  }
+
+  if (!loading && totalCount === 0) {
     return (
       <div className="text-center py-8 text-slate-400">
         <div className="text-4xl mb-2">📝</div>
@@ -1072,6 +1017,15 @@ function DraftsTab({
           />
         ))}
       </div>
+      <PaginationBar
+        page={page}
+        pageSize={pageSize}
+        totalCount={totalCount}
+        totalPages={totalPages}
+        loading={loading}
+        onPageChange={setPage}
+        onPageSizeChange={setPageSize}
+      />
     </div>
   );
 }
@@ -1800,14 +1754,52 @@ function ImageModal({
   );
 }
 
-function PositionsTab({ positions }: { positions: Position[] }) {
+function PositionsTab() {
+  const [positions, setPositions] = useState<Position[]>([]);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [totalCount, setTotalCount] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
+  const [loading, setLoading] = useState(true);
   const [positionFilter, setPositionFilter] = useState<"open" | "closed">("open");
 
-  const openPositions = positions.filter((p) => p.status === "open");
-  const closedPositions = positions.filter((p) => p.status === "closed");
-  const displayPositions = positionFilter === "open" ? openPositions : closedPositions;
+  const fetchPositions = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({
+        page: String(page),
+        limit: String(pageSize),
+        status: positionFilter,
+      });
+      const res = await fetch(`/api/positions?${params}`);
+      const json = await res.json();
+      if (json.success) {
+        setPositions(json.data.positions);
+        setTotalCount(json.data.totalCount);
+        setTotalPages(json.data.totalPages);
+      }
+    } catch {}
+    setLoading(false);
+  }, [page, pageSize, positionFilter]);
 
-  if (positions.length === 0) {
+  useEffect(() => {
+    fetchPositions();
+  }, [fetchPositions]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [pageSize, positionFilter]);
+
+  if (loading && positions.length === 0) {
+    return (
+      <div className="text-center py-8 text-slate-400">
+        <div className="spinner mx-auto mb-3" />
+        <p>Loading positions...</p>
+      </div>
+    );
+  }
+
+  if (!loading && totalCount === 0) {
     return (
       <div className="text-center py-8 text-slate-400">
         <div className="text-4xl mb-2">📭</div>
@@ -1834,7 +1826,7 @@ function PositionsTab({ positions }: { positions: Position[] }) {
               ? "bg-green-600/30 text-green-300"
               : "bg-slate-700 text-slate-400"
           }`}>
-            {openPositions.length}
+            {totalCount}
           </span>
         </button>
         <button
@@ -1851,12 +1843,12 @@ function PositionsTab({ positions }: { positions: Position[] }) {
               ? "bg-slate-600/30 text-slate-300"
               : "bg-slate-700 text-slate-400"
           }`}>
-            {closedPositions.length}
+            {/* closed count not shown here since we filter server-side */}
           </span>
         </button>
       </div>
 
-      {displayPositions.length === 0 ? (
+      {positions.length === 0 ? (
         <div className="text-center py-8 text-slate-400">
           <div className="text-4xl mb-2">
             {positionFilter === "open" ? "📭" : "📋"}
@@ -1885,7 +1877,7 @@ function PositionsTab({ positions }: { positions: Position[] }) {
               </tr>
             </thead>
             <tbody>
-              {displayPositions.map((pos) => (
+              {positions.map((pos) => (
                 <tr key={pos._id || pos.id}>
                   <td className="font-medium">{pos.symbol}</td>
                   <td>
@@ -1928,12 +1920,63 @@ function PositionsTab({ positions }: { positions: Position[] }) {
           </table>
         </div>
       )}
+      <PaginationBar
+        page={page}
+        pageSize={pageSize}
+        totalCount={totalCount}
+        totalPages={totalPages}
+        loading={loading}
+        onPageChange={setPage}
+        onPageSizeChange={setPageSize}
+      />
     </div>
   );
 }
 
-function SignalsTab({ messages }: { messages: Message[] }) {
-  if (messages.length === 0) {
+function SignalsTab() {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [totalCount, setTotalCount] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
+  const [loading, setLoading] = useState(true);
+
+  const fetchMessages = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({
+        page: String(page),
+        limit: String(pageSize),
+      });
+      const res = await fetch(`/api/signals?${params}`);
+      const json = await res.json();
+      if (json.success) {
+        setMessages(json.data.messages);
+        setTotalCount(json.data.totalCount);
+        setTotalPages(json.data.totalPages);
+      }
+    } catch {}
+    setLoading(false);
+  }, [page, pageSize]);
+
+  useEffect(() => {
+    fetchMessages();
+  }, [fetchMessages]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [pageSize]);
+
+  if (loading && messages.length === 0) {
+    return (
+      <div className="text-center py-8 text-slate-400">
+        <div className="spinner mx-auto mb-3" />
+        <p>Loading signals...</p>
+      </div>
+    );
+  }
+
+  if (!loading && totalCount === 0) {
     return (
       <div className="text-center py-8 text-slate-400">
         <div className="text-4xl mb-2">📨</div>
@@ -1943,34 +1986,45 @@ function SignalsTab({ messages }: { messages: Message[] }) {
   }
 
   return (
-    <div className="space-y-3">
-      {messages.map((msg) => (
-        <div
-          key={msg._id || msg.id}
-          className="border border-slate-700 rounded-lg p-4 hover:border-slate-600 transition"
-        >
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium">@{msg.author}</span>
-              {(msg.signalType || msg.signal_type) &&
-                (msg.signalType || msg.signal_type) !== "none" && (
-                  <span
-                    className={`badge ${(msg.signalType || msg.signal_type) === "LONG" || (msg.signalType || msg.signal_type) === "BUY" ? "badge-success" : "badge-danger"}`}
-                  >
-                    {msg.signalType || msg.signal_type}
-                  </span>
-                )}
-              <StatusBadge status={msg.status} />
+    <div>
+      <div className="space-y-3">
+        {messages.map((msg) => (
+          <div
+            key={msg._id || msg.id}
+            className="border border-slate-700 rounded-lg p-4 hover:border-slate-600 transition"
+          >
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium">@{msg.author}</span>
+                {(msg.signalType || msg.signal_type) &&
+                  (msg.signalType || msg.signal_type) !== "none" && (
+                    <span
+                      className={`badge ${(msg.signalType || msg.signal_type) === "LONG" || (msg.signalType || msg.signal_type) === "BUY" ? "badge-success" : "badge-danger"}`}
+                    >
+                      {msg.signalType || msg.signal_type}
+                    </span>
+                  )}
+                <StatusBadge status={msg.status} />
+              </div>
+              <span className="text-xs text-slate-500">
+                {new Date(msg.createdAt || msg.created_at || "").toLocaleString()}
+              </span>
             </div>
-            <span className="text-xs text-slate-500">
-              {new Date(msg.createdAt || msg.created_at || "").toLocaleString()}
-            </span>
+            <p className="text-sm text-slate-300 whitespace-pre-wrap">
+              {msg.content}
+            </p>
           </div>
-          <p className="text-sm text-slate-300 whitespace-pre-wrap">
-            {msg.content}
-          </p>
-        </div>
-      ))}
+        ))}
+      </div>
+      <PaginationBar
+        page={page}
+        pageSize={pageSize}
+        totalCount={totalCount}
+        totalPages={totalPages}
+        loading={loading}
+        onPageChange={setPage}
+        onPageSizeChange={setPageSize}
+      />
     </div>
   );
 }
@@ -1978,18 +2032,18 @@ function SignalsTab({ messages }: { messages: Message[] }) {
 function LogsTab() {
   const [hideCronNoise, setHideCronNoise] = useState(true);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   const [logs, setLogs] = useState<Log[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
   const [loading, setLoading] = useState(true);
-  const limit = 50;
 
   const fetchLogs = useCallback(async () => {
     setLoading(true);
     try {
       const params = new URLSearchParams({
         page: String(page),
-        limit: String(limit),
+        limit: String(pageSize),
         hideCronNoise: String(hideCronNoise),
       });
       const res = await fetch(`/api/logs?${params}`);
@@ -2001,7 +2055,7 @@ function LogsTab() {
       }
     } catch {}
     setLoading(false);
-  }, [page, hideCronNoise]);
+  }, [page, pageSize, hideCronNoise]);
 
   useEffect(() => {
     fetchLogs();
@@ -2010,7 +2064,7 @@ function LogsTab() {
   // Reset to page 1 when filter changes
   useEffect(() => {
     setPage(1);
-  }, [hideCronNoise]);
+  }, [hideCronNoise, pageSize]);
 
   if (loading && logs.length === 0) {
     return (
@@ -2029,9 +2083,6 @@ function LogsTab() {
       </div>
     );
   }
-
-  const from = (page - 1) * limit + 1;
-  const to = Math.min(page * limit, totalCount);
 
   return (
     <div>
@@ -2056,7 +2107,7 @@ function LogsTab() {
           </button>
         </div>
         <span className="text-xs text-slate-500">
-          {from}–{to} of {totalCount} logs
+          {totalCount} logs
         </span>
       </div>
 
@@ -2103,28 +2154,15 @@ function LogsTab() {
         ))}
       </div>
 
-      {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between mt-3 pt-3 border-t border-slate-700/50">
-          <button
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-            disabled={page <= 1 || loading}
-            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium border border-slate-700 text-slate-300 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
-          >
-            ← Prev
-          </button>
-          <span className="text-xs text-slate-400">
-            Page {page} of {totalPages}
-          </span>
-          <button
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-            disabled={page >= totalPages || loading}
-            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium border border-slate-700 text-slate-300 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
-          >
-            Next →
-          </button>
-        </div>
-      )}
+      <PaginationBar
+        page={page}
+        pageSize={pageSize}
+        totalCount={totalCount}
+        totalPages={totalPages}
+        loading={loading}
+        onPageChange={setPage}
+        onPageSizeChange={setPageSize}
+      />
     </div>
   );
 }
@@ -2227,6 +2265,70 @@ function CronStatusPanel({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function PaginationBar({
+  page,
+  pageSize,
+  totalCount,
+  totalPages,
+  loading,
+  onPageChange,
+  onPageSizeChange,
+}: {
+  page: number;
+  pageSize: number;
+  totalCount: number;
+  totalPages: number;
+  loading: boolean;
+  onPageChange: (page: number) => void;
+  onPageSizeChange: (size: number) => void;
+}) {
+  if (totalPages <= 1 && totalCount <= pageSize) return null;
+
+  const from = (page - 1) * pageSize + 1;
+  const to = Math.min(page * pageSize, totalCount);
+
+  return (
+    <div className="flex flex-col sm:flex-row items-center justify-between mt-3 pt-3 border-t border-slate-700/50 gap-2">
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => onPageChange(Math.max(1, page - 1))}
+          disabled={page <= 1 || loading}
+          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium border border-slate-700 text-slate-300 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
+        >
+          ← Prev
+        </button>
+        <span className="text-xs text-slate-400">
+          Page {page} of {totalPages}
+        </span>
+        <button
+          onClick={() => onPageChange(Math.min(totalPages, page + 1))}
+          disabled={page >= totalPages || loading}
+          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium border border-slate-700 text-slate-300 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
+        >
+          Next →
+        </button>
+      </div>
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-slate-500">
+          {from}–{to} of {totalCount}
+        </span>
+        <select
+          value={pageSize}
+          onChange={(e) => onPageSizeChange(Number(e.target.value))}
+          disabled={loading}
+          className="bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded-lg px-2 py-1.5 focus:outline-none focus:border-primary-500 disabled:opacity-50"
+        >
+          {[10, 25, 50, 100].map((size) => (
+            <option key={size} value={size}>
+              {size} / page
+            </option>
+          ))}
+        </select>
+      </div>
     </div>
   );
 }
