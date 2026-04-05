@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BTC Market Maker Monitor — Dashboard</title>
+    <meta name="description"
+        content="Real-time Bitcoin Market Maker monitoring dashboard with funding rate, volume divergence, and TP signals">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <!-- Animated Background -->
+    <div class="bg-grid"></div>
+    <div class="bg-glow bg-glow-1"></div>
+    <div class="bg-glow bg-glow-2"></div>
+    <div class="bg-glow bg-glow-3"></div>
+
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-left">
+                <div class="logo">
+                    <div class="logo-icon">
+                        <svg viewBox="0 0 32 32" fill="none">
+                            <path d="M16 2L4 9v14l12 7 12-7V9L16 2z" stroke="currentColor" stroke-width="2" />
+                            <path d="M16 8l-6 3.5v7L16 22l6-3.5v-7L16 8z" fill="currentColor" opacity="0.3" />
+                            <circle cx="16" cy="15" r="3" fill="currentColor" />
+                        </svg>
+                    </div>
+                    <div>
+                        <h1>Market Maker Monitor</h1>
+                        <span class="subtitle">BTC Funding Rate & TP Tracker</span>
+                    </div>
+                </div>
+            </div>
+            <div class="header-right">
+                <div class="connection-status" id="connectionStatus">
+                    <span class="status-dot"></span>
+                    <span class="status-text">Connecting...</span>
+                </div>
+                <div class="last-update" id="lastUpdate">--</div>
+            </div>
+        </header>
+
+        <!-- Page Navigation -->
+        <nav class="page-nav" id="pageNav">
+            <a href="index.html" class="nav-tab active" id="navDashboard">
+                <span class="nav-icon">📊</span>
+                <span class="nav-label">Dashboard</span>
+                <span class="nav-desc">RSI • MACD • Volume Div</span>
+            </a>
+            <a href="page2.html" class="nav-tab" id="navAdvanced">
+                <span class="nav-icon">🔬</span>
+                <span class="nav-label">Advanced Analysis</span>
+                <span class="nav-desc">Whale • Dominance • Chart</span>
+            </a>
+        </nav>
+
+        <!-- Main Price Card -->
+        <section class="price-section">
+            <div class="price-card glass-card">
+                <div class="price-header">
+                    <div class="btc-badge">
+                        <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
+                            <path
+                                d="M14.24 10.56c-.31 1.24-2.24.73-2.88.58l.55-2.18c.64.16 2.67.47 2.33 1.6zm-3.11 1.56l-.6 2.41c.78.19 3.17.96 3.52-.48.36-1.48-2.13-1.74-2.92-1.93zm10.62-.08c-.81 3.83-4.69 5.7-8.52 4.89-3.83-.81-5.7-4.69-4.89-8.52.81-3.83 4.69-5.7 8.52-4.89 3.83.81 5.7 4.69 4.89 8.52zm-4.96-2.42c.25-1.65-1.01-2.54-2.73-3.13l.56-2.23-1.36-.34-.54 2.17c-.36-.09-.73-.17-1.09-.26l.55-2.18-1.36-.34-.55 2.23c-.3-.07-.59-.13-.87-.2l-1.88-.47-.36 1.45s1.01.23.99.24c.55.14.65.5.63.79l-.63 2.54c.04.01.09.02.14.04l-.14-.04-.89 3.55c-.07.16-.23.41-.61.31.01.02-.99-.25-.99-.25l-.68 1.56 1.77.44c.33.08.65.17.97.25l-.56 2.25 1.36.34.56-2.24c.37.1.73.19 1.08.28l-.55 2.22 1.36.34.56-2.24c2.29.43 4.01.26 4.74-1.81.59-1.67-.03-2.63-1.23-3.26.87-.2 1.53-.78 1.71-1.97z" />
+                        </svg>
+                        <span>Bitcoin</span>
+                    </div>
+                    <div class="price-change" id="priceChange">
+                        <span class="change-value">0.00%</span>
+                    </div>
+                </div>
+                <div class="price-value">
+                    <span class="currency">$</span>
+                    <span id="btcPrice">--,---</span>
+                </div>
+                <div class="price-details">
+                    <div class="detail-item">
+                        <span class="detail-label">24h High</span>
+                        <span class="detail-value" id="highPrice">$--,---</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">24h Low</span>
+                        <span class="detail-value" id="lowPrice">$--,---</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">24h Volume</span>
+                        <span class="detail-value" id="volume24h">-- BTC</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Funding Rate & Signal Cards -->
+        <section class="metrics-grid">
+            <!-- Funding Rate Card -->
+            <div class="metric-card glass-card" id="fundingCard">
+                <div class="metric-header">
+                    <span class="metric-icon">📊</span>
+                    <h3>Current Funding Rate</h3>
+                </div>
+                <div class="metric-value-large" id="fundingRateValue">0.0000%</div>
+                <div class="metric-bar-container">
+                    <div class="metric-bar">
+                        <div class="metric-bar-fill" id="fundingBar"></div>
+                        <div class="metric-bar-center"></div>
+                    </div>
+                    <div class="metric-bar-labels">
+                        <span class="label-negative">Short Dominant</span>
+                        <span class="label-positive">Long Dominant</span>
+                    </div>
+                </div>
+                <div class="funding-info">
+                    <div class="info-item">
+                        <span class="info-label">Status</span>
+                        <span class="info-value" id="fundingStatus">--</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Next Funding</span>
+                        <span class="info-value" id="nextFunding">--:--:--</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- MM TP Signal Card -->
+            <div class="metric-card glass-card signal-card" id="signalCard">
+                <div class="metric-header">
+                    <span class="metric-icon">🎯</span>
+                    <h3>Market Maker TP Signal</h3>
+                </div>
+                <div class="signal-display" id="signalDisplay">
+                    <div class="signal-icon" id="signalIcon">⏳</div>
+                    <div class="signal-text" id="signalText">Waiting for Data...</div>
+                    <div class="signal-sub" id="signalSub">Monitoring funding rate transitions</div>
+                </div>
+                <div class="signal-details">
+                    <div class="info-item">
+                        <span class="info-label">Previous Rate</span>
+                        <span class="info-value" id="prevRate">--</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Current Rate</span>
+                        <span class="info-value" id="currRate">--</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- BTC Top/Bottom Detector -->
+        <section class="topbottom-section glass-card">
+            <div class="topbottom-header">
+                <div class="history-title">
+                    <span class="metric-icon">🎯</span>
+                    <h3>BTC Top / Bottom Detector</h3>
+                </div>
+                <div class="topbottom-header-right">
+                    <div class="topbottom-signal-summary" id="tbSignalSummary">
+                        <span class="tb-summary-icon">⏳</span>
+                        <span class="tb-summary-text">Analyzing...</span>
+                    </div>
+                    <div class="whale-live-dot">
+                        <span class="live-pulse"></span>
+                        <span class="live-text">LIVE</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Overall Signal -->
+            <div class="tb-overall" id="tbOverall">
+                <div class="tb-overall-card">
+                    <div class="tb-overall-icon" id="tbOverallIcon">📊</div>
+                    <div class="tb-overall-info">
+                        <div class="tb-overall-label">Overall Market Structure</div>
+                        <div class="tb-overall-signal" id="tbOverallSignal">Calculating...</div>
+                        <div class="tb-overall-detail" id="tbOverallDetail">Waiting for multi-timeframe data...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- RSI Grid -->
+            <div class="tb-sub-section">
+                <div class="whale-sub-header">
+                    <span class="whale-sub-icon">📈</span>
+                    <span class="whale-sub-title">RSI — Relative Strength Index (14)</span>
+                    <span class="whale-sub-note">Oversold &lt; 30 = Bottom | Overbought &gt; 70 = Top</span>
+                </div>
+                <div class="tb-grid" id="rsiGrid">
+                    <div class="empty-state" style="grid-column: 1/-1; padding: 16px;">
+                        <p>Loading RSI data...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- MACD Grid -->
+            <div class="tb-sub-section">
+                <div class="whale-sub-header">
+                    <span class="whale-sub-icon">📉</span>
+                    <span class="whale-sub-title">MACD — Moving Average Convergence Divergence</span>
+                    <span class="whale-sub-note">Histogram hijau = Bullish | Histogram merah = Bearish</span>
+                </div>
+                <div class="tb-grid" id="macdGrid">
+                    <div class="empty-state" style="grid-column: 1/-1; padding: 16px;">
+                        <p>Loading MACD data...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Volume Divergence Grid -->
+            <div class="tb-sub-section">
+                <div class="whale-sub-header">
+                    <span class="whale-sub-icon">📊</span>
+                    <span class="whale-sub-title">Volume Divergence — Bear/Bull Divergence Detector</span>
+                    <span class="whale-sub-note">Price vs Volume swing analysis</span>
+                </div>
+                <div class="voldiv-legend">
+                    <div class="voldiv-legend-item">
+                        <span class="voldiv-legend-dot voldiv-dot-bullish"></span>
+                        <span>Bullish Div (Price ↓ Vol ↓ = Reversal Up)</span>
+                    </div>
+                    <div class="voldiv-legend-item">
+                        <span class="voldiv-legend-dot voldiv-dot-bearish"></span>
+                        <span>Bearish Div (Price ↑ Vol ↓ = Reversal Down)</span>
+                    </div>
+                </div>
+                <div class="tb-grid voldiv-grid" id="volDivGrid">
+                    <div class="empty-state" style="grid-column: 1/-1; padding: 16px;">
+                        <p>Loading Volume Divergence data...</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Real-Time Long/Short Ratio -->
+        <section class="mtf-section glass-card">
+            <div class="mtf-header">
+                <div class="history-title">
+                    <span class="metric-icon">⚡</span>
+                    <h3>Real-Time Long/Short Ratio</h3>
+                </div>
+                <div class="mtf-note">Data dari Binance Global L/S Account Ratio</div>
+            </div>
+            <div class="mtf-grid mtf-grid-6" id="lsRatioGrid">
+                <div class="empty-state" style="grid-column: 1/-1; padding: 20px;">
+                    <p>Loading ratio data...</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>Data sourced from Binance Futures API • Real-time WebSocket price • Page 1 of 2</p>
+        </footer>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="shared.js"></script>
+    <script src="app.js"></script>
+</body>
+
+</html>
