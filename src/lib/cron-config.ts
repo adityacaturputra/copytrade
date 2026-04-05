@@ -192,30 +192,25 @@ async function listJobs(): Promise<any[]> {
   });
 
   console.log("[listJobs] Response status:", res.status, res.statusText);
-  const rawText = await res.text();
-  console.log("[listJobs] Raw response:", rawText.substring(0, 500));
 
-  let json: any;
-  try {
-    json = JSON.parse(rawText);
-  } catch (e) {
-    console.error("[listJobs] Failed to parse JSON:", e);
-    throw new Error(
-      `cron-job.org returned non-JSON: ${rawText.substring(0, 200)}`,
-    );
-  }
-
-  // Note: cron-job.org list endpoint returns {"jobs": [...], "someFailed": false}
-  // It does NOT return an "ok" field (unlike create/update/delete endpoints)
-
+  // Handle HTTP errors (429 rate limit, 5xx, etc.)
   if (!res.ok) {
+    if (res.status === 429) {
+      console.warn(
+        "[listJobs] Rate limited by cron-job.org (429). Returning empty result.",
+      );
+      return [];
+    }
+    const rawText = await res.text();
     console.error(
       "[listJobs] HTTP error:",
       res.status,
-      JSON.stringify(json).substring(0, 500),
+      rawText.substring(0, 500),
     );
-    throw new Error(json.error || `HTTP ${res.status} from cron-job.org`);
+    throw new Error(`HTTP ${res.status} from cron-job.org`);
   }
+
+  const json = await res.json();
 
   // cron-job.org returns jobs as array or nested object
   let jobs = json.jobs || [];

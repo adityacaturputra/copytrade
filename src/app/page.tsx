@@ -197,21 +197,8 @@ export default function Dashboard() {
     } catch {}
   }, []);
 
-  // Check cron setup on mount
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await fetch("/api/cron-settings");
-        const json = await res.json();
-        if (json.success && json.setupCheck && !json.setupCheck.allConfigured) {
-          setCronWarning({
-            allConfigured: false,
-            missing: json.setupCheck.missing,
-          });
-        }
-      } catch {}
-    })();
-  }, []);
+  // Cron setup check removed from dashboard — only checked on settings page
+  // to avoid hitting external cron-job.org API and causing 429 rate limits
 
   useEffect(() => {
     fetchData();
