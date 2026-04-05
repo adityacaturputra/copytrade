@@ -159,6 +159,7 @@ export default function Dashboard() {
     CronRunStatus
   > | null>(null);
   const [expandedCron, setExpandedCron] = useState<string | null>(null);
+  const [selectedChannelId, setSelectedChannelId] = useState<string>("all");
 
   const fetchData = useCallback(async () => {
     try {
@@ -342,6 +343,18 @@ export default function Dashboard() {
     pendingDrafts: 0,
   };
   const tradingMode = data?.tradingMode || "manual";
+
+  // ─── Collect unique channel IDs for filter ──────────────────────────
+  const allChannelIds = new Set<string>();
+  for (const src of data?.discordSources || []) {
+    for (const cid of src.channelIds) {
+      allChannelIds.add(cid);
+    }
+  }
+  const channelIdArray = Array.from(allChannelIds).sort();
+  const channelNameMap = new Map<string, string>(
+    Object.entries(data?.channelNames || {}),
+  );
 
   return (
     <div className="min-h-screen">
@@ -801,6 +814,55 @@ export default function Dashboard() {
 
         {/* Tabs */}
         <div className="card">
+          {/* Channel Filter */}
+          {channelIdArray.length > 0 && (
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 mb-4 pb-3 border-b border-slate-700/50">
+              <span className="text-xs text-slate-400 uppercase tracking-wider font-medium">
+                📺 Channel Filter:
+              </span>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => setSelectedChannelId("all")}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+                    selectedChannelId === "all"
+                      ? "bg-primary-600 text-white"
+                      : "bg-slate-700 text-slate-300 hover:bg-slate-600"
+                  }`}
+                >
+                  All Channels
+                </button>
+                {channelIdArray.map((chId) => {
+                  const sourceName = channelNameMap.get(chId);
+                  const shortId =
+                    chId.length > 8 ? `...${chId.slice(-6)}` : chId;
+                  return (
+                    <button
+                      key={chId}
+                      onClick={() => setSelectedChannelId(chId)}
+                      title={chId}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+                        selectedChannelId === chId
+                          ? "bg-primary-600 text-white"
+                          : "bg-slate-700 text-slate-300 hover:bg-slate-600"
+                      }`}
+                    >
+                      {sourceName ? (
+                        <span className="flex items-center gap-1.5">
+                          <span>{sourceName}</span>
+                          <span className="text-[10px] opacity-50 font-mono">
+                            {shortId}
+                          </span>
+                        </span>
+                      ) : (
+                        <span className="font-mono">{chId}</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           <div className="flex overflow-x-auto -mx-4 sm:mx-0 px-4 sm:px-0 border-b border-slate-700 mb-4 gap-0 scrollbar-hide">
             <button
               onClick={() => setActiveTab("drafts")}
@@ -852,6 +914,7 @@ export default function Dashboard() {
           {/* Tab Content */}
           {activeTab === "drafts" && (
             <DraftsTab
+              channelIdFilter={selectedChannelId}
               actingDraft={actingDraft}
               onAccept={handleDraftAction}
               onReject={handleDraftAction}
@@ -863,8 +926,12 @@ export default function Dashboard() {
               }
             />
           )}
-          {activeTab === "positions" && <PositionsTab />}
-          {activeTab === "signals" && <SignalsTab />}
+          {activeTab === "positions" && (
+            <PositionsTab channelIdFilter={selectedChannelId} />
+          )}
+          {activeTab === "signals" && (
+            <SignalsTab channelIdFilter={selectedChannelId} />
+          )}
           {activeTab === "logs" && <LogsTab />}
         </div>
       </main>
@@ -920,12 +987,14 @@ function StatCard({
 }
 
 function DraftsTab({
+  channelIdFilter,
   actingDraft,
   onAccept,
   onReject,
   riskConfig,
   accountBalance,
 }: {
+  channelIdFilter: string;
   actingDraft: string | null;
   onAccept: (
     id: string,
@@ -954,6 +1023,7 @@ function DraftsTab({
         page: String(page),
         limit: String(pageSize),
       });
+      if (channelIdFilter !== "all") params.set("channelId", channelIdFilter);
       const res = await fetch(`/api/drafts?${params}`);
       const json = await res.json();
       if (json.success) {
@@ -963,7 +1033,7 @@ function DraftsTab({
       }
     } catch {}
     setLoading(false);
-  }, [page, pageSize]);
+  }, [page, pageSize, channelIdFilter]);
 
   useEffect(() => {
     fetchDrafts();
@@ -971,7 +1041,7 @@ function DraftsTab({
 
   useEffect(() => {
     setPage(1);
-  }, [pageSize]);
+  }, [pageSize, channelIdFilter]);
 
   if (loading && drafts.length === 0) {
     return (
@@ -1754,14 +1824,16 @@ function ImageModal({
   );
 }
 
-function PositionsTab() {
+function PositionsTab({ channelIdFilter }: { channelIdFilter: string }) {
   const [positions, setPositions] = useState<Position[]>([]);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [totalCount, setTotalCount] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [positionFilter, setPositionFilter] = useState<"open" | "closed">("open");
+  const [positionFilter, setPositionFilter] = useState<"open" | "closed">(
+    "open",
+  );
 
   const fetchPositions = useCallback(async () => {
     setLoading(true);
@@ -1771,6 +1843,7 @@ function PositionsTab() {
         limit: String(pageSize),
         status: positionFilter,
       });
+      if (channelIdFilter !== "all") params.set("channelId", channelIdFilter);
       const res = await fetch(`/api/positions?${params}`);
       const json = await res.json();
       if (json.success) {
@@ -1780,7 +1853,7 @@ function PositionsTab() {
       }
     } catch {}
     setLoading(false);
-  }, [page, pageSize, positionFilter]);
+  }, [page, pageSize, positionFilter, channelIdFilter]);
 
   useEffect(() => {
     fetchPositions();
@@ -1788,7 +1861,7 @@ function PositionsTab() {
 
   useEffect(() => {
     setPage(1);
-  }, [pageSize, positionFilter]);
+  }, [pageSize, positionFilter, channelIdFilter]);
 
   if (loading && positions.length === 0) {
     return (
@@ -1821,11 +1894,13 @@ function PositionsTab() {
           }`}
         >
           🔓 Open
-          <span className={`text-xs font-bold px-1.5 py-0.5 rounded-full ${
-            positionFilter === "open"
-              ? "bg-green-600/30 text-green-300"
-              : "bg-slate-700 text-slate-400"
-          }`}>
+          <span
+            className={`text-xs font-bold px-1.5 py-0.5 rounded-full ${
+              positionFilter === "open"
+                ? "bg-green-600/30 text-green-300"
+                : "bg-slate-700 text-slate-400"
+            }`}
+          >
             {totalCount}
           </span>
         </button>
@@ -1838,11 +1913,13 @@ function PositionsTab() {
           }`}
         >
           📋 Closed
-          <span className={`text-xs font-bold px-1.5 py-0.5 rounded-full ${
-            positionFilter === "closed"
-              ? "bg-slate-600/30 text-slate-300"
-              : "bg-slate-700 text-slate-400"
-          }`}>
+          <span
+            className={`text-xs font-bold px-1.5 py-0.5 rounded-full ${
+              positionFilter === "closed"
+                ? "bg-slate-600/30 text-slate-300"
+                : "bg-slate-700 text-slate-400"
+            }`}
+          >
             {/* closed count not shown here since we filter server-side */}
           </span>
         </button>
@@ -1933,7 +2010,7 @@ function PositionsTab() {
   );
 }
 
-function SignalsTab() {
+function SignalsTab({ channelIdFilter }: { channelIdFilter: string }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
@@ -1948,6 +2025,7 @@ function SignalsTab() {
         page: String(page),
         limit: String(pageSize),
       });
+      if (channelIdFilter !== "all") params.set("channelId", channelIdFilter);
       const res = await fetch(`/api/signals?${params}`);
       const json = await res.json();
       if (json.success) {
@@ -1957,7 +2035,7 @@ function SignalsTab() {
       }
     } catch {}
     setLoading(false);
-  }, [page, pageSize]);
+  }, [page, pageSize, channelIdFilter]);
 
   useEffect(() => {
     fetchMessages();
@@ -1965,7 +2043,7 @@ function SignalsTab() {
 
   useEffect(() => {
     setPage(1);
-  }, [pageSize]);
+  }, [pageSize, channelIdFilter]);
 
   if (loading && messages.length === 0) {
     return (
@@ -2007,7 +2085,9 @@ function SignalsTab() {
                 <StatusBadge status={msg.status} />
               </div>
               <span className="text-xs text-slate-500">
-                {new Date(msg.createdAt || msg.created_at || "").toLocaleString()}
+                {new Date(
+                  msg.createdAt || msg.created_at || "",
+                ).toLocaleString()}
               </span>
             </div>
             <p className="text-sm text-slate-300 whitespace-pre-wrap">
@@ -2106,9 +2186,7 @@ function LogsTab() {
             <span>Cron noise</span>
           </button>
         </div>
-        <span className="text-xs text-slate-500">
-          {totalCount} logs
-        </span>
+        <span className="text-xs text-slate-500">{totalCount} logs</span>
       </div>
 
       {/* Log entries */}
@@ -2141,7 +2219,9 @@ function LogsTab() {
                 )}
               </div>
               <span className="text-xs text-slate-500">
-                {new Date(log.createdAt || log.created_at || "").toLocaleString()}
+                {new Date(
+                  log.createdAt || log.created_at || "",
+                ).toLocaleString()}
               </span>
             </div>
             {log.details && (
