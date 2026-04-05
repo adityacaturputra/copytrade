@@ -1909,6 +1909,20 @@ function SignalsTab({ messages }: { messages: Message[] }) {
 }
 
 function LogsTab({ logs }: { logs: Log[] }) {
+  const [hideCronNoise, setHideCronNoise] = useState(true);
+
+  // Routine cron log actions that create noise (start/end heartbeats)
+  const isCronNoise = (log: Log) =>
+    log.type === "cron" &&
+    (log.action.endsWith("_start") ||
+      log.action.endsWith("_end"));
+
+  const visibleLogs = hideCronNoise
+    ? logs.filter((log) => !isCronNoise(log))
+    : logs;
+
+  const cronNoiseCount = logs.filter(isCronNoise).length;
+
   if (logs.length === 0) {
     return (
       <div className="text-center py-8 text-slate-400">
@@ -1919,41 +1933,87 @@ function LogsTab({ logs }: { logs: Log[] }) {
   }
 
   return (
-    <div className="space-y-2 max-h-[500px] overflow-y-auto">
-      {logs.map((log) => (
-        <div
-          key={log._id || log.id}
-          className={`border rounded-lg p-3 text-sm ${log.error ? "border-red-900/50 bg-red-950/20" : "border-slate-700"}`}
-        >
-          <div className="flex items-center justify-between mb-1">
-            <div className="flex items-center gap-2">
-              <span className="badge badge-info">{log.type}</span>
-              <span className="text-slate-300">{log.action}</span>
-              {log.symbol && (
-                <span className="text-primary-400 font-medium">
-                  {log.symbol}
+    <div>
+      {/* Filter bar */}
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setHideCronNoise(!hideCronNoise)}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition border ${
+              hideCronNoise
+                ? "bg-slate-700 border-slate-600 text-slate-300 hover:bg-slate-600"
+                : "bg-slate-800 border-slate-700 text-slate-500 hover:bg-slate-700"
+            }`}
+            title={
+              hideCronNoise
+                ? `Showing important logs. ${cronNoiseCount} routine cron logs hidden.`
+                : "Showing all logs including routine cron heartbeats."
+            }
+          >
+            <span>{hideCronNoise ? "🙈" : "👁️"}</span>
+            <span>Cron noise</span>
+            {hideCronNoise && cronNoiseCount > 0 && (
+              <span className="bg-slate-600 text-slate-300 text-[10px] px-1.5 py-0.5 rounded-full">
+                -{cronNoiseCount}
+              </span>
+            )}
+          </button>
+        </div>
+        <span className="text-xs text-slate-500">
+          {visibleLogs.length} of {logs.length} logs
+        </span>
+      </div>
+
+      {/* Log entries */}
+      <div className="space-y-2 max-h-[500px] overflow-y-auto">
+        {visibleLogs.length === 0 ? (
+          <div className="text-center py-8 text-slate-400">
+            <div className="text-4xl mb-2">🔇</div>
+            <p>All {logs.length} logs are routine cron noise.</p>
+            <button
+              onClick={() => setHideCronNoise(false)}
+              className="text-primary-400 hover:text-primary-300 text-xs mt-2 underline"
+            >
+              Show all logs
+            </button>
+          </div>
+        ) : (
+          visibleLogs.map((log) => (
+            <div
+              key={log._id || log.id}
+              className={`border rounded-lg p-3 text-sm ${log.error ? "border-red-900/50 bg-red-950/20" : "border-slate-700"}`}
+            >
+              <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center gap-2">
+                  <span className="badge badge-info">{log.type}</span>
+                  <span className="text-slate-300">{log.action}</span>
+                  {log.symbol && (
+                    <span className="text-primary-400 font-medium">
+                      {log.symbol}
+                    </span>
+                  )}
+                  {log.result && (
+                    <span
+                      className={`badge ${log.result === "success" || log.result === "executed" ? "badge-success" : log.result === "error" || log.result === "rejected" ? "badge-danger" : "badge-neutral"}`}
+                    >
+                      {log.result}
+                    </span>
+                  )}
+                </div>
+                <span className="text-xs text-slate-500">
+                  {new Date(log.createdAt || log.created_at || "").toLocaleString()}
                 </span>
+              </div>
+              {log.details && (
+                <p className="text-slate-400 text-xs mt-1">{log.details}</p>
               )}
-              {log.result && (
-                <span
-                  className={`badge ${log.result === "success" || log.result === "executed" ? "badge-success" : log.result === "error" || log.result === "rejected" ? "badge-danger" : "badge-neutral"}`}
-                >
-                  {log.result}
-                </span>
+              {log.error && (
+                <p className="text-red-400 text-xs mt-1">Error: {log.error}</p>
               )}
             </div>
-            <span className="text-xs text-slate-500">
-              {new Date(log.createdAt || log.created_at || "").toLocaleString()}
-            </span>
-          </div>
-          {log.details && (
-            <p className="text-slate-400 text-xs mt-1">{log.details}</p>
-          )}
-          {log.error && (
-            <p className="text-red-400 text-xs mt-1">Error: {log.error}</p>
-          )}
-        </div>
-      ))}
+          ))
+        )}
+      </div>
     </div>
   );
 }
