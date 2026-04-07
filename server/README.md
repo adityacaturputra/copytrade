@@ -1,0 +1,51 @@
+# CopyTrade Backend
+
+Express.js backend for the CopyTrade application. Handles long-running cron jobs and trading operations.
+
+## Quick Start
+
+```bash
+# Install dependencies
+npm install
+
+# Setup environment
+cp .env.example .env
+# Edit .env with your configuration
+
+# Development
+npm run dev
+
+# Production build
+npm run build
+npm start
+```
+
+## API Endpoints
+
+### Health Check
+- `GET /health` - Health check endpoint
+
+### Cron Jobs
+All cron endpoints require the `Authorization: Bearer YOUR_CRON_SECRET` header if `CRON_SECRET` is set.
+
+- `GET|POST /api/cron/signal-check` - Check Discord for new trading signals
+- `GET|POST /api/cron/position-monitor` - Monitor open positions
+- `GET|POST /api/cron/tp-sl-monitor` - Place TP/SL orders for filled positions
+- `GET /api/cron/status` - Get status of all cron jobs
+
+## Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `PORT` | Server port | 3001 |
+| `NODE_ENV` | Environment mode | development |
+| `MONGODB_URI` | MongoDB connection string | required |
+| `CRON_SECRET` | Secret for cron job authentication | optional |
+| `FRONTEND_URL` | Frontend URL for CORS | required |
+| `AI_PROVIDER` | AI provider (glm/kimi/openai) | glm |
+| `GLM_API_KEY` | GLM API key | required |
+| `CRON_JOB_API_KEY` | cron-job.org API key | optional |
+
+## Deployment
+
+See [DEPLOYMENT.md](../DEPLOYMENT.md) for detailed deployment instructions.

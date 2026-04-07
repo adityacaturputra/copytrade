@@ -13,6 +13,9 @@ import {
 
 export const dynamic = "force-dynamic";
 
+// Backend API URL for cron jobs
+const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:3001";
+
 // GET /api/cron-settings — fetch cron config + live status from cron-job.org
 export async function GET() {
   try {
@@ -44,6 +47,7 @@ export async function GET() {
       liveStatus: liveStatus.jobs,
       liveErrors: liveStatus.errors,
       setupCheck,
+      backendUrl: BACKEND_URL,
     });
   } catch (error) {
     return NextResponse.json(
@@ -125,7 +129,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           success: false,
-          error: "Base URL is required (e.g., https://your-app.vercel.app)",
+          error: "Base URL is required (e.g., https://your-backend.com)",
         },
         { status: 400 },
       );
