@@ -25,6 +25,12 @@
     "paths": {
       "@/*": [
         "./src/*"
+      ],
+      "@copytrade/shared": [
+        "../shared/dist/index.d.ts"
+      ],
+      "@copytrade/shared/*": [
+        "../shared/dist/*"
       ]
     },
     "target": "ES2017"

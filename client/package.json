@@ -12,7 +12,10 @@
     "reset:exchange": "tsx scripts/reset-all.ts --skip-db",
     "reset:dry": "tsx scripts/reset-all.ts --dry-run",
     "reset:funds": "tsx scripts/reset-all.ts --reset-funds-only",
-    "reset:all": "tsx scripts/reset-all.ts --reset-funds"
+    "reset:all": "tsx scripts/reset-all.ts --reset-funds",
+    "prebuild": "npm --prefix ../shared run build",
+    "predev": "npm --prefix ../shared run build",
+    "prelint": "npm --prefix ../shared run build"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
@@ -28,7 +31,8 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "@copytrade/shared": "file:../shared"
   },
   "devDependencies": {
     "@types/crypto-js": "^4.2.2",
