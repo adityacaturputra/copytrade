@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
+    "@copytrade/shared": "file:../shared",
     "@google/generative-ai": "^0.24.1",
     "axios": "^1.7.9",
     "cors": "^2.8.5",
@@ -24,8 +25,7 @@
     "helmet": "^7.1.0",
     "https-proxy-agent": "^9.0.0",
     "mongoose": "^8.9.5",
-    "openai": "^4.77.0",
-    "@copytrade/shared": "file:../shared"
+    "openai": "^4.77.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
