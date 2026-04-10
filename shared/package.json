@@ -18,7 +18,7 @@
     }
   },
   "scripts": {
-    "build": "node ../server/node_modules/typescript/bin/tsc -p tsconfig.json && node scripts/sync-local-package.mjs",
+    "build": "node ../server/node_modules/typescript/bin/tsc -p tsconfig.build.json && node scripts/sync-local-package.mjs",
     "clean": "rm -rf dist"
   },
   "dependencies": {

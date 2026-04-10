@@ -5,12 +5,12 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
     "start": "node dist/index.js",
-    "lint": "tsc --noEmit",
-    "prebuild": "npm --prefix ../shared run build",
-    "predev": "npm --prefix ../shared run build",
-    "prelint": "npm --prefix ../shared run build"
+    "lint": "tsc -p tsconfig.build.json --noEmit",
+    "prebuild": "yarn --cwd ../shared build",
+    "predev": "yarn --cwd ../shared build",
+    "prelint": "yarn --cwd ../shared build"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

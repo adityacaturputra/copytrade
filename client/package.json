@@ -13,9 +13,10 @@
     "reset:dry": "tsx scripts/reset-all.ts --dry-run",
     "reset:funds": "tsx scripts/reset-all.ts --reset-funds-only",
     "reset:all": "tsx scripts/reset-all.ts --reset-funds",
-    "prebuild": "npm --prefix ../shared run build",
-    "predev": "npm --prefix ../shared run build",
-    "prelint": "npm --prefix ../shared run build"
+    "prebuild": "yarn --cwd ../shared build",
+    "predev": "yarn --cwd ../shared build",
+    "prelint": "yarn --cwd ../shared build",
+    "typecheck": "tsc -p tsconfig.build.json --noEmit"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
