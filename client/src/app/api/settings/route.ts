@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { connectDB, getTradingMode, setTradingMode } from "@/lib/database";
-import { getRiskConfig, setRiskConfig } from "@/lib/risk";
+import { connectDB, getTradingMode, setTradingMode } from "@copytrade/shared/lib/database";
+import { getRiskConfig, setRiskConfig } from "@copytrade/shared/lib/risk";
 import {
   getSignalConfig,
   setSignalConfig,
   SignalConfigType,
-} from "@/lib/signal-config";
+} from "@copytrade/shared/lib/signal-config";
 
 export const dynamic = "force-dynamic";
 

@@ -4,7 +4,7 @@ import {
   setProxyConfig,
   getProxyInfo,
   getProviderProxyInfo,
-} from "@/lib/proxy/ProxyFactory";
+} from "@copytrade/shared/lib/proxy/ProxyFactory";
 
 export const dynamic = "force-dynamic";
 

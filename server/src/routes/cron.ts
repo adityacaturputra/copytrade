@@ -1,15 +1,15 @@
 import { Router, Request, Response, type Router as ExpressRouter } from "express";
-import { runSignalCheck } from "../lib/executor";
-import { runPositionMonitor } from "../lib/monitor";
-import { runTpslMonitor } from "../lib/tp-sl-monitor";
-import { TradeLog, connectDB } from "../lib/database";
+import { runSignalCheck } from "@copytrade/shared/lib/executor";
+import { runPositionMonitor } from "@copytrade/shared/lib/monitor";
+import { runTpslMonitor } from "@copytrade/shared/lib/tp-sl-monitor";
+import { TradeLog, connectDB } from "@copytrade/shared/lib/database";
 import {
   tryStart,
   updateProgress,
   finishCron,
   getCronStatus,
   getAllCronStatus,
-} from "../lib/cron-status";
+} from "@copytrade/shared/lib/cron-status";
 
 const router: ExpressRouter = Router();
 let loggedCronAuthMode = false;

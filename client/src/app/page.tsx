@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { calculateRisk } from "@/lib/risk-calc";
+import { calculateRisk } from "@copytrade/shared/lib/risk-calc";
 
 // ==================== Types ====================
 

@@ -8,13 +8,13 @@ import {
   Position,
   TradeLog,
   Account,
-} from "@/lib/database";
+} from "@copytrade/shared/lib/database";
 import {
   ExchangeFactory,
   ExchangeCredentials,
-} from "@/lib/exchange/ExchangeFactory";
-import { getRiskConfig } from "@/lib/risk";
-import { getSignalConfig } from "@/lib/signal-config";
+} from "@copytrade/shared/lib/exchange/ExchangeFactory";
+import { getRiskConfig } from "@copytrade/shared/lib/risk";
+import { getSignalConfig } from "@copytrade/shared/lib/signal-config";
 
 export const dynamic = "force-dynamic";
 

@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { connectDB, Account } from "@/lib/database";
-import { SourceFactory } from "@/lib/source/SourceFactory";
-import type { BaseSourceConfig } from "@/lib/source/types";
-import { SourceType } from "@/lib/enums";
+import { connectDB, Account } from "@copytrade/shared/lib/database";
+import { SourceFactory } from "@copytrade/shared/lib/source/SourceFactory";
+import type { BaseSourceConfig } from "@copytrade/shared/lib/source/types";
+import { SourceType } from "@copytrade/shared/lib/enums";
 
 // ─── POST /api/accounts/health ─────────────────────────────────────────────
 export async function POST(req: NextRequest) {

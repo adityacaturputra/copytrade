@@ -1,4 +1,4 @@
-import { connectDB } from "./database";
+import { connectDB } from "@copytrade/shared/lib/database";
 import mongoose, { Schema, Document, models, Model } from "mongoose";
 
 // ─── Types ────────────────────────────────────────────────────────────────────

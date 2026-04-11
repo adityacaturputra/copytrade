@@ -1,17 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
-import { connectDB, DraftTrade, TradeLog, Account } from "@/lib/database";
-import { TradingSignal } from "@/lib/ai/types";
+import { connectDB, DraftTrade, TradeLog, Account } from "@copytrade/shared/lib/database";
+import { TradingSignal } from "@copytrade/shared/lib/ai/types";
 import {
   autoCalculateTPFromRR,
   checkDuplicatePosition,
   executeTrade,
-} from "@/lib/executor";
-import { getRiskConfig } from "@/lib/risk";
+} from "@copytrade/shared/lib/executor";
+import { getRiskConfig } from "@copytrade/shared/lib/risk";
 import {
   ExchangeFactory,
   ExchangeCredentials,
-} from "@/lib/exchange/ExchangeFactory";
-import { ExchangeClient } from "@/lib/exchange/types";
+} from "@copytrade/shared/lib/exchange/ExchangeFactory";
+import { ExchangeClient } from "@copytrade/shared/lib/exchange/types";
 
 /**
  * Resolve exchange client for a draft based on its accountId.
@@ -271,7 +271,7 @@ export async function POST(
       case "CLOSE": {
         console.log(`${lp} 🔒 Processing CLOSE for ${draft.symbol}...`);
 
-        const { Position } = await import("@/lib/database");
+        const { Position } = await import("@copytrade/shared/lib/database");
 
         const positions = await Position.find({
           symbol: draft.symbol,
@@ -311,9 +311,9 @@ export async function POST(
         );
 
         const { Position, buildTPTargets, recalculateTPAllocation } =
-          await import("@/lib/database");
+          await import("@copytrade/shared/lib/database");
         const { ExchangeFactory } =
-          await import("@/lib/exchange/ExchangeFactory");
+          await import("@copytrade/shared/lib/exchange/ExchangeFactory");
 
         const pos = await Position.findOne({
           symbol: draft.symbol,

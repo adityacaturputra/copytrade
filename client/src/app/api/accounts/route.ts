@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { connectDB, Account, DiscordSource } from "@/lib/database";
-import { SourceType } from "@/lib/enums";
+import { connectDB, Account, DiscordSource } from "@copytrade/shared/lib/database";
+import { SourceType } from "@copytrade/shared/lib/enums";
 
 // ─── GET /api/accounts ─────────────────────────────────────────────────────
 export async function GET() {

@@ -5,14 +5,14 @@
  * These functions delegate to ExchangeFactory.getClient() so existing
  * consumers (executor, monitor, routes) keep working without changes.
  *
- * NEW CODE should import from `@/lib/exchange/ExchangeFactory` directly.
+ * NEW CODE should import from `@copytrade/shared/lib/exchange/ExchangeFactory` directly.
  */
 
-import { ExchangeFactory } from "./exchange/ExchangeFactory";
-import { OrderParams, OrderResult } from "./exchange/types";
+import { ExchangeFactory } from "@copytrade/shared/lib/exchange/ExchangeFactory";
+import { OrderParams, OrderResult } from "@copytrade/shared/lib/exchange/types";
 
 // Re-export exchange types for convenience
-export type { OrderParams as MexcOrderParams } from "./exchange/types";
+export type { OrderParams as MexcOrderParams } from "@copytrade/shared/lib/exchange/types";
 
 export interface MexcPosition {
   symbol: string;

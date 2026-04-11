@@ -26,10 +26,10 @@ import {
   getRecentLogs,
   getAllPositions,
   getAllDiscordSources,
-} from "@/lib/database";
-import { ExchangeFactory } from "@/lib/exchange/ExchangeFactory";
-import { calculateRisk } from "@/lib/risk-calc";
-import { getRiskConfig } from "@/lib/risk";
+} from "@copytrade/shared/lib/database";
+import { ExchangeFactory } from "@copytrade/shared/lib/exchange/ExchangeFactory";
+import { calculateRisk } from "@copytrade/shared/lib/risk-calc";
+import { getRiskConfig } from "@copytrade/shared/lib/risk";
 
 /** Round a number to 2 decimal places (e.g., 62333.333333 → 62333.34) */
 function roundPrice(price: number): number {

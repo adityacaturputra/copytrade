@@ -18,8 +18,8 @@
  */
 
 import mongoose from "mongoose";
-import { ExchangeFactory } from "../src/lib/exchange/ExchangeFactory";
-import { Account } from "../src/lib/database";
+import { ExchangeFactory } from "@copytrade/shared/lib/exchange/ExchangeFactory";
+import { Account } from "@copytrade/shared/lib/database";
 import { loadClientEnv } from "./load-env";
 
 // Load .env

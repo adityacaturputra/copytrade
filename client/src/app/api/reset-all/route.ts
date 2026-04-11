@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { connectDB, Account } from "@/lib/database";
+import { connectDB, Account } from "@copytrade/shared/lib/database";
 import mongoose from "mongoose";
-import { ExchangeFactory } from "@/lib/exchange/ExchangeFactory";
+import { ExchangeFactory } from "@copytrade/shared/lib/exchange/ExchangeFactory";
 
 export const dynamic = "force-dynamic";
 
