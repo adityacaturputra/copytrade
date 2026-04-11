@@ -42,8 +42,12 @@ All cron endpoints require the `Authorization: Bearer YOUR_CRON_SECRET` header i
 | `MONGODB_URI` | MongoDB connection string | required |
 | `CRON_SECRET` | Secret for cron job authentication | optional |
 | `FRONTEND_URL` | Frontend URL for CORS | required |
-| `AI_PROVIDER` | AI provider (glm/kimi/openai) | glm |
+| `AI_PROVIDER` | AI provider (glm/kimi/openai/codex/patungin) | glm |
 | `GLM_API_KEY` | GLM API key | required |
+| `PATUNGIN_API_KEY` | CodexPatungin API key (or via `~/.codex/config.toml`) | optional |
+| `PATUNGIN_BASE_URL` | CodexPatungin base URL | https://ai.patungin.id/v1 |
+| `PATUNGIN_MODEL` | CodexPatungin model | gpt-5.3-codex |
+| `VISION_AI_PROVIDER` | Image pre-layer provider (gemini/codex/patungin) | auto |
 | `CRON_JOB_API_KEY` | cron-job.org API key | optional |
 
 ## Deployment

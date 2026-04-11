@@ -56,9 +56,13 @@ cp .env.example .env
 
 | Variable                | Default  | Description                              |
 | ----------------------- | -------- | ---------------------------------------- |
-| `AI_PROVIDER`           | `openai` | AI provider: `openai`, `glm`, `kimi`     |
+| `AI_PROVIDER`           | `openai` | AI provider: `openai`, `glm`, `kimi`, `codex`, `patungin` |
 | `GLM_API_KEY`           | -        | Required if AI_PROVIDER=glm              |
 | `KIMI_API_KEY`          | -        | Required if AI_PROVIDER=kimi             |
+| `PATUNGIN_API_KEY`      | -        | Required if AI_PROVIDER=codex/patungin (or via `~/.codex/config.toml`) |
+| `PATUNGIN_BASE_URL`     | `https://ai.patungin.id/v1` | CodexPatungin API base URL |
+| `PATUNGIN_MODEL`        | `gpt-5.3-codex` | CodexPatungin model |
+| `VISION_AI_PROVIDER`    | auto     | Image pre-layer provider: `gemini`, `codex`, `patungin` |
 | `DEFAULT_LEVERAGE`      | `10`     | Default leverage for trades              |
 | `DEFAULT_POSITION_SIZE` | `50`     | Default position size (USDT)             |
 | `TRADING_MODE`          | `manual` | Initial trading mode: `auto` or `manual` |

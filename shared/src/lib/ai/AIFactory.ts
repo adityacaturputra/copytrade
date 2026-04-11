@@ -2,6 +2,8 @@ import { AISignalAnalyzer, BulkSignalResult, TradingSignal } from "./types";
 import { GLMAnalyzer } from "./GLMAnalyzer";
 import { KimiAnalyzer } from "./KimiAnalyzer";
 import { OpenAIAnalyzer } from "./OpenAIAnalyzer";
+import { CodexPatunginAnalyzer } from "./CodexPatunginAnalyzer";
+import { hasCodexPatunginCredentials } from "./CodexPatunginConfig";
 import {
   TradeAction,
   SignalOrderType,
@@ -9,7 +11,7 @@ import {
   MarketCondition,
 } from "../enums";
 
-export type AIProvider = "glm" | "kimi" | "openai";
+export type AIProvider = "glm" | "kimi" | "openai" | "codex" | "patungin";
 
 /** Build a comma-separated list of enum values for prompt text */
 function enumValues<T extends Record<string, string>>(e: T): string {
@@ -191,7 +193,9 @@ export class AIFactory {
 
   static getAnalyzer(provider?: AIProvider): AISignalAnalyzer {
     const selectedProvider =
-      provider || (process.env.AI_PROVIDER as AIProvider) || "glm";
+      provider ||
+      (process.env.AI_PROVIDER as AIProvider) ||
+      (hasCodexPatunginCredentials() ? "patungin" : "glm");
 
     if (AIFactory.instance) {
       return AIFactory.instance;
@@ -208,6 +212,9 @@ export class AIFactory {
         return new KimiAnalyzer();
       case "openai":
         return new OpenAIAnalyzer();
+      case "codex":
+      case "patungin":
+        return new CodexPatunginAnalyzer();
       case "glm":
         return new GLMAnalyzer();
       default:

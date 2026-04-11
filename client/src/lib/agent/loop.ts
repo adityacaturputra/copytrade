@@ -14,6 +14,7 @@
 
 import OpenAI from "openai";
 import { agentTools, toolImplementations } from "./tools";
+import { getCodexPatunginConfig } from "@copytrade/shared/lib/ai/CodexPatunginConfig";
 
 const MAX_ITERATIONS = 12; // Safety limit to prevent infinite loops
 
@@ -98,27 +99,42 @@ export async function* runAgentLoop(
   history: Array<{ role: string; content: string }>,
   provider?: string,
 ): AsyncGenerator<AgentStep> {
+  const codexPatunginCfg = getCodexPatunginConfig();
+  const selectedProvider = (
+    provider ||
+    process.env.AI_PROVIDER ||
+    (codexPatunginCfg.apiKey ? "patungin" : "glm")
+  )
+    .toLowerCase()
+    .trim();
+
   // Determine which OpenAI-compatible API to use
   const rawApiKey =
-    provider === "kimi"
+    selectedProvider === "kimi"
       ? process.env.ANTHROPIC_API_KEY
-      : provider === "openai"
+      : selectedProvider === "openai"
         ? process.env.OPENAI_API_KEY
-        : process.env.GLM_API_KEY;
+        : selectedProvider === "codex" || selectedProvider === "patungin"
+          ? codexPatunginCfg.apiKey
+          : process.env.GLM_API_KEY;
 
   const baseURL =
-    provider === "kimi"
+    selectedProvider === "kimi"
       ? process.env.ANTHROPIC_BASE_URL || "https://api.kimi.com/coding/"
-      : provider === "openai"
+      : selectedProvider === "openai"
         ? process.env.OPENAI_BASE_URL || "https://api.openai.com/v1"
-        : process.env.GLM_BASE_URL || "https://api.z.ai/api/coding/paas/v4";
+        : selectedProvider === "codex" || selectedProvider === "patungin"
+          ? codexPatunginCfg.baseURL
+          : process.env.GLM_BASE_URL || "https://api.z.ai/api/coding/paas/v4";
 
   const model =
-    provider === "kimi"
+    selectedProvider === "kimi"
       ? process.env.ANTHROPIC_MODEL || "kimi-latest"
-      : provider === "openai"
+      : selectedProvider === "openai"
         ? process.env.OPENAI_MODEL || "gpt-4o-mini"
-        : process.env.GLM_MODEL || "glm-4-flash";
+        : selectedProvider === "codex" || selectedProvider === "patungin"
+          ? codexPatunginCfg.model
+          : process.env.GLM_MODEL || "glm-4-flash";
 
   if (!rawApiKey) {
     yield {
