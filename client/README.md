@@ -33,10 +33,10 @@ npm install
 
 ### 2. Configure Environment
 
-Copy `.env.example` to `.env` and fill in your credentials:
+Copy root `.env.example` to root `.env` and fill in your credentials:
 
 ```bash
-cp .env.example .env
+cp ../.env.example ../.env
 ```
 
 **Required Environment Variables:**

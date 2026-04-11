@@ -18,13 +18,12 @@
  */
 
 import mongoose from "mongoose";
-import dotenv from "dotenv";
-import path from "path";
 import { ExchangeFactory } from "../src/lib/exchange/ExchangeFactory";
 import { Account } from "../src/lib/database";
+import { loadClientEnv } from "./load-env";
 
 // Load .env
-dotenv.config({ path: path.resolve(process.cwd(), ".env") });
+loadClientEnv();
 
 // Parse args
 const args = process.argv.slice(2);

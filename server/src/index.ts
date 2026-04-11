@@ -7,10 +7,22 @@ import express, {
 import cors from "cors";
 import helmet from "helmet";
 import dotenv from "dotenv";
+import fs from "fs";
+import path from "path";
 import cronRoutes from "./routes/cron";
 
 // Load environment variables
-dotenv.config();
+const serverDir = path.resolve(__dirname, "..");
+const repoRootDir = path.resolve(serverDir, "..");
+const envCandidates = [
+  path.join(repoRootDir, ".env"),
+  path.join(serverDir, ".env"),
+];
+for (const envFile of envCandidates) {
+  if (fs.existsSync(envFile)) {
+    dotenv.config({ path: envFile, override: false });
+  }
+}
 
 const app: Express = express();
 const PORT = process.env.PORT || 3001;

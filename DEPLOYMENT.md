@@ -74,18 +74,18 @@ sudo apt install git -y
 ```bash
 # Clone the repository
 git clone <your-repo-url> /opt/copytrade
-cd /opt/copytrade/server
+cd /opt/copytrade
 
 # Install dependencies
-npm install
+pnpm install
 
 # Build the TypeScript code
-npm run build
+pnpm --filter copytrade-backend build
 ```
 
 ### 4. Environment Configuration
 
-Create the `.env` file:
+Create the root `.env` file:
 
 ```bash
 cp .env.example .env

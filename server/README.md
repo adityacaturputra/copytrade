@@ -9,8 +9,8 @@ Express.js backend for the CopyTrade application. Handles long-running cron jobs
 npm install
 
 # Setup environment
-cp .env.example .env
-# Edit .env with your configuration
+cp ../.env.example ../.env
+# Edit ../.env with your configuration
 
 # Development
 npm run dev

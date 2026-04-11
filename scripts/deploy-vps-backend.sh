@@ -234,19 +234,35 @@ update_repo() {
 }
 
 setup_env_if_missing() {
-  local env_file="$APP_DIR/server/.env"
-  local env_example="$APP_DIR/server/.env.example"
-  if [[ -f "$env_file" ]]; then
-    log "server/.env already exists. Skipping template copy."
+  local root_env="$APP_DIR/.env"
+  local root_env_example="$APP_DIR/.env.example"
+  local legacy_env="$APP_DIR/server/.env"
+  local legacy_env_example="$APP_DIR/server/.env.example"
+
+  if [[ -f "$root_env" ]]; then
+    log ".env already exists at repo root. Skipping template copy."
     return
   fi
 
-  if [[ ! -f "$env_example" ]]; then
-    die "Missing $env_example"
+  if [[ -f "$legacy_env" ]]; then
+    cp "$legacy_env" "$root_env"
+    warn "Created $root_env from existing server/.env (single-root env migration)."
+    return
   fi
 
-  cp "$env_example" "$env_file"
-  warn "Created $env_file from template. Edit it before production use."
+  if [[ -f "$root_env_example" ]]; then
+    cp "$root_env_example" "$root_env"
+    warn "Created $root_env from root template. Edit it before production use."
+    return
+  fi
+
+  if [[ -f "$legacy_env_example" ]]; then
+    cp "$legacy_env_example" "$root_env"
+    warn "Created $root_env from server/.env.example fallback. Edit it before production use."
+    return
+  fi
+
+  die "Missing env template. Expected $root_env_example or $legacy_env_example"
 }
 
 install_and_build() {

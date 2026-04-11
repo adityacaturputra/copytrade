@@ -7,11 +7,10 @@
 // 3. Updates existing Position documents with the accountId they belong to
 
 import mongoose from "mongoose";
-import dotenv from "dotenv";
-import path from "path";
+import { loadClientEnv } from "./load-env";
 
 // Load .env
-dotenv.config({ path: path.resolve(process.cwd(), ".env") });
+loadClientEnv();
 
 const MONGODB_URI =
   process.env.MONGODB_URI || "mongodb://localhost:27017/copytrade";
