@@ -14,7 +14,9 @@ import {
 
 // ==================== MEXC Exchange Adapter ====================
 
-const BASE_URL = process.env.MEXC_PROXY_URL || "https://contract.mexc.com";
+function getMexcBaseUrl(): string {
+  return process.env.MEXC_PROXY_URL || "https://contract.mexc.com";
+}
 
 export class MexcExchange implements ExchangeClient {
   readonly name = "mexc";
@@ -27,7 +29,7 @@ export class MexcExchange implements ExchangeClient {
     this.apiKey = apiKey;
     this.secretKey = secretKey;
     this.client = axios.create({
-      baseURL: BASE_URL,
+      baseURL: getMexcBaseUrl(),
       timeout: 30000,
       headers: {
         "Content-Type": "application/json",

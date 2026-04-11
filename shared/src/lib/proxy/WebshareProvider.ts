@@ -8,18 +8,24 @@
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { IProxyProvider, ProxyEntry, ProxyInfoResult } from "./types";
 
-const WEBSHARE_API_KEY = process.env.WEBSHARE_API_KEY || "";
-
 /** Cached proxy list to avoid repeated API calls */
 let proxyCache: { data: ProxyEntry[]; ts: number } | null = null;
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+let missingKeyWarned = false;
+let proxyFetchErrorWarned = false;
+
+function getWebshareApiKey(): string {
+  return process.env.WEBSHARE_API_KEY || "";
+}
 
 export class WebshareProvider implements IProxyProvider {
   readonly name = "Webshare";
 
   /** Fetch proxy list from Webshare API (cached for 5 min) */
   async fetchProxyList(): Promise<ProxyEntry[]> {
-    if (!WEBSHARE_API_KEY) {
+    const apiKey = getWebshareApiKey();
+
+    if (!apiKey) {
       throw new Error("WEBSHARE_API_KEY is not set in environment variables");
     }
 
@@ -33,7 +39,7 @@ export class WebshareProvider implements IProxyProvider {
 
     const response = await fetch(baseUrl, {
       headers: {
-        Authorization: `Token ${WEBSHARE_API_KEY}`,
+        Authorization: `Token ${apiKey}`,
         Accept: "application/json",
       },
     });
@@ -62,13 +68,32 @@ export class WebshareProvider implements IProxyProvider {
   }
 
   async getProxyUrl(): Promise<string | null> {
+    const apiKey = getWebshareApiKey();
+    if (!apiKey) {
+      if (!missingKeyWarned) {
+        console.warn(
+          "[WebshareProxy] WEBSHARE_API_KEY is missing. Proxy will be skipped and direct connection will be used.",
+        );
+        missingKeyWarned = true;
+      }
+      return null;
+    }
+    missingKeyWarned = false;
+
     try {
       const proxies = await this.fetchProxyList();
       const validProxy = proxies.find((p) => p.valid);
       if (!validProxy) return null;
+      proxyFetchErrorWarned = false;
       return `http://${validProxy.username}:${validProxy.password}@${validProxy.ip}:${validProxy.port}`;
     } catch (error) {
-      console.error("[WebshareProxy] Failed to get proxy URL:", error);
+      if (!proxyFetchErrorWarned) {
+        console.error(
+          "[WebshareProxy] Failed to get proxy URL:",
+          error instanceof Error ? error.message : String(error),
+        );
+        proxyFetchErrorWarned = true;
+      }
       return null;
     }
   }

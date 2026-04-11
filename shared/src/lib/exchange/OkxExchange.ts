@@ -16,10 +16,13 @@ import { getProxyAgent } from "../proxy/ProxyFactory";
 
 // ==================== OKX Exchange Adapter ====================
 
-const BASE_URL =
-  process.env.OKX_PROXY_URL ||
-  process.env.OKX_BASE_URL ||
-  "https://www.okx.com";
+function getOkxBaseUrl(): string {
+  return (
+    process.env.OKX_PROXY_URL ||
+    process.env.OKX_BASE_URL ||
+    "https://www.okx.com"
+  );
+}
 
 /**
  * OKX V5 API — ExchangeClient implementation.
@@ -60,7 +63,7 @@ export class OkxExchange implements ExchangeClient {
     this.passphrase = passphrase;
     this.simulated = simulated;
     this.client = axios.create({
-      baseURL: BASE_URL,
+      baseURL: getOkxBaseUrl(),
       timeout: 30000,
       headers: {
         "Content-Type": "application/json",
