@@ -349,21 +349,34 @@ export async function runSignalCheck(): Promise<{
         `📨 ${newMessages.length} new messages to process (bulk batchSize=${signalConfig.batchSize})`,
       );
 
-      // Bulk-create pending messages
-      await ProcessedMessage.insertMany(
-        newMessages.map((msg) => ({
-          accountId: msg.sourceId || null,
-          messageId: msg.messageId,
-          channelId: msg.channelId,
-          author: msg.author,
-          content: msg.content,
-          signalType: null,
-          parsedSignal: null,
-          status: "pending" as const,
-          sourceTimestamp: msg.timestamp || null,
-        })),
-        { ordered: false },
-      );
+      // Bulk-create pending messages. Ignore duplicate-key races so
+      // parallel signal-check runs won't fail the entire cycle.
+      try {
+        await ProcessedMessage.insertMany(
+          newMessages.map((msg) => ({
+            accountId: msg.sourceId || null,
+            messageId: msg.messageId,
+            channelId: msg.channelId,
+            author: msg.author,
+            content: msg.content,
+            signalType: null,
+            parsedSignal: null,
+            status: "pending" as const,
+            sourceTimestamp: msg.timestamp || null,
+          })),
+          { ordered: false },
+        );
+      } catch (error) {
+        const isDuplicateKey =
+          typeof error === "object" &&
+          error !== null &&
+          "code" in error &&
+          (error as { code?: number }).code === 11000;
+        if (!isDuplicateKey) throw error;
+        console.warn(
+          "⚠️ Duplicate processed message keys detected during insertMany; continuing with existing records",
+        );
+      }
 
       // Batch AI parsing
       const analyzer = AIFactory.getAnalyzer();

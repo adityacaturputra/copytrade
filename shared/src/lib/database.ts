@@ -4,6 +4,7 @@ import { SourceType } from "./enums";
 // ─── Connection ────────────────────────────────────────────────────────────────
 
 let isConnected = false;
+let processedMessageIndexesEnsured = false;
 
 export async function connectDB(): Promise<void> {
   if (isConnected && mongoose.connection.readyState === 1) return;
@@ -14,9 +15,45 @@ export async function connectDB(): Promise<void> {
     const conn = await mongoose.connect(uri);
     isConnected = true;
     console.log(`MongoDB connected: ${conn.connection.host}`);
+    await ensureProcessedMessageIndexes();
   } catch (error) {
     console.error("MongoDB connection error:", error);
     throw error;
+  }
+}
+
+async function ensureProcessedMessageIndexes(): Promise<void> {
+  if (processedMessageIndexesEnsured) return;
+
+  try {
+    const db = mongoose.connection.db;
+    if (!db) return;
+
+    const collection = db.collection("processedmessages");
+    const indexes = await collection.indexes();
+
+    const hasLegacyMessageIdUnique = indexes.some(
+      (idx) => idx.name === "messageId_1" && idx.unique,
+    );
+
+    if (hasLegacyMessageIdUnique) {
+      await collection.dropIndex("messageId_1");
+      console.log(
+        "🛠️ Dropped legacy unique index messageId_1 on processedmessages",
+      );
+    }
+
+    await collection.createIndex(
+      { messageId: 1, accountId: 1 },
+      { name: "messageId_1_accountId_1", unique: true },
+    );
+
+    processedMessageIndexesEnsured = true;
+  } catch (error) {
+    console.warn(
+      "⚠️ Failed to ensure processedmessages indexes:",
+      error instanceof Error ? error.message : String(error),
+    );
   }
 }
 
@@ -219,7 +256,7 @@ export interface ISignalConfig extends Document {
 const ProcessedMessageSchema = new Schema<IProcessedMessage>(
   {
     accountId: { type: String, default: null },
-    messageId: { type: String, required: true, unique: true },
+    messageId: { type: String, required: true },
     channelId: { type: String, required: true },
     author: { type: String, required: true },
     content: { type: String, required: true },
@@ -246,6 +283,7 @@ const ProcessedMessageSchema = new Schema<IProcessedMessage>(
 ProcessedMessageSchema.index({ status: 1 });
 ProcessedMessageSchema.index({ createdAt: -1 });
 ProcessedMessageSchema.index({ sourceTimestamp: -1 });
+ProcessedMessageSchema.index({ messageId: 1, accountId: 1 }, { unique: true });
 
 const PositionSchema = new Schema<IPosition>(
   {
