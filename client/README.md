@@ -62,6 +62,11 @@ cp ../.env.example ../.env
 | `PATUNGIN_API_KEY`      | -        | Required if AI_PROVIDER=codex/patungin (or via `~/.codex/config.toml`) |
 | `PATUNGIN_BASE_URL`     | `https://ai.patungin.id/v1` | CodexPatungin API base URL |
 | `PATUNGIN_MODEL`        | `gpt-5.3-codex` | CodexPatungin model |
+| `PATUNGIN_HTTP_REFERER` | - | Optional `HTTP-Referer` header for Patungin requests |
+| `PATUNGIN_X_TITLE`      | - | Optional `X-Title` header for Patungin requests |
+| `PATUNGIN_ORIGIN`       | - | Optional `Origin` header for Patungin requests |
+| `PATUNGIN_USER_AGENT`   | - | Optional `User-Agent` header for Patungin requests |
+| `PATUNGIN_EXTRA_HEADERS`| - | Optional extra Patungin headers (JSON or `Header: value` lines) |
 | `VISION_AI_PROVIDER`    | auto     | Image pre-layer provider: `gemini`, `codex`, `patungin` |
 | `DEFAULT_LEVERAGE`      | `10`     | Default leverage for trades              |
 | `DEFAULT_POSITION_SIZE` | `50`     | Default position size (USDT)             |

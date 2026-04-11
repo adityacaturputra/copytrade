@@ -412,6 +412,7 @@ export async function runSignalCheck(): Promise<{
         let batchResults: Array<{
           messageId: string;
           signal: TradingSignal | null;
+          parseError?: string;
         }>;
 
         try {
@@ -426,8 +427,16 @@ export async function runSignalCheck(): Promise<{
             try {
               const signal = await analyzer.parseSignal(input.content);
               batchResults.push({ messageId: input.messageId, signal });
-            } catch {
-              batchResults.push({ messageId: input.messageId, signal: null });
+            } catch (parseErr) {
+              const parseError =
+                parseErr instanceof Error
+                  ? parseErr.message
+                  : String(parseErr || "Unknown parse error");
+              batchResults.push({
+                messageId: input.messageId,
+                signal: null,
+                parseError,
+              });
             }
           }
         }
@@ -439,7 +448,7 @@ export async function runSignalCheck(): Promise<{
         }
 
         // Process each result in the batch — map by messageId
-        for (const { messageId: resultMsgId, signal } of batchResults) {
+        for (const { messageId: resultMsgId, signal, parseError } of batchResults) {
           const msg = msgLookup.get(resultMsgId);
           if (!msg) continue;
 
@@ -450,6 +459,32 @@ export async function runSignalCheck(): Promise<{
           }
 
           try {
+            if (parseError) {
+              const errMsg = `AI parse failed: ${parseError}`;
+              result.errors.push(`Message ${msg.messageId}: ${errMsg}`);
+
+              await ProcessedMessage.updateOne(
+                {
+                  messageId: msg.messageId,
+                  accountId: msg.sourceId || null,
+                },
+                { status: "failed", processedAt: new Date() },
+              );
+
+              await TradeLog.create({
+                accountId: msg.sourceId || undefined,
+                type: "signal",
+                action: "error",
+                symbol: undefined,
+                details: msg.content,
+                result: "parse_failed",
+                error: parseError,
+              });
+
+              console.error(`Error parsing message ${msg.messageId}:`, parseError);
+              continue;
+            }
+
             if (!signal || !signal.action || signal.action === "HOLD") {
               await ProcessedMessage.updateOne(
                 {
@@ -616,6 +651,7 @@ export async function runSignalCheck(): Promise<{
             result.errors.push(`Message ${msg.messageId}: ${errMsg}`);
 
             await TradeLog.create({
+              accountId: msg.sourceId || undefined,
               type: "signal",
               action: "error",
               symbol: undefined,

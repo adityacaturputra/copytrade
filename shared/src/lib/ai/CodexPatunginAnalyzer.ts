@@ -1,4 +1,3 @@
-import OpenAI from "openai";
 import {
   AISignalAnalyzer,
   BulkMessageInput,
@@ -22,6 +21,7 @@ export class CodexPatunginAnalyzer implements AISignalAnalyzer {
   private apiKeys: string[];
   private baseURL: string;
   private model: string;
+  private headers: Record<string, string>;
 
   constructor() {
     const cfg = getCodexPatunginConfig();
@@ -31,6 +31,7 @@ export class CodexPatunginAnalyzer implements AISignalAnalyzer {
       .filter(Boolean);
     this.baseURL = cfg.baseURL;
     this.model = cfg.model;
+    this.headers = cfg.headers;
   }
 
   async parseSignal(message: string): Promise<TradingSignal | null> {
@@ -232,25 +233,19 @@ export class CodexPatunginAnalyzer implements AISignalAnalyzer {
 
     for (const key of this.apiKeys) {
       try {
-        const client = new OpenAI({
-          apiKey: key,
-          baseURL: this.baseURL,
-        });
-
-        const completion = await client.chat.completions.create({
+        const completionPayload: Record<string, unknown> = {
           model: this.model,
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userMessage },
           ],
           max_tokens: maxTokens || 2048,
-          ...(enforceJsonObject
-            ? { response_format: { type: "json_object" as const } }
-            : {}),
-        });
+        };
+        if (enforceJsonObject) {
+          completionPayload.response_format = { type: "json_object" as const };
+        }
 
-        const content = completion.choices?.[0]?.message?.content;
-        return content || "";
+        return await this.createCompletion(key, completionPayload);
       } catch (error: unknown) {
         lastError = error as Error;
         const err = error as { status?: number; message?: string };
@@ -258,13 +253,17 @@ export class CodexPatunginAnalyzer implements AISignalAnalyzer {
         const status = err?.status;
 
         if (
+          status === 401 ||
+          status === 403 ||
           status === 429 ||
           status === 402 ||
           status === 500 ||
           errorMessage.includes("rate limit") ||
           errorMessage.includes("insufficient") ||
           errorMessage.includes("quota") ||
-          errorMessage.includes("balance")
+          errorMessage.includes("balance") ||
+          errorMessage.includes("blocked") ||
+          errorMessage.includes("permission")
         ) {
           console.warn(
             `CodexPatungin API Key ${key.substring(0, 8)}... failed. Trying next key...`,
@@ -297,22 +296,15 @@ export class CodexPatunginAnalyzer implements AISignalAnalyzer {
 
     for (const key of this.apiKeys) {
       try {
-        const client = new OpenAI({
-          apiKey: key,
-          baseURL: this.baseURL,
-        });
-
-        const completion = await client.chat.completions.create({
+        const completionPayload = {
           model: this.model,
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userContent as never },
           ],
           max_tokens: maxTokens || 2048,
-        });
-
-        const content = completion.choices?.[0]?.message?.content;
-        return content || "";
+        };
+        return await this.createCompletion(key, completionPayload);
       } catch (error: unknown) {
         lastError = error as Error;
         const err = error as { status?: number; message?: string };
@@ -320,13 +312,17 @@ export class CodexPatunginAnalyzer implements AISignalAnalyzer {
         const status = err?.status;
 
         if (
+          status === 401 ||
+          status === 403 ||
           status === 429 ||
           status === 402 ||
           status === 500 ||
           errorMessage.includes("rate limit") ||
           errorMessage.includes("insufficient") ||
           errorMessage.includes("quota") ||
-          errorMessage.includes("balance")
+          errorMessage.includes("balance") ||
+          errorMessage.includes("blocked") ||
+          errorMessage.includes("permission")
         ) {
           console.warn(
             `CodexPatungin Vision API Key ${key.substring(0, 8)}... failed. Trying next key...`,
@@ -342,5 +338,42 @@ export class CodexPatunginAnalyzer implements AISignalAnalyzer {
     throw new Error(
       `All CodexPatungin API keys failed. Last error: ${lastError?.message || "Unknown error"}`,
     );
+  }
+
+  private buildRequestHeaders(apiKey: string): Record<string, string> {
+    return {
+      ...this.headers,
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    };
+  }
+
+  private async createCompletion(
+    apiKey: string,
+    payload: Record<string, unknown>,
+  ): Promise<string> {
+    const response = await fetch(
+      `${this.baseURL.replace(/\/+$/, "")}/chat/completions`,
+      {
+        method: "POST",
+        headers: this.buildRequestHeaders(apiKey),
+        body: JSON.stringify(payload),
+      },
+    );
+
+    if (!response.ok) {
+      const errText = await response.text();
+      const apiError = new Error(
+        `Patungin API error: ${response.status} - ${errText}`,
+      ) as Error & { status?: number };
+      apiError.status = response.status;
+      throw apiError;
+    }
+
+    const data = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string | null } }>;
+    };
+
+    return data.choices?.[0]?.message?.content || "";
   }
 }

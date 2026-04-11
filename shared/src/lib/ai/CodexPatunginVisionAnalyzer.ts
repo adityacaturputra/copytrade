@@ -1,4 +1,3 @@
-import OpenAI from "openai";
 import { getSignalConfig } from "../signal-config";
 import { getCodexPatunginConfig } from "./CodexPatunginConfig";
 import { VisionExtractionResult } from "./GeminiVisionAnalyzer";
@@ -62,6 +61,7 @@ export class CodexPatunginVisionAnalyzer {
   private apiKeys: string[];
   private baseURL: string;
   private modelName: string;
+  private headers: Record<string, string>;
 
   constructor() {
     const cfg = getCodexPatunginConfig();
@@ -72,6 +72,7 @@ export class CodexPatunginVisionAnalyzer {
       .filter(Boolean);
     this.baseURL = cfg.baseURL;
     this.modelName = process.env.PATUNGIN_VISION_MODEL || cfg.model;
+    this.headers = cfg.headers;
 
     if (this.apiKeys.length === 0) {
       throw new Error(
@@ -94,12 +95,7 @@ export class CodexPatunginVisionAnalyzer {
 
     for (const key of this.apiKeys) {
       try {
-        const client = new OpenAI({
-          apiKey: key,
-          baseURL: this.baseURL,
-        });
-
-        const completion = await client.chat.completions.create({
+        const responseText = await this.createCompletion(key, {
           model: this.modelName,
           messages: [
             { role: "system", content: VISION_PROMPT },
@@ -115,7 +111,6 @@ export class CodexPatunginVisionAnalyzer {
           response_format: { type: "json_object" },
         });
 
-        const responseText = completion.choices?.[0]?.message?.content || "";
         return parseVisionResponse(responseText.trim());
       } catch (error: unknown) {
         lastError = error as Error;
@@ -124,13 +119,17 @@ export class CodexPatunginVisionAnalyzer {
         const status = err?.status;
 
         if (
+          status === 401 ||
+          status === 403 ||
           status === 429 ||
           status === 402 ||
           status === 500 ||
           errorMessage.includes("rate limit") ||
           errorMessage.includes("insufficient") ||
           errorMessage.includes("quota") ||
-          errorMessage.includes("balance")
+          errorMessage.includes("balance") ||
+          errorMessage.includes("blocked") ||
+          errorMessage.includes("permission")
         ) {
           console.warn(
             `CodexPatungin Vision key ${key.substring(0, 8)}... failed. Trying next key...`,
@@ -147,6 +146,42 @@ export class CodexPatunginVisionAnalyzer {
       `CodexPatungin Vision failed for all keys: ${lastError?.message || "unknown error"}`,
     );
     return { isSignal: false, extractedText: "", rawResponse: "" };
+  }
+
+  private buildRequestHeaders(apiKey: string): Record<string, string> {
+    return {
+      ...this.headers,
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    };
+  }
+
+  private async createCompletion(
+    apiKey: string,
+    payload: Record<string, unknown>,
+  ): Promise<string> {
+    const response = await fetch(
+      `${this.baseURL.replace(/\/+$/, "")}/chat/completions`,
+      {
+        method: "POST",
+        headers: this.buildRequestHeaders(apiKey),
+        body: JSON.stringify(payload),
+      },
+    );
+
+    if (!response.ok) {
+      const errText = await response.text();
+      const apiError = new Error(
+        `Patungin Vision API error: ${response.status} - ${errText}`,
+      ) as Error & { status?: number };
+      apiError.status = response.status;
+      throw apiError;
+    }
+
+    const data = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string | null } }>;
+    };
+    return data.choices?.[0]?.message?.content || "";
   }
 }
 

@@ -47,6 +47,11 @@ All cron endpoints require the `Authorization: Bearer YOUR_CRON_SECRET` header i
 | `PATUNGIN_API_KEY` | CodexPatungin API key (or via `~/.codex/config.toml`) | optional |
 | `PATUNGIN_BASE_URL` | CodexPatungin base URL | https://ai.patungin.id/v1 |
 | `PATUNGIN_MODEL` | CodexPatungin model | gpt-5.3-codex |
+| `PATUNGIN_HTTP_REFERER` | Optional `HTTP-Referer` header for Patungin requests | optional |
+| `PATUNGIN_X_TITLE` | Optional `X-Title` header for Patungin requests | optional |
+| `PATUNGIN_ORIGIN` | Optional `Origin` header for Patungin requests | optional |
+| `PATUNGIN_USER_AGENT` | Optional `User-Agent` header for Patungin requests | optional |
+| `PATUNGIN_EXTRA_HEADERS` | Optional extra Patungin headers (JSON or `Header: value` lines) | optional |
 | `VISION_AI_PROVIDER` | Image pre-layer provider (gemini/codex/patungin) | auto |
 | `CRON_JOB_API_KEY` | cron-job.org API key | optional |
 

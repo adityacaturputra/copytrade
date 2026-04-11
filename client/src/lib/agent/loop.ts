@@ -136,6 +136,13 @@ export async function* runAgentLoop(
           ? codexPatunginCfg.model
           : process.env.GLM_MODEL || "glm-4-flash";
 
+  const providerHeaders =
+    selectedProvider === "codex" || selectedProvider === "patungin"
+      ? codexPatunginCfg.headers
+      : undefined;
+  const hasProviderHeaders =
+    !!providerHeaders && Object.keys(providerHeaders).length > 0;
+
   if (!rawApiKey) {
     yield {
       type: "response",
@@ -174,12 +181,20 @@ export async function* runAgentLoop(
 
   // Pick a random key to distribute load
   const shuffledKeys = [...apiKeys].sort(() => Math.random() - 0.5);
-  let client = new OpenAI({ apiKey: shuffledKeys[0], baseURL });
+  let client = new OpenAI({
+    apiKey: shuffledKeys[0],
+    baseURL,
+    ...(hasProviderHeaders ? { defaultHeaders: providerHeaders } : {}),
+  });
   let currentKeyIndex = 0;
   const tryNextKey = (): boolean => {
     currentKeyIndex++;
     if (currentKeyIndex < shuffledKeys.length) {
-      client = new OpenAI({ apiKey: shuffledKeys[currentKeyIndex], baseURL });
+      client = new OpenAI({
+        apiKey: shuffledKeys[currentKeyIndex],
+        baseURL,
+        ...(hasProviderHeaders ? { defaultHeaders: providerHeaders } : {}),
+      });
       console.log(
         `[Agent] 🔄 Trying key ${shuffledKeys[currentKeyIndex].substring(0, 8)}...`,
       );
