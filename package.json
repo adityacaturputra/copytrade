@@ -1,0 +1,16 @@
+{
+  "name": "copytrade-monorepo",
+  "private": true,
+  "version": "1.0.0",
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "dev": "pnpm --filter @copytrade/shared build && pnpm --filter copytrade --filter copytrade-backend -r --parallel dev",
+    "dev:client": "pnpm --filter copytrade dev",
+    "dev:server": "pnpm --filter copytrade-backend dev",
+    "build": "pnpm --filter @copytrade/shared build && pnpm --filter copytrade --filter copytrade-backend -r build",
+    "build:client": "pnpm --filter copytrade build",
+    "build:server": "pnpm --filter copytrade-backend build",
+    "lint": "pnpm --filter @copytrade/shared build && pnpm --filter copytrade --filter copytrade-backend -r lint",
+    "typecheck": "pnpm --filter @copytrade/shared typecheck && pnpm --filter copytrade typecheck && pnpm --filter copytrade-backend lint"
+  }
+}

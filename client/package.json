@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build --turbopack",
+    "build": "next build --webpack",
     "start": "next start",
     "lint": "next lint",
     "reset": "tsx scripts/reset-all.ts",
@@ -13,9 +13,9 @@
     "reset:dry": "tsx scripts/reset-all.ts --dry-run",
     "reset:funds": "tsx scripts/reset-all.ts --reset-funds-only",
     "reset:all": "tsx scripts/reset-all.ts --reset-funds",
-    "prebuild": "yarn --cwd ../shared build",
-    "predev": "yarn --cwd ../shared build",
-    "prelint": "yarn --cwd ../shared build",
+    "prebuild": "pnpm -C .. --filter @copytrade/shared build",
+    "predev": "pnpm -C .. --filter @copytrade/shared build",
+    "prelint": "pnpm -C .. --filter @copytrade/shared build",
     "typecheck": "tsc -p tsconfig.build.json --noEmit"
   },
   "dependencies": {
@@ -33,7 +33,7 @@
     "react-dom": "^19.0.0",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
-    "@copytrade/shared": "file:../shared"
+    "@copytrade/shared": "workspace:*"
   },
   "devDependencies": {
     "@types/crypto-js": "^4.2.2",

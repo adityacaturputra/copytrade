@@ -8,13 +8,13 @@
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/index.js",
     "lint": "tsc -p tsconfig.build.json --noEmit",
-    "prebuild": "yarn --cwd ../shared build",
-    "predev": "yarn --cwd ../shared build",
-    "prelint": "yarn --cwd ../shared build"
+    "prebuild": "pnpm -C .. --filter @copytrade/shared build",
+    "predev": "pnpm -C .. --filter @copytrade/shared build",
+    "prelint": "pnpm -C .. --filter @copytrade/shared build"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
-    "@copytrade/shared": "file:../shared",
+    "@copytrade/shared": "workspace:*",
     "@google/generative-ai": "^0.24.1",
     "axios": "^1.7.9",
     "cors": "^2.8.5",

@@ -10,16 +10,22 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
     "./lib/*": {
       "types": "./dist/lib/*.d.ts",
+      "require": "./dist/lib/*.js",
+      "import": "./dist/lib/*.js",
       "default": "./dist/lib/*.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "node ../server/node_modules/typescript/bin/tsc -p tsconfig.build.json && node scripts/sync-local-package.mjs",
-    "clean": "rm -rf dist"
+    "build": "tsc -p tsconfig.build.json",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc -p tsconfig.build.json --noEmit"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
@@ -30,5 +36,8 @@
     "https-proxy-agent": "^9.0.0",
     "mongoose": "^8.9.5",
     "openai": "^4.77.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
   }
 }
