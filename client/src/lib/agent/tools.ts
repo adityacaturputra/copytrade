@@ -45,7 +45,7 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "get_account_info",
       description:
-        "Get exchange account info. Returns JSON: { provider: string ('okx'|'mexc'|'paper'), totalBalance: number (total equity in USDT), availableBalance: number (free margin in USDT), unrealizedPnl: number (unrealized profit/loss) }. Use this first to understand the account state before trading.",
+        "Get exchange account info. Returns JSON: { provider: string ('okx'|'binance'|'mexc'|'paper'), totalBalance: number (total equity in USDT), availableBalance: number (free margin in USDT), unrealizedPnl: number (unrealized profit/loss) }. Use this first to understand the account state before trading.",
       parameters: { type: "object", properties: {}, required: [] },
     },
   },
@@ -54,14 +54,14 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "get_ticker_price",
       description:
-        "Get the current mark price of a trading pair. Symbol MUST be in exchange-specific format: for OKX use 'BTC-USDT-SWAP' (instrument ID with dashes), for MEXC use 'BTCUSDT' (no dashes).",
+        "Get the current mark price of a trading pair. Symbol MUST be in exchange-specific format: for OKX use 'BTC-USDT-SWAP' (instrument ID with dashes); for Binance/MEXC use 'BTCUSDT' (no dashes).",
       parameters: {
         type: "object",
         properties: {
           symbol: {
             type: "string",
             description:
-              "Trading pair in exchange format. OKX examples: 'BTC-USDT-SWAP', 'ETH-USDT-SWAP'. MEXC examples: 'BTCUSDT', 'ETHUSDT'.",
+              "Trading pair in exchange format. OKX examples: 'BTC-USDT-SWAP', 'ETH-USDT-SWAP'. Binance/MEXC examples: 'BTCUSDT', 'RENDERUSDT'.",
           },
         },
         required: ["symbol"],

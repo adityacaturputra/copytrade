@@ -2,8 +2,9 @@ import { ExchangeClient } from "./types";
 import { MexcExchange } from "./MexcExchange";
 import { OkxExchange } from "./OkxExchange";
 import { PaperExchange } from "./PaperExchange";
+import { BinanceExchange } from "./BinanceExchange";
 
-export type ExchangeProvider = "mexc" | "okx" | "paper";
+export type ExchangeProvider = "mexc" | "okx" | "binance" | "paper";
 
 /**
  * ExchangeCredentials — per-account exchange configuration stored in DB.
@@ -49,10 +50,6 @@ export class ExchangeFactory {
     creds?: ExchangeCredentials,
   ): ExchangeClient {
     switch (provider) {
-      case "paper": {
-        return new PaperExchange();
-      }
-
       case "okx": {
         const apiKey = creds?.apiKey;
         const secretKey = creds?.secretKey;
@@ -67,7 +64,7 @@ export class ExchangeFactory {
       }
 
       case "mexc":
-      default: {
+      {
         const apiKey = creds?.apiKey;
         const secretKey = creds?.secretKey;
         if (!apiKey || !secretKey) {
@@ -76,6 +73,21 @@ export class ExchangeFactory {
           );
         }
         return new MexcExchange(apiKey, secretKey);
+      }
+
+      case "binance": {
+        const apiKey = creds?.apiKey;
+        const secretKey = creds?.secretKey;
+        if (!apiKey || !secretKey) {
+          throw new Error(
+            "Binance apiKey and secretKey must be configured in account settings",
+          );
+        }
+        return new BinanceExchange(apiKey, secretKey);
+      }
+
+      default: {
+        return new PaperExchange();
       }
     }
   }

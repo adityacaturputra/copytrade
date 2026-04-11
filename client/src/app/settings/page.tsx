@@ -1126,6 +1126,7 @@ export default function SettingsPage() {
                           className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
                         >
                           <option value="okx">OKX</option>
+                          <option value="binance">Binance Futures</option>
                           <option value="mexc">MEXC</option>
                           <option value="paper">
                             📝 Paper Trading (simulated)
