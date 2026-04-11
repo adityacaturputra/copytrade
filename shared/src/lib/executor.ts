@@ -899,35 +899,6 @@ export async function executeTrade(
   const side = action === "SELL" ? ("SHORT" as const) : ("LONG" as const);
   const lp = logPrefix ? `${logPrefix} ` : "";
 
-  // ─── Risk-Based Position Sizing ─────────────────────────────────
-  let orderQuantity = quantity;
-  let orderLeverage = leverage;
-
-  if (entryPrice && entryPrice > 0 && stopLoss) {
-    const riskCalc = await calculateRiskBasedPosition(
-      entryPrice,
-      stopLoss,
-      side,
-      quantity,
-      leverage,
-    );
-
-    if (riskCalc.applied) {
-      orderQuantity = riskCalc.quantity;
-      orderLeverage = riskCalc.leverage;
-      console.log(
-        `${lp}🛡️ Risk management applied: qty=${orderQuantity.toFixed(6)} → ${orderQuantity}, leverage=${leverage} → ${orderLeverage}`,
-      );
-      console.log(
-        `${lp}🛡️ Risk details: balance=$${riskCalc.accountBalance.toFixed(2)}, margin=$${riskCalc.marginUsdt.toFixed(2)}, slDist=${(riskCalc.slDistancePercent * 100).toFixed(2)}%, notional=$${riskCalc.notionalSize.toFixed(2)}`,
-      );
-    } else {
-      console.warn(`${lp}⚠️ Risk management skipped: ${riskCalc.skipReason}`);
-    }
-  } else if (!entryPrice || entryPrice <= 0) {
-    console.warn(`${lp}⚠️ Risk management skipped: no entry price available`);
-  }
-
   // ─── Resolve exchange client (per-account or paper fallback) ────
   let exchange;
   if (accountId) {
@@ -950,6 +921,49 @@ export async function executeTrade(
   } else {
     console.warn(`${lp}⚠️ No accountId provided, using paper exchange`);
     exchange = ExchangeFactory.getPaperClient();
+  }
+
+  // ─── Risk-Based Position Sizing ─────────────────────────────────
+  let orderQuantity = quantity;
+  let orderLeverage = leverage;
+  let riskAccountBalance: number | undefined;
+
+  try {
+    const account = await exchange.getAccountInfo();
+    riskAccountBalance = account.availableBalance || account.totalBalance;
+    console.log(
+      `${lp}💰 Risk balance source (${exchange.name}): $${riskAccountBalance.toFixed(2)}`,
+    );
+  } catch (balanceErr) {
+    console.warn(
+      `${lp}⚠️ Failed to fetch account balance for risk sizing: ${balanceErr instanceof Error ? balanceErr.message : String(balanceErr)}`,
+    );
+  }
+
+  if (entryPrice && entryPrice > 0 && stopLoss) {
+    const riskCalc = await calculateRiskBasedPosition(
+      entryPrice,
+      stopLoss,
+      side,
+      quantity,
+      leverage,
+      riskAccountBalance,
+    );
+
+    if (riskCalc.applied) {
+      orderQuantity = riskCalc.quantity;
+      orderLeverage = riskCalc.leverage;
+      console.log(
+        `${lp}🛡️ Risk management applied: qty=${orderQuantity.toFixed(6)} → ${orderQuantity}, leverage=${leverage} → ${orderLeverage}`,
+      );
+      console.log(
+        `${lp}🛡️ Risk details: balance=$${riskCalc.accountBalance.toFixed(2)}, margin=$${riskCalc.marginUsdt.toFixed(2)}, slDist=${(riskCalc.slDistancePercent * 100).toFixed(2)}%, notional=$${riskCalc.notionalSize.toFixed(2)}`,
+      );
+    } else {
+      console.warn(`${lp}⚠️ Risk management skipped: ${riskCalc.skipReason}`);
+    }
+  } else if (!entryPrice || entryPrice <= 0) {
+    console.warn(`${lp}⚠️ Risk management skipped: no entry price available`);
   }
 
   // ─── Place order via exchange ────────────────────────────────────

@@ -1,4 +1,3 @@
-import { ExchangeFactory } from "./exchange/ExchangeFactory";
 import { connectDB, RiskSettings as RiskSettingsModel } from "./database";
 import { calculateRisk } from "./risk-calc";
 
@@ -148,23 +147,16 @@ export async function calculateRiskBasedPosition(
   side: "LONG" | "SHORT",
   originalQuantity: number,
   originalLeverage: number,
+  accountBalance: number | null | undefined,
 ): Promise<RiskCalculation> {
   const config = await getRiskConfig();
 
-  // Fetch account balance
-  let accountBalance: number;
-  try {
-    const exchange = ExchangeFactory.getClient();
-    const account = await exchange.getAccountInfo();
-    accountBalance = account.availableBalance || account.totalBalance;
-    console.log(
-      `[Risk] 💰 Fetched account balance: $${accountBalance.toFixed(2)}`,
-    );
-  } catch (err) {
-    console.warn(
-      "Failed to fetch account balance for risk calc, using original params:",
-      err instanceof Error ? err.message : String(err),
-    );
+  // Caller must provide the balance from the target trading account.
+  if (
+    !accountBalance ||
+    !Number.isFinite(accountBalance) ||
+    accountBalance <= 0
+  ) {
     return {
       applied: false,
       accountBalance: 0,
@@ -173,7 +165,7 @@ export async function calculateRiskBasedPosition(
       notionalSize: 0,
       quantity: originalQuantity,
       leverage: originalLeverage,
-      skipReason: `Failed to fetch account balance: ${err instanceof Error ? err.message : String(err)}`,
+      skipReason: "No valid account balance provided for risk calculation",
     };
   }
 
