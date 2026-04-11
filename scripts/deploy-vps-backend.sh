@@ -253,6 +253,9 @@ install_and_build() {
   log "Installing dependencies..."
   (cd "$APP_DIR" && pnpm install)
 
+  log "Type checking backend package ($BACKEND_FILTER)..."
+  (cd "$APP_DIR" && pnpm --filter "$BACKEND_FILTER" lint)
+
   log "Building backend package ($BACKEND_FILTER)..."
   (cd "$APP_DIR" && pnpm --filter "$BACKEND_FILTER" build)
 }

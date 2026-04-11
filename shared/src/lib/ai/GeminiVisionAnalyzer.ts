@@ -1,14 +1,13 @@
 /**
- * Vision AI pre-layer used before the main signal parser.
- * Supports provider factory selection:
- * - gemini (default)
- * - codex / patungin (OpenAI-compatible via Patungin)
+ * GeminiVisionAnalyzer — Pre-layer AI that uses Gemini 2.5 Flash to read
+ * trading chart images and extract price levels (Entry, TP, SL).
+ *
+ * This runs BEFORE the main signal AI, so extracted text gets appended to the
+ * Discord message content before it's sent to the primary analyzer.
  */
 
-import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { getSignalConfig } from "../signal-config";
-import { getCodexPatunginConfig } from "./CodexPatunginConfig";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -17,16 +16,8 @@ export interface VisionExtractionResult {
   isSignal: boolean;
   /** Extracted text description of price levels from the chart */
   extractedText: string;
-  /** Raw model response for debugging */
+  /** Raw Gemini response for debugging */
   rawResponse: string;
-}
-
-export type VisionAIProvider = "gemini" | "codex" | "patungin";
-
-interface VisionSignalAnalyzer {
-  provider: VisionAIProvider;
-  isEnabled(): Promise<boolean>;
-  analyzeImage(imageUrl: string): Promise<VisionExtractionResult>;
 }
 
 // ─── Prompt ───────────────────────────────────────────────────────────────────
@@ -63,62 +54,45 @@ If the image is NOT a trading chart (e.g., meme, screenshot of text, random phot
 
 Respond ONLY with the JSON, no additional text.`;
 
-function parseVisionResponse(responseText: string): VisionExtractionResult {
-  try {
-    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      return { isSignal: false, extractedText: "", rawResponse: responseText };
-    }
+// ─── Analyzer Class ───────────────────────────────────────────────────────────
 
-    const parsed = JSON.parse(jsonMatch[0]) as {
-      isSignal?: boolean;
-      extractedText?: string;
-    };
-
-    return {
-      isSignal: parsed.isSignal === true,
-      extractedText: parsed.extractedText || "",
-      rawResponse: responseText,
-    };
-  } catch {
-    return { isSignal: false, extractedText: "", rawResponse: responseText };
-  }
-}
-
-async function isVisionEnabled(): Promise<boolean> {
-  try {
-    const config = await getSignalConfig();
-    return config.visionAIEnabled === true;
-  } catch {
-    return false;
-  }
-}
-
-// ─── Gemini Analyzer ──────────────────────────────────────────────────────────
-
-class GeminiVisionAnalyzer implements VisionSignalAnalyzer {
-  provider: VisionAIProvider = "gemini";
+export class GeminiVisionAnalyzer {
+  readonly provider = "gemini" as const;
   private apiKey: string;
   private modelName: string;
 
   constructor() {
     const apiKey = process.env.GEMINI_VISION_API_KEY;
     if (!apiKey) {
-      throw new Error("GEMINI_VISION_API_KEY is not set.");
+      throw new Error(
+        "GEMINI_VISION_API_KEY is not set. Please add it to your .env file.",
+      );
     }
     this.apiKey = apiKey;
     this.modelName = process.env.GEMINI_VISION_MODEL || "gemini-2.5-flash";
   }
 
+  /**
+   * Check if the Gemini Vision AI is enabled in signal config.
+   */
   async isEnabled(): Promise<boolean> {
-    return isVisionEnabled();
+    try {
+      const config = await getSignalConfig();
+      return config.visionAIEnabled === true;
+    } catch {
+      return false;
+    }
   }
 
+  /**
+   * Analyze a single image URL and extract trading signal data.
+   */
   async analyzeImage(imageUrl: string): Promise<VisionExtractionResult> {
     const genAI = new GoogleGenerativeAI(this.apiKey);
     const model = genAI.getGenerativeModel({ model: this.modelName });
 
     try {
+      // Fetch the image and convert to base64
       const imageResponse = await fetch(imageUrl);
       if (!imageResponse.ok) {
         console.warn(
@@ -133,11 +107,47 @@ class GeminiVisionAnalyzer implements VisionSignalAnalyzer {
       const base64Data = Buffer.from(arrayBuffer).toString("base64");
 
       const result = await model.generateContent([
-        { inlineData: { mimeType: contentType, data: base64Data } },
+        {
+          inlineData: {
+            mimeType: contentType,
+            data: base64Data,
+          },
+        },
         VISION_PROMPT,
       ]);
 
-      return parseVisionResponse(result.response.text().trim());
+      const responseText = result.response.text().trim();
+
+      // Parse the JSON response
+      try {
+        // Extract JSON from response (handle markdown code blocks)
+        const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) {
+          console.warn(
+            "[GeminiVision] No JSON found in response:",
+            responseText,
+          );
+          return {
+            isSignal: false,
+            extractedText: "",
+            rawResponse: responseText,
+          };
+        }
+
+        const parsed = JSON.parse(jsonMatch[0]);
+        return {
+          isSignal: parsed.isSignal === true,
+          extractedText: parsed.extractedText || "",
+          rawResponse: responseText,
+        };
+      } catch (parseError) {
+        console.warn("[GeminiVision] Failed to parse response:", parseError);
+        return {
+          isSignal: false,
+          extractedText: "",
+          rawResponse: responseText,
+        };
+      }
     } catch (error) {
       console.error(
         "[GeminiVision] Error analyzing image:",
@@ -146,164 +156,72 @@ class GeminiVisionAnalyzer implements VisionSignalAnalyzer {
       return { isSignal: false, extractedText: "", rawResponse: "" };
     }
   }
-}
 
-// ─── Codex/Patungin Analyzer ─────────────────────────────────────────────────
-
-class CodexPatunginVisionAnalyzer implements VisionSignalAnalyzer {
-  provider: VisionAIProvider = "patungin";
-  private apiKeys: string[];
-  private baseURL: string;
-  private modelName: string;
-
-  constructor() {
-    const cfg = getCodexPatunginConfig();
-
-    this.apiKeys = cfg.apiKey
-      .split(",")
-      .map((k) => k.trim())
-      .filter(Boolean);
-    this.baseURL = cfg.baseURL;
-    this.modelName = process.env.PATUNGIN_VISION_MODEL || cfg.model;
-
-    if (this.apiKeys.length === 0) {
-      throw new Error(
-        "PATUNGIN API key is missing. Set PATUNGIN_API_KEY or configure ~/.codex/config.toml.",
-      );
+  /**
+   * Analyze multiple image URLs and combine extracted text.
+   * Returns combined extracted text from all images that contain trading signals.
+   */
+  async analyzeImages(imageUrls: string[]): Promise<VisionExtractionResult> {
+    if (!imageUrls.length) {
+      return { isSignal: false, extractedText: "", rawResponse: "" };
     }
-  }
 
-  async isEnabled(): Promise<boolean> {
-    return isVisionEnabled();
-  }
+    const results: VisionExtractionResult[] = [];
 
-  async analyzeImage(imageUrl: string): Promise<VisionExtractionResult> {
-    let lastError: Error | null = null;
-
-    for (const key of this.apiKeys) {
+    for (const url of imageUrls) {
       try {
-        const client = new OpenAI({
-          apiKey: key,
-          baseURL: this.baseURL,
-        });
-
-        const completion = await client.chat.completions.create({
-          model: this.modelName,
-          messages: [
-            { role: "system", content: VISION_PROMPT },
-            {
-              role: "user",
-              content: [
-                { type: "text", text: "Analyze this trading chart image." },
-                { type: "image_url", image_url: { url: imageUrl } },
-              ] as never,
-            },
-          ],
-          max_tokens: 1200,
-          response_format: { type: "json_object" },
-        });
-
-        const responseText = completion.choices?.[0]?.message?.content || "";
-        return parseVisionResponse(responseText.trim());
-      } catch (error: unknown) {
-        lastError = error as Error;
-        const err = error as { status?: number; message?: string };
-        const errorMessage = err?.message?.toLowerCase() || "";
-        const status = err?.status;
-
-        if (
-          status === 429 ||
-          status === 402 ||
-          status === 500 ||
-          errorMessage.includes("rate limit") ||
-          errorMessage.includes("insufficient") ||
-          errorMessage.includes("quota") ||
-          errorMessage.includes("balance")
-        ) {
-          console.warn(
-            `CodexPatungin Vision key ${key.substring(0, 8)}... failed. Trying next key...`,
-          );
-          continue;
-        }
-
-        console.error("CodexPatunginVision error:", error);
-        return { isSignal: false, extractedText: "", rawResponse: "" };
+        const result = await this.analyzeImage(url);
+        results.push(result);
+      } catch (error) {
+        console.error(
+          `[GeminiVision] Error processing image ${url}:`,
+          error instanceof Error ? error.message : String(error),
+        );
       }
     }
 
-    console.warn(
-      `CodexPatungin Vision failed for all keys: ${lastError?.message || "unknown error"}`,
-    );
-    return { isSignal: false, extractedText: "", rawResponse: "" };
+    // Combine all extracted texts
+    const extractedTexts = results
+      .filter((r) => r.isSignal && r.extractedText)
+      .map((r) => r.extractedText);
+
+    const combinedText = extractedTexts.join("\n");
+    const isAnySignal = results.some((r) => r.isSignal);
+
+    return {
+      isSignal: isAnySignal,
+      extractedText: combinedText,
+      rawResponse: results.map((r) => r.rawResponse).join("\n---\n"),
+    };
   }
 }
 
-// ─── Vision Factory ───────────────────────────────────────────────────────────
+// ─── Singleton Export ─────────────────────────────────────────────────────────
 
-function normalizeVisionProvider(value: string | undefined): VisionAIProvider {
-  const normalized = (value || "").trim().toLowerCase();
-  if (normalized === "codex" || normalized === "patungin") return "patungin";
-  if (normalized === "gemini") return "gemini";
-  return "gemini";
-}
-
-function getSelectedVisionProvider(): VisionAIProvider {
-  const explicit =
-    process.env.VISION_AI_PROVIDER || process.env.IMAGE_AI_PROVIDER;
-  if (explicit) return normalizeVisionProvider(explicit);
-
-  const aiProvider = normalizeVisionProvider(process.env.AI_PROVIDER);
-  if (aiProvider === "patungin") return "patungin";
-  if (!process.env.AI_PROVIDER && getCodexPatunginConfig().apiKey) {
-    return "patungin";
-  }
-
-  return "gemini";
-}
-
-export class VisionAIFactory {
-  private static instances = new Map<VisionAIProvider, VisionSignalAnalyzer>();
-
-  static getAnalyzer(
-    provider?: VisionAIProvider,
-  ): VisionSignalAnalyzer | null {
-    const selectedProvider = provider || getSelectedVisionProvider();
-
-    if (VisionAIFactory.instances.has(selectedProvider)) {
-      return VisionAIFactory.instances.get(selectedProvider) || null;
-    }
-
-    try {
-      const analyzer =
-        selectedProvider === "patungin"
-          ? new CodexPatunginVisionAnalyzer()
-          : new GeminiVisionAnalyzer();
-
-      VisionAIFactory.instances.set(selectedProvider, analyzer);
-      return analyzer;
-    } catch (error) {
-      console.warn(
-        `[VisionAIFactory] Failed to initialize ${selectedProvider} analyzer: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      return null;
-    }
-  }
-
-  static reset(): void {
-    VisionAIFactory.instances.clear();
-  }
-}
+let _instance: GeminiVisionAnalyzer | null = null;
 
 /**
- * Backward-compatible helper retained for existing imports.
+ * Get or create the GeminiVisionAnalyzer singleton.
+ * Returns null if GEMINI_VISION_API_KEY is not configured.
  */
-export function getGeminiVisionAnalyzer(): VisionSignalAnalyzer | null {
-  return VisionAIFactory.getAnalyzer("gemini");
+export function getGeminiVisionAnalyzer(): GeminiVisionAnalyzer | null {
+  try {
+    if (!_instance) {
+      _instance = new GeminiVisionAnalyzer();
+    }
+    return _instance;
+  } catch {
+    return null;
+  }
 }
 
 /**
- * Preprocess Discord message images through the selected vision AI provider.
- * If disabled or not configured, returns original content unchanged.
+ * Preprocess Discord message images through Gemini Vision.
+ * If vision AI is disabled or not configured, returns the original content unchanged.
+ *
+ * @param content - The original Discord message text
+ * @param imageUrls - Array of image URLs from the Discord message
+ * @returns Enhanced content with image-extracted text appended
  */
 export async function preprocessImagesWithVision(
   content: string,
@@ -312,19 +230,21 @@ export async function preprocessImagesWithVision(
   enhancedContent: string;
   visionResults: VisionExtractionResult[];
 }> {
-  const analyzer = VisionAIFactory.getAnalyzer();
+  const analyzer = getGeminiVisionAnalyzer();
 
-  if (!analyzer || imageUrls.length === 0) {
+  // If no analyzer or no images, return original content
+  if (!analyzer || !imageUrls.length) {
     return { enhancedContent: content, visionResults: [] };
   }
 
+  // Check if vision AI is enabled
   const enabled = await analyzer.isEnabled();
   if (!enabled) {
     return { enhancedContent: content, visionResults: [] };
   }
 
   console.log(
-    `[VisionAI:${analyzer.provider}] Processing ${imageUrls.length} image(s)...`,
+    `[GeminiVision] Processing ${imageUrls.length} image(s) through Gemini Vision...`,
   );
 
   const results: VisionExtractionResult[] = [];
@@ -336,22 +256,21 @@ export async function preprocessImagesWithVision(
 
       if (result.isSignal && result.extractedText) {
         console.log(
-          `[VisionAI:${analyzer.provider}] Extracted: ${result.extractedText}`,
+          `[GeminiVision] Extracted from image: ${result.extractedText}`,
         );
       } else {
-        console.log(
-          `[VisionAI:${analyzer.provider}] Image does not contain a trading signal`,
-        );
+        console.log(`[GeminiVision] Image does not contain a trading signal`);
       }
     } catch (error) {
       console.error(
-        `[VisionAI:${analyzer.provider}] Error processing image:`,
+        `[GeminiVision] Error processing image:`,
         error instanceof Error ? error.message : String(error),
       );
       results.push({ isSignal: false, extractedText: "", rawResponse: "" });
     }
   }
 
+  // Combine extracted texts from all signal images
   const extractedTexts = results
     .filter((r) => r.isSignal && r.extractedText)
     .map((r) => r.extractedText);
@@ -360,11 +279,12 @@ export async function preprocessImagesWithVision(
     return { enhancedContent: content, visionResults: results };
   }
 
+  // Append extracted chart data to the original message content
   const visionText = extractedTexts.join("\n");
   const enhancedContent = `${content}\n\n[Chart Image Analysis]:\n${visionText}`;
 
   console.log(
-    `[VisionAI:${analyzer.provider}] Enhanced content with ${extractedTexts.length} extraction(s)`,
+    `[GeminiVision] Enhanced content with ${extractedTexts.length} image extraction(s)`,
   );
 
   return { enhancedContent, visionResults: results };

@@ -15,7 +15,7 @@ import { BaseSourceMessage } from "./source/types";
 import { SourceFactory } from "./source/SourceFactory";
 import { AIFactory } from "./ai/AIFactory";
 import { TradingSignal, BulkMessageInput } from "./ai/types";
-import { preprocessImagesWithVision } from "./ai/GeminiVisionAnalyzer";
+import { preprocessImagesWithVision } from "./ai/ImageAIFactory";
 import {
   ExchangeFactory,
   ExchangeCredentials,

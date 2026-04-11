@@ -1,4 +1,4 @@
-import { Router, Request, Response } from "express";
+import { Router, Request, Response, type Router as ExpressRouter } from "express";
 import { runSignalCheck } from "../lib/executor";
 import { runPositionMonitor } from "../lib/monitor";
 import { runTpslMonitor } from "../lib/tp-sl-monitor";
@@ -11,7 +11,7 @@ import {
   getAllCronStatus,
 } from "../lib/cron-status";
 
-const router = Router();
+const router: ExpressRouter = Router();
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
 
