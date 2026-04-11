@@ -1,7 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  transpilePackages: ["@copytrade/shared"],
   serverExternalPackages: [
-    "@copytrade/shared",
     "discord.js",
     "@discordjs/ws",
     "@discordjs/voice",
