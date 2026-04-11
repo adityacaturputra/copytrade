@@ -14,11 +14,13 @@ import {
 } from "./types";
 import { getProxyAgent } from "../proxy/ProxyFactory";
 
-function getBinanceBaseUrl(): string {
+function getBinanceBaseUrl(simulated: boolean): string {
   return (
     process.env.BINANCE_PROXY_URL ||
-    process.env.BINANCE_BASE_URL ||
-    "https://fapi.binance.com"
+    (simulated
+      ? process.env.BINANCE_TESTNET_BASE_URL ||
+        "https://testnet.binancefuture.com"
+      : process.env.BINANCE_BASE_URL || "https://fapi.binance.com")
   );
 }
 
@@ -74,11 +76,11 @@ export class BinanceExchange implements ExchangeClient {
     { specs: InstrumentSpecs; ts: number }
   >();
 
-  constructor(apiKey: string, secretKey: string) {
-    this.apiKey = apiKey;
-    this.secretKey = secretKey;
+  constructor(apiKey: string, secretKey: string, simulated: boolean = false) {
+    this.apiKey = apiKey.trim();
+    this.secretKey = secretKey.trim();
     this.client = axios.create({
-      baseURL: getBinanceBaseUrl(),
+      baseURL: getBinanceBaseUrl(simulated),
       timeout: 30000,
       headers: {
         "Content-Type": "application/json",

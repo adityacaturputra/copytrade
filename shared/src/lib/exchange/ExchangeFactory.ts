@@ -83,7 +83,8 @@ export class ExchangeFactory {
             "Binance apiKey and secretKey must be configured in account settings",
           );
         }
-        return new BinanceExchange(apiKey, secretKey);
+        const simulated = creds?.simulated ?? false;
+        return new BinanceExchange(apiKey, secretKey, simulated);
       }
 
       default: {
