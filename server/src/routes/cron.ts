@@ -12,16 +12,29 @@ import {
 } from "../lib/cron-status";
 
 const router: ExpressRouter = Router();
+let loggedCronAuthMode = false;
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
 
 /** Verify cron secret if configured */
 function verifyCronSecret(req: Request, res: Response, next: () => void) {
-  const cronSecret = process.env.CRON_SECRET;
+  const rawCronSecret = process.env.CRON_SECRET;
+  const cronSecret = rawCronSecret?.trim() || "";
+
+  if (!loggedCronAuthMode) {
+    console.log(
+      `[CronAuth] Mode: ${cronSecret ? "enabled" : "disabled"}${cronSecret ? "" : " (CRON_SECRET not set)"}`,
+    );
+    loggedCronAuthMode = true;
+  }
+
   if (cronSecret) {
     const authHeader = req.headers.authorization;
-    const providedSecret = authHeader?.replace("Bearer ", "");
+    const providedSecret = authHeader?.replace("Bearer ", "").trim();
     if (providedSecret !== cronSecret) {
+      console.warn(
+        `[CronAuth] Unauthorized ${req.method} ${req.path} (hasAuthorizationHeader=${authHeader ? "yes" : "no"})`,
+      );
       res.status(401).json({ error: "Unauthorized" });
       return;
     }

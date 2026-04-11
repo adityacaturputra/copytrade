@@ -15,6 +15,9 @@ dotenv.config();
 const app: Express = express();
 const PORT = process.env.PORT || 3001;
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
+const RAW_CRON_SECRET = process.env.CRON_SECRET;
+const CRON_SECRET = RAW_CRON_SECRET?.trim() || "";
+const CRON_AUTH_ENABLED = CRON_SECRET.length > 0;
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
 
@@ -34,9 +37,16 @@ app.use(
 // Parse JSON bodies
 app.use(express.json());
 
-// Request logging
+// Request logging with status code and duration
 app.use((req: Request, res: Response, next: NextFunction) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
+  const start = Date.now();
+  res.on("finish", () => {
+    const durationMs = Date.now() - start;
+    const hasAuth = req.headers.authorization ? "yes" : "no";
+    console.log(
+      `[${new Date().toISOString()}] ${req.method} ${req.path} -> ${res.statusCode} (${durationMs}ms, auth:${hasAuth})`,
+    );
+  });
   next();
 });
 
@@ -79,6 +89,12 @@ app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
 // ─── Start Server ─────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
+  if (RAW_CRON_SECRET && RAW_CRON_SECRET !== CRON_SECRET) {
+    console.warn(
+      "[Config] CRON_SECRET contains leading/trailing spaces. It has been trimmed for comparison.",
+    );
+  }
+
   console.log(`
 ╔════════════════════════════════════════════════════════════╗
 ║           CopyTrade Backend Server                         ║
@@ -86,6 +102,7 @@ app.listen(PORT, () => {
 ║  Port:        ${PORT.toString().padEnd(45)}║
 ║  Frontend:    ${FRONTEND_URL.padEnd(45)}║
 ║  Environment: ${(process.env.NODE_ENV || "development").padEnd(45)}║
+║  Cron Auth:   ${(CRON_AUTH_ENABLED ? "enabled" : "disabled (CRON_SECRET not set)").padEnd(45)}║
 ╚════════════════════════════════════════════════════════════╝
   `);
 });
