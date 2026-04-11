@@ -17,6 +17,8 @@ interface Stats {
 interface Position {
   _id?: string;
   id?: number;
+  accountId?: string;
+  channelId?: string;
   symbol: string;
   side: string;
   entryPrice: number;
@@ -372,6 +374,16 @@ export default function Dashboard() {
   const displayAccountInfo = displayAccount?.account || data?.account || null;
   const displayExchangeError =
     displayAccount?.exchangeError || data?.exchangeError || null;
+  const openPositions =
+    data?.openPositions?.filter(
+      (pos) =>
+        selectedAccountId === "all" || pos.accountId === selectedAccountId,
+    ) || [];
+  const pendingPositions =
+    data?.pendingPositions?.filter(
+      (pos) =>
+        selectedAccountId === "all" || pos.accountId === selectedAccountId,
+    ) || [];
 
   return (
     <div className="min-h-screen">
@@ -690,11 +702,11 @@ export default function Dashboard() {
         </div>
 
         {/* Open Positions Summary */}
-        {data?.openPositions && data.openPositions.length > 0 && (
+        {openPositions.length > 0 && (
           <div className="card">
             <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
               <span className="w-2 h-2 bg-success rounded-full pulse-dot" />
-              Active Positions ({data.openPositions.length})
+              Active Positions ({openPositions.length})
             </h2>
             <div className="overflow-x-auto">
               <table className="data-table">
@@ -712,7 +724,7 @@ export default function Dashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {data.openPositions.map((pos) => (
+                  {openPositions.map((pos) => (
                     <tr key={pos._id || pos.id}>
                       <td className="font-medium">{pos.symbol}</td>
                       <td>
@@ -755,13 +767,13 @@ export default function Dashboard() {
         )}
 
         {/* Pending Limit Orders */}
-        {data?.pendingPositions && data.pendingPositions.length > 0 && (
+        {pendingPositions.length > 0 && (
           <div className="card border-amber-700/30">
             <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
               <span className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" />
               <span className="text-amber-400">Pending Limit Orders</span>
               <span className="text-sm font-normal text-slate-400">
-                ({data.pendingPositions.length} waiting to fill)
+                ({pendingPositions.length} waiting to fill)
               </span>
             </h2>
             <div className="overflow-x-auto">
@@ -780,7 +792,7 @@ export default function Dashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {data.pendingPositions.map((pos) => (
+                  {pendingPositions.map((pos) => (
                     <tr key={pos._id || pos.id} className="opacity-80">
                       <td className="font-medium">{pos.symbol}</td>
                       <td>
@@ -1952,9 +1964,49 @@ function PositionsTab({
   const [totalCount, setTotalCount] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [positionFilter, setPositionFilter] = useState<"open" | "closed">(
-    "open",
-  );
+  const [positionFilter, setPositionFilter] = useState<
+    "open" | "closed" | "pending"
+  >("open");
+  const [statusCounts, setStatusCounts] = useState<{
+    open: number;
+    closed: number;
+    pending: number;
+  }>({
+    open: 0,
+    closed: 0,
+    pending: 0,
+  });
+
+  const fetchStatusCounts = useCallback(async () => {
+    try {
+      const statuses: Array<"open" | "closed" | "pending"> = [
+        "open",
+        "closed",
+        "pending",
+      ];
+      const countPromises = statuses.map(async (status) => {
+        const params = new URLSearchParams({
+          page: "1",
+          limit: "1",
+          status,
+        });
+        if (channelIdFilter !== "all") params.set("channelId", channelIdFilter);
+        if (accountIdFilter !== "all") params.set("accountId", accountIdFilter);
+        const res = await fetch(`/api/positions?${params}`);
+        const json = await res.json();
+        return [status, json?.success ? (json.data?.totalCount ?? 0) : 0] as const;
+      });
+
+      const counts = await Promise.all(countPromises);
+      setStatusCounts({
+        open: counts.find(([status]) => status === "open")?.[1] || 0,
+        closed: counts.find(([status]) => status === "closed")?.[1] || 0,
+        pending: counts.find(([status]) => status === "pending")?.[1] || 0,
+      });
+    } catch {
+      // Keep previous counts if count fetch fails.
+    }
+  }, [channelIdFilter, accountIdFilter]);
 
   const fetchPositions = useCallback(async () => {
     setLoading(true);
@@ -1982,7 +2034,12 @@ function PositionsTab({
   }, [fetchPositions]);
 
   useEffect(() => {
+    fetchStatusCounts();
+  }, [fetchStatusCounts]);
+
+  useEffect(() => {
     fetchPositions();
+    fetchStatusCounts();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshKey]);
 
@@ -1995,15 +2052,6 @@ function PositionsTab({
       <div className="text-center py-8 text-slate-400">
         <div className="spinner mx-auto mb-3" />
         <p>Loading positions...</p>
-      </div>
-    );
-  }
-
-  if (!loading && totalCount === 0) {
-    return (
-      <div className="text-center py-8 text-slate-400">
-        <div className="text-4xl mb-2">📭</div>
-        <p>No positions yet.</p>
       </div>
     );
   }
@@ -2028,7 +2076,7 @@ function PositionsTab({
                 : "bg-slate-700 text-slate-400"
             }`}
           >
-            {totalCount}
+            {statusCounts.open}
           </span>
         </button>
         <button
@@ -2047,12 +2095,34 @@ function PositionsTab({
                 : "bg-slate-700 text-slate-400"
             }`}
           >
-            {/* closed count not shown here since we filter server-side */}
+            {statusCounts.closed}
+          </span>
+        </button>
+        <button
+          onClick={() => setPositionFilter("pending")}
+          className={`px-4 py-2 text-xs sm:text-sm font-medium border-b-2 transition flex items-center gap-1.5 whitespace-nowrap ${
+            positionFilter === "pending"
+              ? "border-amber-500 text-amber-400"
+              : "border-transparent text-slate-400 hover:text-slate-300"
+          }`}
+        >
+          ⏳ Pending
+          <span
+            className={`text-xs font-bold px-1.5 py-0.5 rounded-full ${
+              positionFilter === "pending"
+                ? "bg-amber-600/30 text-amber-300"
+                : "bg-slate-700 text-slate-400"
+            }`}
+          >
+            {statusCounts.pending}
           </span>
         </button>
         <div className="flex-1" />
         <button
-          onClick={() => fetchPositions()}
+          onClick={() => {
+            fetchPositions();
+            fetchStatusCounts();
+          }}
           disabled={loading}
           className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-slate-700 text-slate-300 hover:bg-slate-700 disabled:opacity-40 transition mb-1"
         >
@@ -2063,12 +2133,18 @@ function PositionsTab({
       {positions.length === 0 ? (
         <div className="text-center py-8 text-slate-400">
           <div className="text-4xl mb-2">
-            {positionFilter === "open" ? "📭" : "📋"}
+            {positionFilter === "open"
+              ? "📭"
+              : positionFilter === "closed"
+                ? "📋"
+                : "⏳"}
           </div>
           <p>
             {positionFilter === "open"
               ? "No open positions."
-              : "No closed positions yet."}
+              : positionFilter === "closed"
+                ? "No closed positions yet."
+                : "No pending limit orders."}
           </p>
         </div>
       ) : (
@@ -2084,13 +2160,17 @@ function PositionsTab({
                 <th>Leverage</th>
                 <th>PnL</th>
                 {positionFilter === "closed" && <th>Close Reason</th>}
+                {positionFilter === "pending" && <th>Status</th>}
                 <th>Opened</th>
                 {positionFilter === "closed" && <th>Closed</th>}
               </tr>
             </thead>
             <tbody>
               {positions.map((pos) => (
-                <tr key={pos._id || pos.id}>
+                <tr
+                  key={pos._id || pos.id}
+                  className={positionFilter === "pending" ? "opacity-80" : ""}
+                >
                   <td className="font-medium">{pos.symbol}</td>
                   <td>
                     <span
@@ -2114,6 +2194,14 @@ function PositionsTab({
                   {positionFilter === "closed" && (
                     <td className="text-xs text-slate-400">
                       {pos.closeReason || "-"}
+                    </td>
+                  )}
+                  {positionFilter === "pending" && (
+                    <td>
+                      <span className="inline-flex items-center gap-1.5 badge badge-warning">
+                        <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" />
+                        Pending
+                      </span>
                     </td>
                   )}
                   <td className="text-xs text-slate-400">
