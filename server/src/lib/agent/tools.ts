@@ -26,10 +26,19 @@ import {
   getRecentLogs,
   getAllPositions,
   getAllDiscordSources,
+  Account,
 } from "@copytrade/shared/lib/database";
-import { ExchangeFactory } from "@copytrade/shared/lib/exchange/ExchangeFactory";
+import {
+  ExchangeFactory,
+  type ExchangeProvider,
+  type ExchangeCredentials,
+} from "@copytrade/shared/lib/exchange/ExchangeFactory";
+import type { ExchangeClient } from "@copytrade/shared/lib/exchange/types";
 import { calculateRisk } from "@copytrade/shared/lib/risk-calc";
 import { getRiskConfig } from "@copytrade/shared/lib/risk";
+import { SourceFactory } from "@copytrade/shared/lib/source/SourceFactory";
+import { SourceType } from "@copytrade/shared/lib/enums";
+import type { BaseSourceConfig } from "@copytrade/shared/lib/source/types";
 
 /** Round a number to 2 decimal places (e.g., 62333.333333 → 62333.34) */
 function roundPrice(price: number): number {
@@ -59,6 +68,142 @@ function getErrorMessage(data: unknown): string | undefined {
   return typeof errorValue === "string" ? errorValue : undefined;
 }
 
+type ToolArgs = Record<string, unknown>;
+
+type AccountRecord = {
+  _id: unknown;
+  name: string;
+  isActive: boolean;
+  sourceType?: string;
+  sourceData?: Record<string, unknown> | null;
+  channelIds?: string[];
+  channelNames?: Map<string, string> | Record<string, string>;
+  tradingPlatform?: string | null;
+  exchangeData?: Record<string, unknown> | null;
+  lastFetchedAt?: Date | null;
+  lastError?: string | null;
+  createdAt?: Date;
+};
+
+interface ExchangeContext {
+  exchange: ExchangeClient;
+  accountId: string;
+  accountName: string;
+  provider: ExchangeProvider;
+}
+
+function getAccountIdFromArgs(args: ToolArgs): string | undefined {
+  const accountId = args.accountId;
+  if (typeof accountId !== "string") return undefined;
+  const trimmed = accountId.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizeExchangeProvider(value: unknown): ExchangeProvider | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized === "okx" ||
+    normalized === "binance" ||
+    normalized === "mexc" ||
+    normalized === "paper"
+  ) {
+    return normalized;
+  }
+  return null;
+}
+
+function toExchangeCredentials(account: AccountRecord): ExchangeCredentials {
+  const provider = normalizeExchangeProvider(account.tradingPlatform);
+  if (!provider) {
+    throw new Error(
+      `Account "${account.name}" (${String(account._id)}) does not have a valid tradingPlatform`,
+    );
+  }
+
+  const exchangeData = (account.exchangeData || {}) as Record<string, unknown>;
+
+  return {
+    provider,
+    apiKey:
+      typeof exchangeData.apiKey === "string" ? exchangeData.apiKey : undefined,
+    secretKey:
+      typeof exchangeData.secretKey === "string"
+        ? exchangeData.secretKey
+        : undefined,
+    passphrase:
+      typeof exchangeData.passphrase === "string"
+        ? exchangeData.passphrase
+        : undefined,
+    simulated:
+      typeof exchangeData.simulated === "boolean"
+        ? exchangeData.simulated
+        : undefined,
+  };
+}
+
+function getSourceConfigForAccount(account: AccountRecord): BaseSourceConfig {
+  return {
+    _id: String(account._id),
+    name: account.name,
+    type: (account.sourceType as SourceType) || SourceType.DISCORD,
+    channelIds: Array.isArray(account.channelIds) ? account.channelIds : [],
+    ...((account.sourceData as Record<string, unknown>) || {}),
+  };
+}
+
+async function resolveExchangeContext(args: ToolArgs = {}): Promise<ExchangeContext> {
+  await connectDB();
+  const requestedAccountId = getAccountIdFromArgs(args);
+
+  let selectedAccount: AccountRecord | null = null;
+
+  if (requestedAccountId) {
+    selectedAccount = (await Account.findById(requestedAccountId)
+      .lean()
+      .exec()) as AccountRecord | null;
+
+    if (!selectedAccount) {
+      throw new Error(`Trading account not found: ${requestedAccountId}`);
+    }
+  } else {
+    const candidates = (await Account.find({ isActive: true })
+      .sort({ createdAt: 1 })
+      .lean()
+      .exec()) as AccountRecord[];
+    const tradable = candidates.filter((acc) =>
+      Boolean(normalizeExchangeProvider(acc.tradingPlatform)),
+    );
+
+    if (tradable.length === 0) {
+      throw new Error(
+        "No active trading accounts found. Configure an account with tradingPlatform first.",
+      );
+    }
+
+    if (tradable.length > 1) {
+      const accountList = tradable
+        .map((acc) => `${acc.name} (${String(acc._id)})`)
+        .join(", ");
+      throw new Error(
+        `Multiple trading accounts are active. Pass accountId in tool args. Available: ${accountList}`,
+      );
+    }
+
+    selectedAccount = tradable[0];
+  }
+
+  const credentials = toExchangeCredentials(selectedAccount);
+  const exchange = ExchangeFactory.getClientForAccount(credentials);
+
+  return {
+    exchange,
+    provider: credentials.provider,
+    accountId: String(selectedAccount._id),
+    accountName: selectedAccount.name,
+  };
+}
+
 // ==================== Tool Definitions ====================
 
 export const agentTools: OpenAI.ChatCompletionTool[] = [
@@ -66,10 +211,29 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "get_trading_accounts",
+      description:
+        "List all active trading accounts from the Account table. Use this first when multiple accounts exist, then pass accountId to exchange tools.",
+      parameters: { type: "object", properties: {}, required: [] },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "get_account_info",
       description:
-        "Get exchange account info. Returns JSON: { provider: string ('okx'|'binance'|'mexc'|'paper'), totalBalance: number (total equity in USDT), availableBalance: number (free margin in USDT), unrealizedPnl: number (unrealized profit/loss) }. Use this first to understand the account state before trading.",
-      parameters: { type: "object", properties: {}, required: [] },
+        "Get exchange account info for a trading account. Returns JSON: { provider: string ('okx'|'binance'|'mexc'|'paper'), totalBalance: number, availableBalance: number, unrealizedPnl: number, accountId: string, accountName: string }. If multiple trading accounts exist, pass accountId.",
+      parameters: {
+        type: "object",
+        properties: {
+          accountId: {
+            type: "string",
+            description:
+              "Optional trading account ID from get_trading_accounts. Required when multiple accounts are active.",
+          },
+        },
+        required: [],
+      },
     },
   },
   {
@@ -81,6 +245,11 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
       parameters: {
         type: "object",
         properties: {
+          accountId: {
+            type: "string",
+            description:
+              "Optional trading account ID from get_trading_accounts.",
+          },
           symbol: {
             type: "string",
             description:
@@ -106,7 +275,17 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
       name: "get_exchange_positions",
       description:
         "Get real-time positions directly from the EXCHANGE API (not database). Returns JSON array: [{ symbol: string (e.g., 'BTC-USDT-SWAP'), side: string ('LONG'|'SHORT'), entryPrice: number, quantity: number, leverage: number, margin: number (margin used in USDT), unrealizedPnl: number (unrealized profit/loss in USDT), liquidationPrice: number|null, markPrice: number }]. Use this to verify the actual exchange state — may differ from database.",
-      parameters: { type: "object", properties: {}, required: [] },
+      parameters: {
+        type: "object",
+        properties: {
+          accountId: {
+            type: "string",
+            description:
+              "Optional trading account ID from get_trading_accounts.",
+          },
+        },
+        required: [],
+      },
     },
   },
 
@@ -116,10 +295,15 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "place_order",
       description:
-        "Place a market or limit order on the exchange. ⚠️ EXECUTES REAL TRADES — use with caution! Always check account balance and current positions first. The exchange is determined by EXCHANGE_PROVIDER env var (OKX/MEXC/Paper).",
+        "Place a market or limit order on the selected account exchange. ⚠️ EXECUTES REAL TRADES — use with caution! If multiple trading accounts exist, pass accountId.",
       parameters: {
         type: "object",
         properties: {
+          accountId: {
+            type: "string",
+            description:
+              "Optional trading account ID from get_trading_accounts.",
+          },
           symbol: {
             type: "string",
             description:
@@ -166,6 +350,11 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
       parameters: {
         type: "object",
         properties: {
+          accountId: {
+            type: "string",
+            description:
+              "Optional trading account ID from get_trading_accounts.",
+          },
           symbol: {
             type: "string",
             description:
@@ -187,7 +376,17 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
       name: "close_all_positions",
       description:
         "Close ALL open positions on the exchange at once. Returns JSON: { results: [{ symbol, side, success, error? }] }. ⚠️ EXTREME CAUTION — this closes every position with market orders!",
-      parameters: { type: "object", properties: {}, required: [] },
+      parameters: {
+        type: "object",
+        properties: {
+          accountId: {
+            type: "string",
+            description:
+              "Optional trading account ID from get_trading_accounts.",
+          },
+        },
+        required: [],
+      },
     },
   },
   {
@@ -199,6 +398,11 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
       parameters: {
         type: "object",
         properties: {
+          accountId: {
+            type: "string",
+            description:
+              "Optional trading account ID from get_trading_accounts.",
+          },
           symbol: {
             type: "string",
             description:
@@ -223,6 +427,11 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
       parameters: {
         type: "object",
         properties: {
+          accountId: {
+            type: "string",
+            description:
+              "Optional trading account ID from get_trading_accounts.",
+          },
           symbol: {
             type: "string",
             description:
@@ -269,6 +478,11 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
       parameters: {
         type: "object",
         properties: {
+          accountId: {
+            type: "string",
+            description:
+              "Optional trading account ID from get_trading_accounts.",
+          },
           symbol: {
             type: "string",
             description:
@@ -316,6 +530,11 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
       parameters: {
         type: "object",
         properties: {
+          accountId: {
+            type: "string",
+            description:
+              "Optional trading account ID from get_trading_accounts.",
+          },
           symbol: {
             type: "string",
             description:
@@ -346,6 +565,11 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
       parameters: {
         type: "object",
         properties: {
+          accountId: {
+            type: "string",
+            description:
+              "Optional trading account ID from get_trading_accounts.",
+          },
           symbol: {
             type: "string",
             description:
@@ -365,6 +589,11 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
       parameters: {
         type: "object",
         properties: {
+          accountId: {
+            type: "string",
+            description:
+              "Optional trading account ID from get_trading_accounts.",
+          },
           orderId: {
             type: "string",
             description: "The orderId from get_open_orders to cancel",
@@ -388,6 +617,11 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
       parameters: {
         type: "object",
         properties: {
+          accountId: {
+            type: "string",
+            description:
+              "Optional trading account ID from get_trading_accounts.",
+          },
           symbol: {
             type: "string",
             description:
@@ -407,6 +641,11 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
       parameters: {
         type: "object",
         properties: {
+          accountId: {
+            type: "string",
+            description:
+              "Optional trading account ID from get_trading_accounts.",
+          },
           symbol: {
             type: "string",
             description:
@@ -426,6 +665,11 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
       parameters: {
         type: "object",
         properties: {
+          accountId: {
+            type: "string",
+            description:
+              "Optional trading account ID from get_trading_accounts.",
+          },
           symbol: {
             type: "string",
             description:
@@ -445,6 +689,11 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
       parameters: {
         type: "object",
         properties: {
+          accountId: {
+            type: "string",
+            description:
+              "Optional trading account ID from get_trading_accounts.",
+          },
           symbol: {
             type: "string",
             description:
@@ -490,6 +739,11 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
       parameters: {
         type: "object",
         properties: {
+          accountId: {
+            type: "string",
+            description:
+              "Optional trading account ID from get_trading_accounts.",
+          },
           symbol: {
             type: "string",
             description:
@@ -535,6 +789,11 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
       parameters: {
         type: "object",
         properties: {
+          accountId: {
+            type: "string",
+            description:
+              "Optional trading account ID from get_trading_accounts.",
+          },
           symbol: {
             type: "string",
             description:
@@ -635,6 +894,34 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
       description:
         "Manually trigger a signal check cycle: fetches latest Discord messages from all active sources, runs AI analysis to detect trading signals, then either creates draft trades (manual mode) or executes trades directly (auto mode). Returns JSON: { checked: number, signals: number, executed: number, drafts: number, errors: string[] }.",
       parameters: { type: "object", properties: {}, required: [] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_telegram_sources",
+      description:
+        "Get all configured Telegram source accounts from Account settings. Returns JSON array with accountId, name, channelIds, isActive, lastFetchedAt, and lastError.",
+      parameters: { type: "object", properties: {}, required: [] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "check_telegram_source_health",
+      description:
+        "Check Telegram source credential health. If accountId is omitted, checks all Telegram accounts.",
+      parameters: {
+        type: "object",
+        properties: {
+          accountId: {
+            type: "string",
+            description:
+              "Optional Telegram account ID from get_telegram_sources.",
+          },
+        },
+        required: [],
+      },
     },
   },
 
@@ -751,6 +1038,11 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
       parameters: {
         type: "object",
         properties: {
+          accountId: {
+            type: "string",
+            description:
+              "Optional trading account ID from get_trading_accounts.",
+          },
           entryPrice: {
             type: "number",
             description:
@@ -781,20 +1073,55 @@ type ToolExecutor = (args: Record<string, unknown>) => Promise<string>;
 export const toolImplementations: Record<string, ToolExecutor> = {
   // ─── Account & Market ──────────────────────────────────────────
 
-  get_account_info: async () => {
+  get_trading_accounts: async () => {
     await connectDB();
-    const exchange = ExchangeFactory.getClient();
-    const info = await exchange.getAccountInfo();
-    const provider = ExchangeFactory.getProviderName();
+    const accounts = (await Account.find({ isActive: true })
+      .sort({ createdAt: 1 })
+      .lean()
+      .exec()) as AccountRecord[];
+
+    const tradingAccounts = accounts
+      .filter((acc) => Boolean(normalizeExchangeProvider(acc.tradingPlatform)))
+      .map((acc) => {
+        const provider = normalizeExchangeProvider(acc.tradingPlatform);
+        const exchangeData = (acc.exchangeData || {}) as Record<string, unknown>;
+        const hasCredentials =
+          provider === "paper"
+            ? true
+            : Boolean(
+                typeof exchangeData.apiKey === "string" &&
+                  exchangeData.apiKey &&
+                  typeof exchangeData.secretKey === "string" &&
+                  exchangeData.secretKey,
+              );
+
+        return {
+          accountId: String(acc._id),
+          name: acc.name,
+          provider,
+          sourceType: acc.sourceType,
+          channelIds: Array.isArray(acc.channelIds) ? acc.channelIds : [],
+          hasCredentials,
+        };
+      });
+
+    return JSON.stringify(tradingAccounts);
+  },
+
+  get_account_info: async (args) => {
+    const ctx = await resolveExchangeContext(args);
+    const info = await ctx.exchange.getAccountInfo();
     return JSON.stringify({
-      provider,
+      provider: ctx.provider,
+      accountId: ctx.accountId,
+      accountName: ctx.accountName,
       ...info,
     });
   },
 
   get_ticker_price: async (args) => {
     const symbol = args.symbol as string;
-    const exchange = ExchangeFactory.getClient();
+    const { exchange } = await resolveExchangeContext(args);
     const price = await exchange.getTickerPrice(symbol);
     return JSON.stringify({ symbol, price });
   },
@@ -820,8 +1147,8 @@ export const toolImplementations: Record<string, ToolExecutor> = {
     );
   },
 
-  get_exchange_positions: async () => {
-    const exchange = ExchangeFactory.getClient();
+  get_exchange_positions: async (args) => {
+    const { exchange } = await resolveExchangeContext(args);
     const positions = await exchange.getOpenPositions();
     return JSON.stringify(
       positions.map((p) => ({
@@ -849,7 +1176,7 @@ export const toolImplementations: Record<string, ToolExecutor> = {
       price?: number;
       leverage?: number;
     };
-    const exchange = ExchangeFactory.getClient();
+    const { exchange } = await resolveExchangeContext(args);
 
     if (leverage) {
       try {
@@ -875,7 +1202,7 @@ export const toolImplementations: Record<string, ToolExecutor> = {
       symbol: string;
       quantity?: number;
     };
-    const exchange = ExchangeFactory.getClient();
+    const { exchange } = await resolveExchangeContext(args);
     await exchange.closePosition(symbol, undefined, quantity);
     return JSON.stringify({
       success: true,
@@ -884,8 +1211,8 @@ export const toolImplementations: Record<string, ToolExecutor> = {
     });
   },
 
-  close_all_positions: async () => {
-    const exchange = ExchangeFactory.getClient();
+  close_all_positions: async (args) => {
+    const { exchange } = await resolveExchangeContext(args);
     const result = await exchange.closeAllPositions();
     return JSON.stringify(result);
   },
@@ -895,7 +1222,7 @@ export const toolImplementations: Record<string, ToolExecutor> = {
       symbol: string;
       leverage: number;
     };
-    const exchange = ExchangeFactory.getClient();
+    const { exchange } = await resolveExchangeContext(args);
     await exchange.setLeverage(symbol, leverage);
     return JSON.stringify({ success: true, symbol, leverage });
   },
@@ -908,7 +1235,7 @@ export const toolImplementations: Record<string, ToolExecutor> = {
       side: "BUY" | "SELL";
       quantity: number;
     };
-    const exchange = ExchangeFactory.getClient();
+    const { exchange } = await resolveExchangeContext(args);
     const roundedTrigger = roundPrice(triggerPrice);
     const roundedExecute = roundPrice(executePrice);
     const id = await exchange.placeStopLoss(
@@ -934,7 +1261,7 @@ export const toolImplementations: Record<string, ToolExecutor> = {
       side: "BUY" | "SELL";
       quantity: number;
     };
-    const exchange = ExchangeFactory.getClient();
+    const { exchange } = await resolveExchangeContext(args);
     const roundedTrigger = roundPrice(triggerPrice);
     const roundedExecute = roundPrice(executePrice);
     const id = await exchange.placeTakeProfit(
@@ -958,7 +1285,7 @@ export const toolImplementations: Record<string, ToolExecutor> = {
       interval?: string;
       limit?: number;
     };
-    const exchange = ExchangeFactory.getClient();
+    const { exchange } = await resolveExchangeContext(args);
     const klines = await exchange.getKlines(
       symbol,
       interval || "1h",
@@ -971,7 +1298,7 @@ export const toolImplementations: Record<string, ToolExecutor> = {
 
   get_open_orders: async (args) => {
     const { symbol } = args as { symbol?: string };
-    const exchange = ExchangeFactory.getClient();
+    const { exchange } = await resolveExchangeContext(args);
     const orders = await exchange.getOpenOrders(symbol);
     return JSON.stringify(orders);
   },
@@ -981,14 +1308,14 @@ export const toolImplementations: Record<string, ToolExecutor> = {
       orderId: string;
       symbol: string;
     };
-    const exchange = ExchangeFactory.getClient();
+    const { exchange } = await resolveExchangeContext(args);
     const success = await exchange.cancelOrder(orderId, symbol);
     return JSON.stringify({ success, orderId, symbol });
   },
 
   cancel_all_orders: async (args) => {
     const { symbol } = args as { symbol?: string };
-    const exchange = ExchangeFactory.getClient();
+    const { exchange } = await resolveExchangeContext(args);
     const orders = await exchange.getOpenOrders(symbol);
     const results: {
       orderId: string;
@@ -1025,14 +1352,14 @@ export const toolImplementations: Record<string, ToolExecutor> = {
 
   get_algo_orders: async (args) => {
     const { symbol } = args as { symbol?: string };
-    const exchange = ExchangeFactory.getClient();
+    const { exchange } = await resolveExchangeContext(args);
     const orders = await exchange.getAlgoOrders(symbol);
     return JSON.stringify(orders);
   },
 
   cancel_algo_orders: async (args) => {
     const { symbol } = args as { symbol: string };
-    const exchange = ExchangeFactory.getClient();
+    const { exchange } = await resolveExchangeContext(args);
     const result = await exchange.cancelAlgoOrders(symbol);
     return JSON.stringify(result);
   },
@@ -1046,7 +1373,7 @@ export const toolImplementations: Record<string, ToolExecutor> = {
         side: "BUY" | "SELL";
         quantity: number;
       };
-    const exchange = ExchangeFactory.getClient();
+    const { exchange } = await resolveExchangeContext(args);
     const roundedTrigger = roundPrice(newTriggerPrice);
     const roundedExecute = roundPrice(newExecutePrice);
 
@@ -1084,7 +1411,7 @@ export const toolImplementations: Record<string, ToolExecutor> = {
         side: "BUY" | "SELL";
         quantity: number;
       };
-    const exchange = ExchangeFactory.getClient();
+    const { exchange } = await resolveExchangeContext(args);
     const roundedTrigger = roundPrice(newTriggerPrice);
     const roundedExecute = roundPrice(newExecutePrice);
 
@@ -1118,7 +1445,7 @@ export const toolImplementations: Record<string, ToolExecutor> = {
       symbol?: string;
       limit?: number;
     };
-    const exchange = ExchangeFactory.getClient();
+    const { exchange } = await resolveExchangeContext(args);
     const orders = await exchange.getOrderHistory(symbol, limit || 20);
     return JSON.stringify(orders);
   },
@@ -1310,6 +1637,68 @@ export const toolImplementations: Record<string, ToolExecutor> = {
     return JSON.stringify(data);
   },
 
+  get_telegram_sources: async () => {
+    await connectDB();
+    const telegramAccounts = (await Account.find({
+      sourceType: SourceType.TELEGRAM,
+    })
+      .sort({ createdAt: 1 })
+      .lean()
+      .exec()) as AccountRecord[];
+
+    return JSON.stringify(
+      telegramAccounts.map((acc) => ({
+        accountId: String(acc._id),
+        name: acc.name,
+        channelIds: Array.isArray(acc.channelIds) ? acc.channelIds : [],
+        isActive: acc.isActive,
+        lastFetchedAt: acc.lastFetchedAt || null,
+        lastError: acc.lastError || null,
+      })),
+    );
+  },
+
+  check_telegram_source_health: async (args) => {
+    await connectDB();
+    const requestedAccountId = getAccountIdFromArgs(args);
+    const filter = requestedAccountId
+      ? { _id: requestedAccountId, sourceType: SourceType.TELEGRAM }
+      : { sourceType: SourceType.TELEGRAM };
+
+    const telegramAccounts = (await Account.find(filter)
+      .sort({ createdAt: 1 })
+      .lean()
+      .exec()) as AccountRecord[];
+
+    if (telegramAccounts.length === 0) {
+      return JSON.stringify({
+        success: false,
+        error: requestedAccountId
+          ? `Telegram account not found: ${requestedAccountId}`
+          : "No Telegram accounts found",
+      });
+    }
+
+    const provider = SourceFactory.getTelegramProvider();
+    const results = [];
+
+    for (const account of telegramAccounts) {
+      const sourceConfig = getSourceConfigForAccount(account);
+      const health = await provider.checkHealth(sourceConfig);
+      results.push({
+        accountId: String(account._id),
+        name: account.name,
+        health,
+      });
+    }
+
+    return JSON.stringify({
+      success: true,
+      checked: results.length,
+      results,
+    });
+  },
+
   // ─── Database & Logs ───────────────────────────────────────────
 
   get_stats: async () => {
@@ -1392,7 +1781,8 @@ export const toolImplementations: Record<string, ToolExecutor> = {
     };
     await connectDB();
     const riskConfig = await getRiskConfig();
-    const exchange = ExchangeFactory.getClient();
+    const ctx = await resolveExchangeContext(args);
+    const exchange = ctx.exchange;
     const account = await exchange.getAccountInfo();
 
     const result = calculateRisk({
@@ -1410,6 +1800,9 @@ export const toolImplementations: Record<string, ToolExecutor> = {
       stopLossPrice: roundPrice(stopLossPrice),
       ...result,
       accountBalance: account.availableBalance || account.totalBalance,
+      provider: ctx.provider,
+      accountId: ctx.accountId,
+      accountName: ctx.accountName,
     });
   },
 };
