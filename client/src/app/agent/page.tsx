@@ -25,6 +25,10 @@ interface ChatMessage {
 
 // ==================== Component ====================
 
+const AGENT_API_URL = `${(
+  process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3001"
+).replace(/\/+$/, "")}/api/agent`;
+
 export default function AgentChatPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -90,7 +94,7 @@ export default function AgentChatPage() {
         content: m.content,
       }));
 
-      const res = await fetch("/api/agent", {
+      const res = await fetch(AGENT_API_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: trimmed, history }),

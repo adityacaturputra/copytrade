@@ -36,6 +36,29 @@ function roundPrice(price: number): number {
   return Math.round(price * 100) / 100;
 }
 
+function getFrontendBaseUrl(): string {
+  return (process.env.FRONTEND_URL || "http://localhost:3000").replace(
+    /\/+$/,
+    "",
+  );
+}
+
+function getBackendBaseUrl(): string {
+  return (
+    process.env.BACKEND_URL ||
+    `http://localhost:${process.env.PORT || "3001"}`
+  ).replace(/\/+$/, "");
+}
+
+function getErrorMessage(data: unknown): string | undefined {
+  if (!data || typeof data !== "object" || !("error" in data)) {
+    return undefined;
+  }
+
+  const errorValue = (data as { error?: unknown }).error;
+  return typeof errorValue === "string" ? errorValue : undefined;
+}
+
 // ==================== Tool Definitions ====================
 
 export const agentTools: OpenAI.ChatCompletionTool[] = [
@@ -1137,7 +1160,7 @@ export const toolImplementations: Record<string, ToolExecutor> = {
       });
     }
 
-    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
+    const baseUrl = getFrontendBaseUrl();
     const res = await fetch(`${baseUrl}/api/drafts/${draftId}/accept`, {
       method: "POST",
     });
@@ -1156,7 +1179,7 @@ export const toolImplementations: Record<string, ToolExecutor> = {
       });
     }
 
-    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
+    const baseUrl = getFrontendBaseUrl();
     const res = await fetch(`${baseUrl}/api/drafts/${draftId}/reject`, {
       method: "POST",
     });
@@ -1175,7 +1198,7 @@ export const toolImplementations: Record<string, ToolExecutor> = {
       });
     }
 
-    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
+    const baseUrl = getFrontendBaseUrl();
     const results: { id: string; success: boolean; error?: string }[] = [];
 
     for (const draft of drafts) {
@@ -1187,7 +1210,7 @@ export const toolImplementations: Record<string, ToolExecutor> = {
         results.push({
           id: String(draft._id),
           success: res.ok,
-          error: data.error,
+          error: getErrorMessage(data),
         });
       } catch (err) {
         results.push({
@@ -1220,7 +1243,7 @@ export const toolImplementations: Record<string, ToolExecutor> = {
       });
     }
 
-    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
+    const baseUrl = getFrontendBaseUrl();
     const results: { id: string; success: boolean; error?: string }[] = [];
 
     for (const draft of drafts) {
@@ -1232,7 +1255,7 @@ export const toolImplementations: Record<string, ToolExecutor> = {
         results.push({
           id: String(draft._id),
           success: res.ok,
-          error: data.error,
+          error: getErrorMessage(data),
         });
       } catch (err) {
         results.push({
@@ -1273,9 +1296,15 @@ export const toolImplementations: Record<string, ToolExecutor> = {
   },
 
   check_signal_now: async () => {
-    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
+    const baseUrl = getBackendBaseUrl();
+    const cronSecret = process.env.CRON_SECRET?.trim();
+    const headers: Record<string, string> = {};
+    if (cronSecret) {
+      headers.authorization = `Bearer ${cronSecret}`;
+    }
     const res = await fetch(`${baseUrl}/api/cron/signal-check`, {
       method: "POST",
+      headers,
     });
     const data = await res.json();
     return JSON.stringify(data);

@@ -10,6 +10,7 @@ import dotenv from "dotenv";
 import fs from "fs";
 import path from "path";
 import cronRoutes from "./routes/cron";
+import agentRoutes from "./routes/agent";
 
 // Load environment variables
 const serverDir = path.resolve(__dirname, "..");
@@ -76,6 +77,7 @@ app.get("/health", (req: Request, res: Response) => {
 
 // Mount cron routes at /api/cron
 app.use("/api/cron", cronRoutes);
+app.use("/api/agent", agentRoutes);
 
 // ─── Error Handling ───────────────────────────────────────────────────────────
 
