@@ -1,60 +1,12 @@
 import { getSignalConfig } from "../signal-config";
 import { getCodexPatunginConfig } from "./CodexPatunginConfig";
-import { VisionExtractionResult } from "./GeminiVisionAnalyzer";
+import { buildVisionExtractionPrompt } from "./PromptFactory";
+import {
+  parseVisionExtractionResponse,
+  VisionExtractionResult,
+} from "./AIResponseNormalizer";
 
-const VISION_PROMPT = `You are a trading chart analyst. Analyze this image carefully.
-
-Your task:
-1. Determine if this image is a trading chart that contains signal information (entry, TP, SL price levels).
-2. If it IS a trading signal chart, extract ALL visible price levels and trading details.
-
-Look for:
-- Entry price(s) (often marked with a horizontal line, arrow, or text label)
-- Take Profit / TP levels (target prices, often above entry for longs, below for shorts)
-- Stop Loss / SL level (usually a single price below entry for longs, above for shorts)
-- Direction bias (LONG or SHORT) — look at the overall trade direction indicated
-- Symbol / Pair (e.g., BTCUSDT, ETHUSDT)
-- Any leverage or position size mentioned
-- Any order block, supply/demand zones marked on the chart
-
-IMPORTANT: Read the PRICE AXIS carefully. Look at the numbers on the right or left side of the chart to determine exact price values. Match horizontal lines to their corresponding price levels.
-
-Respond in this EXACT JSON format:
-{
-  "isSignal": true/false,
-  "extractedText": "If isSignal is true, write a clear text summary of ALL extracted trading details including exact prices. Format it like a signal message. If isSignal is false, write an empty string."
-}
-
-Examples of good extractedText:
-- "LONG BTCUSDT | Entry: 67,500 | TP1: 68,500 | TP2: 69,500 | TP3: 70,500 | SL: 66,800 | Leverage: 20x"
-- "SHORT ETHUSDT | Entry: 3,450 - 3,460 | TP1: 3,400 | TP2: 3,350 | SL: 3,520"
-- "LONG SOLUSDT | Entry: 145.50 | TP: 155, 160, 165 | SL: 140 | Leverage: 10x"
-
-If the image is NOT a trading chart (e.g., meme, screenshot of text, random photo), set isSignal to false and extractedText to empty string.
-
-Respond ONLY with the JSON, no additional text.`;
-
-function parseVisionResponse(responseText: string): VisionExtractionResult {
-  try {
-    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      return { isSignal: false, extractedText: "", rawResponse: responseText };
-    }
-
-    const parsed = JSON.parse(jsonMatch[0]) as {
-      isSignal?: boolean;
-      extractedText?: string;
-    };
-
-    return {
-      isSignal: parsed.isSignal === true,
-      extractedText: parsed.extractedText || "",
-      rawResponse: responseText,
-    };
-  } catch {
-    return { isSignal: false, extractedText: "", rawResponse: responseText };
-  }
-}
+const VISION_PROMPT = buildVisionExtractionPrompt();
 
 export class CodexPatunginVisionAnalyzer {
   readonly provider = "patungin" as const;
@@ -111,7 +63,7 @@ export class CodexPatunginVisionAnalyzer {
           response_format: { type: "json_object" },
         });
 
-        return parseVisionResponse(responseText.trim());
+        return parseVisionExtractionResponse(responseText.trim());
       } catch (error: unknown) {
         lastError = error as Error;
         const err = error as { status?: number; message?: string };

@@ -266,7 +266,7 @@ export class PaperExchange implements ExchangeClient {
     leverage: number,
     _marginType?: "isolated" | "cross",
     _side?: "BUY" | "SELL",
-  ): Promise<void> {
+  ): Promise<number> {
     console.log(`📊 [PAPER] Set leverage for ${symbol}: ${leverage}x`);
     // Update existing position if any
     for (const pos of this.positions.values()) {
@@ -274,6 +274,7 @@ export class PaperExchange implements ExchangeClient {
         pos.leverage = leverage;
       }
     }
+    return leverage;
   }
 
   // ─── Stop Loss / Take Profit ──────────────────────────────

@@ -5,6 +5,7 @@ import {
   ExchangeCredentials,
 } from "./exchange/ExchangeFactory";
 import { ExchangeClient } from "./exchange/types";
+import { inspectPendingLimitOrder } from "./pending-order-sync";
 
 /**
  * Resolve the exchange client for a position based on its accountId.
@@ -92,127 +93,57 @@ export async function runPositionMonitor(): Promise<{
 
         for (const position of positions) {
           try {
-            // Check open orders on exchange to see if limit order is still live
-            const openOrders = await exchange.getOpenOrders(position.symbol);
-            const orderStillOpen = openOrders.some(
-              (o) => o.orderId === position.orderId,
-            );
+            const inspection = await inspectPendingLimitOrder(exchange, position);
 
-            if (orderStillOpen) {
-              // Limit order is still waiting — do nothing
+            if (inspection.type === "live") {
               console.log(
-                `⏳ Limit order still pending: ${position.symbol} ${position.side} (orderId: ${position.orderId})`,
+                `⏳ Limit order still pending: ${position.symbol} ${position.side} (${inspection.reason})`,
               );
               continue;
             }
 
-            // Order is no longer in open orders — check order history for fill status
-            const orderHistory = await exchange.getOrderHistory(
-              position.symbol,
-            );
-            const matchingOrder = orderHistory.find(
-              (o) => o.orderId === position.orderId,
-            );
+            if (inspection.type === "cancelled") {
+              position.status = "closed";
+              position.closedAt = new Date();
+              position.closeReason = inspection.reason;
+              await position.save();
 
-            if (matchingOrder) {
-              const orderState =
-                (matchingOrder as any).state || matchingOrder.status;
-              if (
-                orderState === "filled" ||
-                orderState === "partially_filled" ||
-                orderState === "FILLED" ||
-                orderState === "PARTIALLY_FILLED"
-              ) {
-                // Order filled — promote to "open"
-                const oldStatus = position.status;
-                position.status = "open";
-                if (matchingOrder.price && matchingOrder.price > 0) {
-                  position.entryPrice = matchingOrder.price;
-                }
-                await position.save();
-
-                console.log(
-                  `✅ Limit order filled: ${position.symbol} ${position.side} — promoted from ${oldStatus} to open (fillPrice: ${matchingOrder.price})`,
-                );
-
-                await TradeLog.create({
-                  type: "monitor",
-                  action: "limit_filled",
-                  symbol: position.symbol,
-                  details: `Limit order filled on exchange. Promoted to open. Fill price: ${matchingOrder.price}`,
-                  result: "success",
-                });
-
-                result.actions++;
-              } else if (
-                orderState === "cancelled" ||
-                orderState === "canceled" ||
-                orderState === "CANCELLED" ||
-                orderState === "CANCELED"
-              ) {
-                // Order was cancelled — mark as closed
-                position.status = "closed";
-                position.closedAt = new Date();
-                position.closeReason = "Limit order cancelled on exchange";
-                await position.save();
-
-                console.log(
-                  `🚫 Limit order cancelled: ${position.symbol} ${position.side}`,
-                );
-
-                await TradeLog.create({
-                  type: "monitor",
-                  action: "limit_cancelled",
-                  symbol: position.symbol,
-                  details: `Limit order was cancelled on exchange. Marked as closed.`,
-                  result: "success",
-                });
-
-                result.syncedClosed++;
-              } else {
-                console.log(
-                  `ℹ️ Limit order state: ${position.symbol} = ${orderState}`,
-                );
-              }
-            } else {
-              // Order not found in open orders or history — check if position exists
-              const exPositions = await exchange.getOpenPositions();
-              const hasPosition = exPositions.some(
-                (ep) => ep.symbol === position.symbol,
+              console.log(
+                `🚫 Limit order cancelled: ${position.symbol} ${position.side} (${inspection.reason})`,
               );
 
-              if (hasPosition) {
-                // Position exists on exchange — the order was filled
-                position.status = "open";
-                await position.save();
+              await TradeLog.create({
+                type: "monitor",
+                action: "limit_cancelled",
+                symbol: position.symbol,
+                details: inspection.reason,
+                result: "success",
+              });
 
-                console.log(
-                  `✅ Limit order filled (detected via position): ${position.symbol} ${position.side}`,
-                );
-
-                await TradeLog.create({
-                  type: "monitor",
-                  action: "limit_filled",
-                  symbol: position.symbol,
-                  details: `Limit order filled (detected via open position on exchange). Promoted to open.`,
-                  result: "success",
-                });
-
-                result.actions++;
-              } else {
-                // No open order, no history, no position — likely cancelled or expired
-                console.warn(
-                  `⚠️ Limit order not found anywhere: ${position.symbol} — marking as closed`,
-                );
-                position.status = "closed";
-                position.closedAt = new Date();
-                position.closeReason =
-                  "Limit order not found on exchange (likely expired)";
-                await position.save();
-
-                result.syncedClosed++;
-              }
+              result.syncedClosed++;
+              continue;
             }
+
+            const oldStatus = position.status;
+            position.status = "open";
+            if (inspection.fillPrice && inspection.fillPrice > 0) {
+              position.entryPrice = inspection.fillPrice;
+            }
+            await position.save();
+
+            console.log(
+              `✅ Limit order filled: ${position.symbol} ${position.side} — promoted from ${oldStatus} to open (${inspection.reason})`,
+            );
+
+            await TradeLog.create({
+              type: "monitor",
+              action: "limit_filled",
+              symbol: position.symbol,
+              details: `Limit order filled on exchange. Promoted to open. Fill price: ${position.entryPrice}. ${inspection.reason}`,
+              result: "success",
+            });
+
+            result.actions++;
           } catch (pendingErr) {
             const errMsg =
               pendingErr instanceof Error

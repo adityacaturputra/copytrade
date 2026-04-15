@@ -6,6 +6,7 @@ import {
   TradeLog,
   Account,
   getTradingMode,
+  IDraftTrade,
   IPosition,
   ITPTarget,
   buildTPTargets,
@@ -162,6 +163,92 @@ function sanitizeLeverage(
     return isNaN(num) ? null : num;
   }
   return null;
+}
+
+export type SignalExecutionResult =
+  | { type: "opened"; position: IPosition }
+  | { type: "closed"; closedCount: number }
+  | { type: "updated"; code: string; details: string }
+  | { type: "noop"; code: string; details: string }
+  | { type: "skipped"; code: string; reason: string };
+
+export interface DraftExecutionOutcome {
+  status: "accepted" | "rejected";
+  result: "executed" | "updated" | "noop" | "rejected";
+  positionId?: string;
+  message?: string;
+  error?: string;
+}
+
+export function summarizeExecutionForDraft(
+  execution: SignalExecutionResult,
+): DraftExecutionOutcome {
+  if (execution.type === "opened") {
+    return {
+      status: "accepted",
+      result: "executed",
+      positionId: execution.position._id.toString(),
+    };
+  }
+
+  if (execution.type === "updated") {
+    return {
+      status: "accepted",
+      result: "updated",
+      message: execution.details,
+    };
+  }
+
+  if (execution.type === "closed") {
+    return {
+      status: "accepted",
+      result: "updated",
+      message: `Closed ${execution.closedCount} position(s)`,
+    };
+  }
+
+  if (execution.type === "noop") {
+    return {
+      status: "accepted",
+      result: "noop",
+      message: execution.details,
+    };
+  }
+
+  return {
+    status: "rejected",
+    result: "rejected",
+    message: execution.reason,
+    error: execution.reason,
+  };
+}
+
+export async function resolveDraftWithExecution(
+  draft: IDraftTrade,
+  execution: SignalExecutionResult,
+): Promise<DraftExecutionOutcome> {
+  const outcome = summarizeExecutionForDraft(execution);
+  draft.status = outcome.status;
+  draft.resolvedAt = new Date();
+  draft.positionId = outcome.positionId || undefined;
+  await draft.save();
+  return outcome;
+}
+
+export async function rejectDraftWithReason(
+  draft: IDraftTrade,
+  reason: string,
+): Promise<DraftExecutionOutcome> {
+  draft.status = "rejected";
+  draft.resolvedAt = new Date();
+  await draft.save();
+
+  return {
+    status: "rejected",
+    result: "rejected",
+    message: reason,
+    error: reason,
+  };
 }
 
 export async function runSignalCheck(): Promise<{
@@ -617,16 +704,38 @@ export async function runSignalCheck(): Promise<{
               },
             );
 
+            let autoDraft: IDraftTrade | null = null;
+
             // Execute or draft based on trading mode
             if (mode === "auto") {
-              await executeSignal(
+              autoDraft = await createDraft(signal, msg, msg.sourceId);
+              const execution = await executeSignal(
                 signal,
                 msg.messageId,
                 msg.channelId,
                 msg.sourceName,
                 msg.sourceId,
               );
-              result.executed++;
+              const draftOutcome = await resolveDraftWithExecution(
+                autoDraft,
+                execution,
+              );
+
+              await ProcessedMessage.updateOne(
+                {
+                  messageId: msg.messageId,
+                  accountId: msg.sourceId || null,
+                },
+                {
+                  status:
+                    draftOutcome.status === "accepted" ? "executed" : "failed",
+                  processedAt: new Date(),
+                },
+              );
+
+              if (draftOutcome.status === "accepted") {
+                result.executed++;
+              }
 
               await TradeLog.create({
                 accountId: msg.sourceId || undefined,
@@ -634,7 +743,8 @@ export async function runSignalCheck(): Promise<{
                 action: signal.action,
                 symbol: signal.symbol,
                 details: JSON.stringify(signal),
-                result: "executed",
+                result: draftOutcome.result,
+                error: draftOutcome.error,
               });
             } else {
               // Manual mode: create a draft for user review
@@ -662,6 +772,23 @@ export async function runSignalCheck(): Promise<{
             const errMsg =
               error instanceof Error ? error.message : "Unknown error";
             result.errors.push(`Message ${msg.messageId}: ${errMsg}`);
+
+            await ProcessedMessage.updateOne(
+              {
+                messageId: msg.messageId,
+                accountId: msg.sourceId || null,
+              },
+              { status: "failed", processedAt: new Date() },
+            );
+
+            const autoDraft = await DraftTrade.findOne({
+              accountId: msg.sourceId || null,
+              messageId: msg.messageId,
+              status: "pending",
+            });
+            if (autoDraft) {
+              await rejectDraftWithReason(autoDraft, errMsg);
+            }
 
             await TradeLog.create({
               accountId: msg.sourceId || undefined,
@@ -701,7 +828,7 @@ async function createDraft(
     timestamp?: Date;
   },
   accountId?: string,
-): Promise<void> {
+): Promise<IDraftTrade> {
   const riskCfg = await getRiskConfig();
   const side = signal.action === "SELL" ? "SHORT" : "LONG";
   const quantity = signal.positionSize || riskCfg.defaultPositionSize;
@@ -751,7 +878,7 @@ async function createDraft(
     }
   }
 
-  await DraftTrade.create({
+  const draft = await DraftTrade.create({
     accountId: accountId || null,
     messageId: msg.messageId,
     channelId: msg.channelId,
@@ -775,8 +902,10 @@ async function createDraft(
   });
 
   console.log(
-    `📝 Created draft: ${signal.action} ${signal.symbol} (manual mode) — sourceTimestamp: ${msg.timestamp}`,
+    `📝 Created draft: ${signal.action} ${signal.symbol} — sourceTimestamp: ${msg.timestamp}`,
   );
+
+  return draft;
 }
 
 // ─── Result types for duplicate / max-positions checks ────────────
@@ -983,7 +1112,7 @@ export async function executeTrade(
 
   // Set leverage before placing order
   try {
-    await exchange.setLeverage(symbol, orderLeverage);
+    orderLeverage = await exchange.setLeverage(symbol, orderLeverage);
   } catch (levErr) {
     console.warn(
       `${lp}⚠️ Failed to set leverage (may already be set): ${levErr instanceof Error ? levErr.message : String(levErr)}`,
@@ -1105,7 +1234,7 @@ export async function executeSignal(
   channelId?: string,
   sourceName?: string,
   accountId?: string,
-): Promise<IPosition | null> {
+): Promise<SignalExecutionResult> {
   const riskCfg = await getRiskConfig();
   const side = signal.action === "SELL" ? "SHORT" : "LONG";
   const leverage = sanitizeLeverage(signal.leverage) || riskCfg.defaultLeverage;
@@ -1131,7 +1260,11 @@ export async function executeSignal(
             details: `Trade skipped: ${openCount} open positions, max is ${riskCfg.maxPositions}`,
             result: "skipped",
           });
-          return null;
+          return {
+            type: "skipped",
+            code: "max_positions",
+            reason: `Trade skipped: ${openCount} open positions, max is ${riskCfg.maxPositions}`,
+          };
         }
       }
 
@@ -1177,7 +1310,11 @@ export async function executeSignal(
             details: `Exact duplicate: open ${side} position exists with same entry=${existingEntry}, TP=${existingTP}, SL=${existingSL}`,
             result: "skipped",
           });
-          return null;
+          return {
+            type: "skipped",
+            code: "duplicate_exact",
+            reason: `Exact duplicate: open ${side} position exists with same entry=${existingEntry}, TP=${existingTP}, SL=${existingSL}`,
+          };
         }
 
         // Entry matches but TP or SL changed — update only the TP/SL
@@ -1209,6 +1346,11 @@ export async function executeSignal(
               details: `Existing position TP/SL updated instead of opening duplicate: ${updates.join(", ")}`,
               result: "updated",
             });
+            return {
+              type: "updated",
+              code: "updated_tp_sl",
+              details: updates.join(", "),
+            };
           } else {
             console.log(
               `⚠️ Duplicate ${side} ${signal.symbol}: entry matches but no new TP/SL values to update — skipping`,
@@ -1220,8 +1362,12 @@ export async function executeSignal(
               details: `Open ${side} position exists with same entry but no valid TP/SL update provided`,
               result: "skipped",
             });
+            return {
+              type: "skipped",
+              code: "duplicate_no_update",
+              reason: `Open ${side} position exists with same entry but no valid TP/SL update provided`,
+            };
           }
-          return null;
         }
 
         // Different entry price — this is a genuinely new signal, don't block it
@@ -1265,7 +1411,11 @@ export async function executeSignal(
             details: `Trade skipped: no stop loss provided and skipNoSL is enabled`,
             result: "skipped",
           });
-          return null;
+          return {
+            type: "skipped",
+            code: "no_stop_loss",
+            reason: "Trade skipped: no stop loss provided and skipNoSL is enabled",
+          };
         }
       }
 
@@ -1301,7 +1451,7 @@ export async function executeSignal(
         accountId,
       });
 
-      return position;
+      return { type: "opened", position };
     }
 
     case "CLOSE": {
@@ -1334,7 +1484,14 @@ export async function executeSignal(
 
         console.log(`✅ Closed position: ${pos.symbol} ${pos.side}`);
       }
-      return null;
+      if (positions.length === 0) {
+        return {
+          type: "noop",
+          code: "no_open_position",
+          details: `No open position found for ${signal.symbol} (channel=${channelId || "any"}) to close`,
+        };
+      }
+      return { type: "closed", closedCount: positions.length };
     }
 
     case "UPDATE_SL":
@@ -1375,12 +1532,21 @@ export async function executeSignal(
         console.log(
           `✅ Updated ${signal.action} for ${signal.symbol} (channel=${channelId || "any"}): SL=${position.stopLossPrice}, TPs=[${position.takeProfitTargets.map((t) => `${t.price}(${t.status})`).join(", ")}]`,
         );
+        return {
+          type: "updated",
+          code: signal.action.toLowerCase(),
+          details: `${signal.action} applied for ${signal.symbol}`,
+        };
       } else {
         console.log(
           `⚠️ No open position found for ${signal.symbol} (channel=${channelId || "any"}) to update`,
         );
+        return {
+          type: "noop",
+          code: "no_open_position",
+          details: `No open position found for ${signal.symbol} (channel=${channelId || "any"}) to update`,
+        };
       }
-      return null;
     }
 
     case "ADD_TP": {
@@ -1391,6 +1557,30 @@ export async function executeSignal(
       });
 
       if (position && signal.takeProfitTargets?.length) {
+        const posExchange = await (async () => {
+          if (position.accountId) {
+            const acct = await Account.findById(position.accountId).lean();
+            if (acct?.exchangeData) {
+              return ExchangeFactory.getClientForAccount({
+                provider: (acct.tradingPlatform as any) || "paper",
+                ...acct.exchangeData,
+              });
+            }
+          }
+          if (accountId) {
+            const acct = await Account.findById(accountId).lean();
+            if (acct?.exchangeData) {
+              return ExchangeFactory.getClientForAccount({
+                provider: (acct.tradingPlatform as any) || "paper",
+                ...acct.exchangeData,
+              });
+            }
+          }
+          return null;
+        })();
+        const closeSide = position.side === "LONG" ? "SELL" : "BUY";
+        let addedCount = 0;
+
         for (const newTpPrice of signal.takeProfitTargets) {
           const alreadyExists = position.takeProfitTargets.some(
             (t) => Math.abs(t.price - newTpPrice) < 0.01,
@@ -1402,6 +1592,23 @@ export async function executeSignal(
               percentage: 0,
               status: "pending",
             });
+            addedCount++;
+
+            if (posExchange) {
+              try {
+                await posExchange.placeTakeProfit(
+                  signal.symbol,
+                  newTpPrice,
+                  newTpPrice,
+                  closeSide,
+                  position.quantity,
+                );
+              } catch (tpErr) {
+                console.warn(
+                  `⚠️ Failed to place TP on exchange at ${newTpPrice}: ${tpErr instanceof Error ? tpErr.message : String(tpErr)}`,
+                );
+              }
+            }
           }
         }
         // Recalculate percentages & quantities for ALL TPs
@@ -1413,16 +1620,35 @@ export async function executeSignal(
         console.log(
           `✅ Updated TPs for ${signal.symbol}: ${position.takeProfitTargets.map((t) => `${t.price}(${t.percentage}%)`).join(", ")}`,
         );
+        return addedCount > 0
+          ? {
+              type: "updated",
+              code: "add_tp",
+              details: `Added ${addedCount} TP target(s) for ${signal.symbol}`,
+            }
+          : {
+              type: "noop",
+              code: "tp_exists",
+              details: `All requested TP levels already exist for ${signal.symbol}`,
+            };
       } else {
         console.log(
           `⚠️ No open position found for ${signal.symbol} (channel=${channelId || "any"}) to add TP`,
         );
+        return {
+          type: "noop",
+          code: "no_open_position",
+          details: `No open position found for ${signal.symbol} (channel=${channelId || "any"}) to add TP`,
+        };
       }
-      return null;
     }
 
     default:
       console.log(`⚠️ Unhandled signal action: ${signal.action}`);
-      return null;
+      return {
+        type: "skipped",
+        code: "unhandled_action",
+        reason: `Unhandled signal action: ${signal.action}`,
+      };
   }
 }

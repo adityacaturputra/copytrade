@@ -3,9 +3,11 @@ import {
   SignalOrderType,
   PositionDecision,
   MarketCondition,
+  MessageType,
 } from "../enums";
 
 export interface TradingSignal {
+  messageType?: MessageType;
   action: TradeAction;
   symbol: string;
   entryPrice?: number;

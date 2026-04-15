@@ -78,6 +78,15 @@ interface BinanceInstrumentSpecs extends InstrumentSpecs {
   marketQtyDecimals: number;
 }
 
+interface BinanceLeverageBracket {
+  symbol?: string;
+  brackets?: Array<{
+    initialLeverage?: number | string;
+    [key: string]: unknown;
+  }>;
+  [key: string]: unknown;
+}
+
 /**
  * Binance USD-M Futures exchange adapter.
  *
@@ -179,6 +188,15 @@ export class BinanceExchange implements ExchangeClient {
   ): void {
     const payload = JSON.stringify(this.sanitizeParamsForLog(params));
 
+    if (this.isIgnorableMarginTypeError(error, path)) {
+      console.info(
+        `[Binance] ℹ️ ${method} ${path} skipped\n` +
+          `       ➡️ Payload: ${payload}\n` +
+          `       ⬅️ Response: margin type already set`,
+      );
+      return;
+    }
+
     if (axios.isAxiosError(error)) {
       const status = error.response?.status;
       const responseBody =
@@ -197,6 +215,43 @@ export class BinanceExchange implements ExchangeClient {
       `[Binance] ❌ ${method} ${path}\n` +
         `       ➡️ Payload: ${payload}\n` +
         `       ⬅️ Error: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  private isIgnorableMarginTypeError(error: unknown, path: string): boolean {
+    if (path !== "/fapi/v1/marginType") return false;
+
+    const responseData =
+      typeof error === "object" &&
+      error !== null &&
+      "response" in error &&
+      typeof (error as { response?: unknown }).response === "object" &&
+      (error as { response?: unknown }).response !== null &&
+      "data" in ((error as { response?: { data?: unknown } }).response || {})
+        ? ((error as { response?: { data?: unknown } }).response?.data as
+            | { code?: number; msg?: string }
+            | undefined)
+        : undefined;
+
+    if (
+      responseData?.code === -4046 ||
+      responseData?.msg === "No need to change margin type."
+    ) {
+      return true;
+    }
+
+    if (axios.isAxiosError(error)) {
+      const data = error.response?.data as { code?: number; msg?: string };
+      return (
+        data?.code === -4046 ||
+        data?.msg === "No need to change margin type."
+      );
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
+    return (
+      message.includes("code=-4046") ||
+      message.includes("No need to change margin type")
     );
   }
 
@@ -269,10 +324,11 @@ export class BinanceExchange implements ExchangeClient {
     return frac.replace(/0+$/, "").length;
   }
 
-  private countDecimalsFromString(value?: string): number {
-    if (!value) return 0;
+  private precisionFromStepString(value?: string): number | undefined {
+    if (!value) return undefined;
     const normalized = value.trim();
-    if (!normalized || !normalized.includes(".")) return 0;
+    if (!normalized) return undefined;
+    if (!normalized.includes(".")) return 0;
     const [_, frac = ""] = normalized.split(".");
     return frac.replace(/0+$/, "").length;
   }
@@ -284,6 +340,40 @@ export class BinanceExchange implements ExchangeClient {
 
   private formatNum(value: number, decimals: number): string {
     return value.toFixed(decimals);
+  }
+
+  private async getMaxAllowedLeverage(symbol: string): Promise<number | null> {
+    try {
+      const response = await this.signedRequest<
+        BinanceLeverageBracket | BinanceLeverageBracket[]
+      >("GET", "/fapi/v1/leverageBracket", {
+        symbol,
+      });
+
+      const rows = Array.isArray(response) ? response : [response];
+      const row =
+        rows.find((item) => this.toSymbol(item.symbol || "") === symbol) || rows[0];
+      const maxLeverage =
+        row?.brackets?.reduce((max, bracket) => {
+          const value = Number(bracket.initialLeverage || 0);
+          return Number.isFinite(value) ? Math.max(max, value) : max;
+        }, 0) || 0;
+
+      return maxLeverage > 0 ? Math.floor(maxLeverage) : null;
+    } catch (error) {
+      console.warn(
+        `[Binance] Failed to fetch leverage bracket for ${symbol}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    }
+  }
+
+  private async applyLeverage(symbol: string, leverage: number): Promise<number> {
+    await this.signedRequest("POST", "/fapi/v1/leverage", {
+      symbol,
+      leverage,
+    });
+    return leverage;
   }
 
   private isAlgoOrderType(type: string): boolean {
@@ -325,12 +415,12 @@ export class BinanceExchange implements ExchangeClient {
     rawStep: string | undefined,
     numericStep: number,
   ): number {
+    const fromString = this.precisionFromStepString(rawStep);
+    if (fromString !== undefined) {
+      return fromString;
+    }
     if (explicitPrecision !== undefined) {
       return explicitPrecision;
-    }
-    const fromString = this.countDecimalsFromString(rawStep);
-    if (fromString > 0) {
-      return fromString;
     }
     return this.countDecimals(numericStep);
   }
@@ -489,8 +579,9 @@ export class BinanceExchange implements ExchangeClient {
     leverage: number,
     marginType: "isolated" | "cross" = "isolated",
     _side?: "BUY" | "SELL",
-  ): Promise<void> {
+  ): Promise<number> {
     const normalized = this.toSymbol(symbol);
+    const requestedLeverage = Math.max(1, Math.min(125, Math.floor(leverage)));
 
     // Margin type is optional. Ignore "no need to change" errors.
     try {
@@ -512,10 +603,38 @@ export class BinanceExchange implements ExchangeClient {
       }
     }
 
-    await this.signedRequest("POST", "/fapi/v1/leverage", {
-      symbol: normalized,
-      leverage: Math.max(1, Math.min(125, Math.floor(leverage))),
-    });
+    try {
+      return await this.applyLeverage(normalized, requestedLeverage);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      let fallbackLeverage: number | null = null;
+
+      if (msg.includes("code=-4300") && requestedLeverage > 20) {
+        fallbackLeverage = 20;
+      } else if (msg.includes("code=-4028")) {
+        const maxAllowed = await this.getMaxAllowedLeverage(normalized);
+        if (maxAllowed && maxAllowed < requestedLeverage) {
+          fallbackLeverage = maxAllowed;
+        } else if (requestedLeverage > 20) {
+          fallbackLeverage = 20;
+        } else if (requestedLeverage > 10) {
+          fallbackLeverage = 10;
+        }
+      }
+
+      if (
+        fallbackLeverage &&
+        fallbackLeverage >= 1 &&
+        fallbackLeverage !== requestedLeverage
+      ) {
+        console.warn(
+          `[Binance] Leverage ${requestedLeverage}x rejected for ${normalized}. Retrying with ${fallbackLeverage}x.`,
+        );
+        return await this.applyLeverage(normalized, fallbackLeverage);
+      }
+
+      throw error;
+    }
   }
 
   // ─── Orders ────────────────────────────────────────────────────────

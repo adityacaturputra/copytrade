@@ -1,7 +1,5 @@
-import {
-  getGeminiVisionAnalyzer,
-  VisionExtractionResult,
-} from "./GeminiVisionAnalyzer";
+import { VisionExtractionResult } from "./AIResponseNormalizer";
+import { getGeminiVisionAnalyzer } from "./GeminiVisionAnalyzer";
 import { getCodexPatunginVisionAnalyzer } from "./CodexPatunginVisionAnalyzer";
 import { getCodexPatunginConfig } from "./CodexPatunginConfig";
 

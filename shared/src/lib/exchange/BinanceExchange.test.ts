@@ -201,3 +201,135 @@ test("signed requests include payload in the Binance error message for DB logs",
   );
   assert.match(errorLogs.join("\n"), /"code":-4300/);
 });
+
+test("instrument specs prefer filter precision over exchange precision fields", async () => {
+  const exchange = new BinanceExchange("key", "secret") as any;
+
+  exchange.publicRequest = async () => ({
+    symbols: [
+      {
+        symbol: "STBLUSDT",
+        baseAsset: "STBL",
+        quantityPrecision: 3,
+        pricePrecision: 2,
+        filters: [
+          {
+            filterType: "LOT_SIZE",
+            stepSize: "0.001",
+            minQty: "0.001",
+          },
+          {
+            filterType: "MARKET_LOT_SIZE",
+            stepSize: "1.00000000",
+            minQty: "1.00000000",
+          },
+          {
+            filterType: "PRICE_FILTER",
+            tickSize: "0.00001",
+          },
+        ],
+      },
+    ],
+  });
+
+  const specs = await exchange.getInstrumentSpecs("STBLUSDT");
+
+  assert.equal(specs.qtyDecimals, 3);
+  assert.equal(specs.marketQtyDecimals, 0);
+  assert.equal(specs.priceDecimals, 5);
+});
+
+test("setLeverage falls back to 20x when Binance blocks higher leverage for new accounts", async () => {
+  const exchange = createExchange({
+    ctVal: 1,
+    lotSz: 0.001,
+    minSz: 0.001,
+    ctValCcy: "BTC",
+    tickSz: 0.1,
+    qtyDecimals: 3,
+    priceDecimals: 1,
+    marketLotSz: 1,
+    marketMinSz: 1,
+    marketQtyDecimals: 0,
+  }) as any;
+
+  const attempts: number[] = [];
+
+  exchange.signedRequest = async (
+    _method: string,
+    path: string,
+    params: RequestParams = {},
+  ) => {
+    if (path === "/fapi/v1/marginType") {
+      return {};
+    }
+    if (path === "/fapi/v1/leverage") {
+      attempts.push(Number(params.leverage));
+      if (attempts.length === 1) {
+        throw new Error(
+          "[Binance] POST /fapi/v1/leverage failed code=-4300: higher leverage available later",
+        );
+      }
+      return {};
+    }
+    return {};
+  };
+
+  const applied = await exchange.setLeverage("UNIUSDT", 31);
+
+  assert.equal(applied, 20);
+  assert.deepEqual(attempts, [31, 20]);
+});
+
+test("setLeverage treats marginType -4046 as informational and still applies leverage", async () => {
+  const exchange = createExchange({
+    ctVal: 1,
+    lotSz: 0.001,
+    minSz: 0.001,
+    ctValCcy: "BTC",
+    tickSz: 0.1,
+    qtyDecimals: 3,
+    priceDecimals: 1,
+    marketLotSz: 1,
+    marketMinSz: 1,
+    marketQtyDecimals: 0,
+  }) as any;
+
+  const infoLogs: string[] = [];
+  const errorLogs: string[] = [];
+  const originalInfo = console.info;
+  const originalError = console.error;
+  console.info = (...args: unknown[]) => infoLogs.push(args.join(" "));
+  console.error = (...args: unknown[]) => errorLogs.push(args.join(" "));
+
+  try {
+    exchange.client.request = async (config: {
+      url?: string;
+      method?: string;
+      headers?: Record<string, string>;
+    }) => {
+      if (config.url?.startsWith("/fapi/v1/marginType?")) {
+        const err: any = new Error("Request failed with status code 400");
+        err.response = {
+          status: 400,
+          data: { code: -4046, msg: "No need to change margin type." },
+        };
+        throw err;
+      }
+
+      if (config.url?.startsWith("/fapi/v1/leverage?")) {
+        return { data: {} };
+      }
+
+      throw new Error(`Unexpected request: ${config.method} ${config.url}`);
+    };
+
+    const applied = await exchange.setLeverage("BTCUSDT", 23);
+    assert.equal(applied, 23);
+    assert.equal(errorLogs.length, 0);
+    assert.ok(infoLogs.some((line) => line.includes("/fapi/v1/marginType skipped")));
+  } finally {
+    console.info = originalInfo;
+    console.error = originalError;
+  }
+});

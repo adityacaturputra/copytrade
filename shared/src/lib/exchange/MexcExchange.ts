@@ -170,7 +170,7 @@ export class MexcExchange implements ExchangeClient {
     leverage: number,
     marginType: "isolated" | "cross" = "isolated",
     _side?: "BUY" | "SELL",
-  ): Promise<void> {
+  ): Promise<number> {
     const params = this.buildAuthParams();
     params["symbol"] = symbol;
     params["leverage"] = leverage;
@@ -188,6 +188,7 @@ export class MexcExchange implements ExchangeClient {
         `Failed to set leverage for ${symbol}: ${response.data.message}`,
       );
     }
+    return leverage;
   }
 
   // ─── Orders ─────────────────────────────────────────────────────────

@@ -10,8 +10,13 @@ import {
   buildSignalParserPrompt,
   buildBulkSignalParserPrompt,
   buildPositionAnalysisPrompt,
-} from "./AIFactory";
+} from "./PromptFactory";
 import { MarketCondition } from "../enums";
+import {
+  parseBulkSignalResponse,
+  parseJsonResponse,
+  parseSignalResponse,
+} from "./AIResponseNormalizer";
 
 export class KimiAnalyzer implements AISignalAnalyzer {
   private apiKeys: string[];
@@ -30,26 +35,14 @@ export class KimiAnalyzer implements AISignalAnalyzer {
   async parseSignal(message: string): Promise<TradingSignal | null> {
     const systemPrompt = buildSignalParserPrompt();
     const response = await this.callAPI(systemPrompt, message);
+    const signal = parseSignalResponse(response, message);
 
-    try {
-      const cleaned = response
-        .replace(/```json\n?/g, "")
-        .replace(/```\n?/g, "")
-        .trim();
-      const parsed = JSON.parse(cleaned);
-
-      if (!parsed || !parsed.action || !parsed.symbol) {
-        return null;
-      }
-
-      return {
-        ...parsed,
-        rawSignal: message,
-      } as TradingSignal;
-    } catch {
+    if (!signal) {
       console.error("Kimi: Failed to parse signal response:", response);
       return null;
     }
+
+    return signal;
   }
 
   async parseBulkSignals(
@@ -70,51 +63,8 @@ export class KimiAnalyzer implements AISignalAnalyzer {
 
     const response = await this.callAPI(systemPrompt, userMessage, maxTokens);
 
-    try {
-      const cleaned = response
-        .replace(/```json\n?/g, "")
-        .replace(/```\n?/g, "")
-        .trim();
-      const parsed = JSON.parse(cleaned);
-
-      // Build a map from AI response by messageId
-      const responseMap = new Map<string, TradingSignal | null>();
-      if (Array.isArray(parsed)) {
-        for (const item of parsed) {
-          const msgId = item?.messageId || "";
-          const signal = item?.signal
-            ? this.toTradingSignal(item.signal)
-            : null;
-          responseMap.set(String(msgId), signal);
-        }
-      }
-
-      // Map back using messageId, falling back to positional index
-      const results: BulkSignalResult[] = messages.map((msg, i) => {
-        const signal =
-          responseMap.get(msg.messageId) ??
-          responseMap.get(String(i + 1)) ?? // fallback: AI used 1-based index
-          null;
-        return { messageId: msg.messageId, signal };
-      });
-
-      // If mapping failed for all, try positional fallback
-      if (
-        results.every((r) => r.signal === null) &&
-        Array.isArray(parsed) &&
-        parsed.length > 0
-      ) {
-        return messages.map((msg, i) => {
-          const item = parsed[i];
-          const signal = item?.signal
-            ? this.toTradingSignal(item.signal)
-            : null;
-          return { messageId: msg.messageId, signal };
-        });
-      }
-
-      return results;
-    } catch {
+    const results = parseBulkSignalResponse(response, messages);
+    if (!results) {
       console.error(
         "Kimi: Failed to parse bulk signal response:",
         response?.substring(0, 500),
@@ -134,15 +84,8 @@ export class KimiAnalyzer implements AISignalAnalyzer {
       }
       return results;
     }
-  }
 
-  private toTradingSignal(
-    parsed: Record<string, unknown>,
-  ): TradingSignal | null {
-    if (!parsed || !parsed.action || !parsed.symbol) return null;
-    return {
-      ...(parsed as Omit<TradingSignal, "rawSignal" | "messageId">),
-    } as TradingSignal;
+    return results;
   }
 
   async analyzePosition(
@@ -169,13 +112,12 @@ export class KimiAnalyzer implements AISignalAnalyzer {
 
     const response = await this.callAPI(systemPrompt, userMessage);
 
-    try {
-      const cleaned = response
-        .replace(/```json\n?/g, "")
-        .replace(/```\n?/g, "")
-        .trim();
-      return JSON.parse(cleaned) as PositionAnalysis;
-    } catch {
+    const analysis = parseJsonResponse<PositionAnalysis>(response);
+    if (analysis) {
+      return analysis;
+    }
+
+    {
       return {
         decision: "HOLD",
         symbol,

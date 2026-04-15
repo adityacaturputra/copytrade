@@ -51,6 +51,11 @@ export class OkxExchange implements ExchangeClient {
     { specs: InstrumentSpecs; ts: number }
   >();
   private static SPECS_CACHE_TTL = 30 * 60 * 1000; // 30 minutes
+  private static ACCOUNT_CONFIG_TTL = 60 * 1000; // 1 minute
+  private accountConfigCache?: {
+    posMode: "long_short_mode" | "net_mode";
+    ts: number;
+  };
 
   constructor(
     apiKey: string,
@@ -151,6 +156,63 @@ export class OkxExchange implements ExchangeClient {
       headers["x-simulated-trading"] = "1";
     }
     return headers;
+  }
+
+  private formatPayloadForError(payload?: string | Record<string, string>): string {
+    if (!payload) return "";
+    return typeof payload === "string"
+      ? payload
+      : JSON.stringify(payload);
+  }
+
+  private buildPayloadError(
+    message: string,
+    payload?: string | Record<string, string>,
+  ): Error {
+    const payloadText = this.formatPayloadForError(payload);
+    return new Error(
+      payloadText ? `${message} | payload=${payloadText}` : message,
+    );
+  }
+
+  private isAccountConfigRetryable(
+    code?: string,
+    message?: string,
+  ): boolean {
+    if (code === "51010") return true;
+    return code === "51000" && (message || "").toLowerCase().includes("posside");
+  }
+
+  private async getPositionMode(
+    forceRefresh: boolean = false,
+  ): Promise<"long_short_mode" | "net_mode"> {
+    if (
+      !forceRefresh &&
+      this.accountConfigCache &&
+      Date.now() - this.accountConfigCache.ts < OkxExchange.ACCOUNT_CONFIG_TTL
+    ) {
+      return this.accountConfigCache.posMode;
+    }
+
+    const path = "/api/v5/account/config";
+    const headers = this.authHeaders("GET", path);
+
+    try {
+      const response = await this.client.get(path, { headers });
+      const data = response.data;
+      const posMode = data?.data?.[0]?.posMode;
+
+      if (posMode === "long_short_mode" || posMode === "net_mode") {
+        this.accountConfigCache = { posMode, ts: Date.now() };
+        return posMode;
+      }
+    } catch (error) {
+      console.warn(
+        `[OKX] ⚠️ Failed to read account config: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
+    return this.accountConfigCache?.posMode || "long_short_mode";
   }
 
   // ─── Instrument helpers ────────────────────────────────────────────
@@ -329,6 +391,7 @@ export class OkxExchange implements ExchangeClient {
 
     if (data.code === "0") {
       console.log(`[OKX] ✅ Position mode set to ${positionMode}`);
+      this.accountConfigCache = { posMode: positionMode, ts: Date.now() };
     } else {
       console.error(
         `[OKX] ❌ Failed to set position mode: code=${data.code}, msg=${data.msg}`,
@@ -455,7 +518,14 @@ export class OkxExchange implements ExchangeClient {
         }) => ({
           symbol: this.fromOkxSymbol(pos.instId),
           positionId: pos.posId || pos.instId,
-          side: pos.posSide === "long" ? ("LONG" as const) : ("SHORT" as const),
+          side:
+            pos.posSide === "long"
+              ? ("LONG" as const)
+              : pos.posSide === "short"
+                ? ("SHORT" as const)
+                : parseFloat(pos.pos) >= 0
+                  ? ("LONG" as const)
+                  : ("SHORT" as const),
           leverage: parseFloat(pos.lever),
           marginType:
             pos.mgnMode === "isolated" ? "isolated" : ("cross" as const),
@@ -493,29 +563,34 @@ export class OkxExchange implements ExchangeClient {
     leverage: number,
     marginType: "isolated" | "cross" = "isolated",
     side?: "BUY" | "SELL",
-  ): Promise<void> {
+  ): Promise<number> {
     const instId = this.toOkxSymbol(symbol);
     const path = "/api/v5/account/set-leverage";
+    const positionMode = await this.getPositionMode();
 
-    // In long_short_mode, we need to set leverage for each posSide separately
-    // If side is specified, set for that side only; otherwise set for both
-    const sides: Array<{ posSide: string; label: string }> =
-      side === "BUY"
-        ? [{ posSide: "long", label: "long" }]
-        : side === "SELL"
-          ? [{ posSide: "short", label: "short" }]
-          : [
-              { posSide: "long", label: "long" },
-              { posSide: "short", label: "short" },
-            ];
+    const sides: Array<{ posSide?: string; label: string }> =
+      positionMode === "long_short_mode"
+        ? side === "BUY"
+          ? [{ posSide: "long", label: "long" }]
+          : side === "SELL"
+            ? [{ posSide: "short", label: "short" }]
+            : [
+                { posSide: "long", label: "long" },
+                { posSide: "short", label: "short" },
+              ]
+        : [{ label: "net" }];
 
     for (const { posSide, label } of sides) {
-      const body = JSON.stringify({
+      const requestBody: Record<string, string> = {
         instId,
         lever: String(leverage),
         mgnMode: marginType,
-        posSide,
-      });
+      };
+      if (posSide) {
+        requestBody.posSide = posSide;
+      }
+
+      const body = JSON.stringify(requestBody);
 
       const headers = this.authHeaders("POST", path, body);
 
@@ -543,6 +618,8 @@ export class OkxExchange implements ExchangeClient {
         );
       }
     }
+
+    return leverage;
   }
 
   // ─── Orders ─────────────────────────────────────────────────────────
@@ -554,7 +631,7 @@ export class OkxExchange implements ExchangeClient {
    *   1. Validate the instrument exists on OKX
    *   2. Set leverage for the position side
    *   3. Place the order
-   *   4. Auto-retry with account fix if error 51010
+   *   4. Auto-retry with account fix if the exchange reports account/posSide config errors
    *
    * Docs: https://www.okx.com/docs-v5/en/#rest-api-trade-place-order
    */
@@ -592,7 +669,9 @@ export class OkxExchange implements ExchangeClient {
   async placeOrder(orderParams: OrderParams): Promise<OrderResult> {
     const instId = this.toOkxSymbol(orderParams.symbol);
     const isBuy = orderParams.side === "BUY";
-    const posSide = isBuy ? "long" : "short";
+    const positionMode = await this.getPositionMode();
+    const posSide =
+      positionMode === "long_short_mode" ? (isBuy ? "long" : "short") : undefined;
 
     // Step 1: Validate instrument and get lot size info
     let instrumentInfo: Awaited<ReturnType<typeof this.validateInstrument>>;
@@ -649,8 +728,10 @@ export class OkxExchange implements ExchangeClient {
       side: isBuy ? "buy" : "sell",
       ordType: orderParams.type === "LIMIT" ? "limit" : "market",
       sz: String(roundedQty),
-      posSide,
     };
+    if (posSide) {
+      orderBody.posSide = posSide;
+    }
 
     if (orderParams.type === "LIMIT" && orderParams.price) {
       orderBody.px = String(orderParams.price);
@@ -661,7 +742,7 @@ export class OkxExchange implements ExchangeClient {
     const headers = this.authHeaders("POST", path, body);
 
     console.log(
-      `[OKX] 📤 Placing order: ${isBuy ? "BUY" : "SELL"} ${orderParams.quantity} ${instId} (posSide=${posSide})...`,
+      `[OKX] 📤 Placing order: ${isBuy ? "BUY" : "SELL"} ${orderParams.quantity} ${instId}${posSide ? ` (posSide=${posSide})` : ` (posMode=${positionMode})`}...`,
     );
 
     let response;
@@ -680,21 +761,33 @@ export class OkxExchange implements ExchangeClient {
           JSON.stringify(errorData, null, 2),
         );
 
-        // Check for 51010 in axios error
+        // Retry account/position configuration errors once.
         const sCode = errorData?.data?.[0]?.sCode;
-        if (sCode === "51010" || errorData?.code === "51010") {
+        const sMsg = errorData?.data?.[0]?.sMsg;
+        if (
+          this.isAccountConfigRetryable(sCode, sMsg) ||
+          this.isAccountConfigRetryable(errorData?.code, errorData?.msg)
+        ) {
           return await this.handle51010AndRetry(orderBody, orderParams, path);
         }
       }
-      throw axiosError;
+      throw this.buildPayloadError(
+        `OKX order request failed: ${errMsg}`,
+        orderBody,
+      );
     }
 
     const data = response.data;
 
-    // Check for error 51010 in ANY response (can come with data.code "0" or "1")
-    if (data.data?.[0]?.sCode === "51010") {
+    // Retry account/position configuration errors once.
+    if (
+      this.isAccountConfigRetryable(
+        data.data?.[0]?.sCode,
+        data.data?.[0]?.sMsg,
+      )
+    ) {
       console.warn(
-        `[OKX] ⚠️ Detected error 51010 in order response — account mode incompatible`,
+        `[OKX] ⚠️ Detected account configuration error in order response — attempting auto-fix`,
       );
       return await this.handle51010AndRetry(orderBody, orderParams, path);
     }
@@ -718,7 +811,10 @@ export class OkxExchange implements ExchangeClient {
       console.error(
         `[OKX] ❌ Order rejected: sCode=${result.sCode}, sMsg=${result.sMsg}`,
       );
-      throw new Error(`OKX order rejected: [${result.sCode}] ${result.sMsg}`);
+      throw this.buildPayloadError(
+        `OKX order rejected: [${result.sCode}] ${result.sMsg}`,
+        orderBody,
+      );
     }
 
     // Even when top-level code !== "0", check data[0] for specific error
@@ -727,21 +823,23 @@ export class OkxExchange implements ExchangeClient {
       console.error(
         `[OKX] ❌ Failed to place order: sCode=${specificError.sCode}, sMsg=${specificError.sMsg}`,
       );
-      throw new Error(
+      throw this.buildPayloadError(
         `OKX order failed: [${specificError.sCode}] ${specificError.sMsg}`,
+        orderBody,
       );
     }
 
     console.error(
       `[OKX] ❌ Failed to place order: code=${data.code}, msg=${data.msg}`,
     );
-    throw new Error(
+    throw this.buildPayloadError(
       `Failed to place OKX order: [${data.code}] ${data.msg || "Unknown error"}`,
+      orderBody,
     );
   }
 
   /**
-   * Handle error 51010: auto-fix account configuration and retry the order.
+   * Auto-fix account configuration and retry the order.
    */
   private async handle51010AndRetry(
     orderBody: Record<string, string>,
@@ -749,7 +847,7 @@ export class OkxExchange implements ExchangeClient {
     path: string,
   ): Promise<OrderResult> {
     console.warn(
-      `[OKX] ⚠️ Error 51010: Account mode incompatible. Auto-fixing account configuration...`,
+      `[OKX] ⚠️ Account/position mode incompatible. Auto-fixing account configuration...`,
     );
     await this.ensureAccountConfigured(orderParams.symbol);
 
@@ -801,8 +899,9 @@ export class OkxExchange implements ExchangeClient {
       const retryErrMsg =
         retryData.data?.[0]?.sMsg || retryData.msg || "Unknown error";
       const retryErrCode = retryData.data?.[0]?.sCode || retryData.code;
-      throw new Error(
+      throw this.buildPayloadError(
         `OKX order failed after auto-fix: [${retryErrCode}] ${retryErrMsg}`,
+        retryBody,
       );
     } catch (retryError) {
       if (axios.isAxiosError(retryError) && retryError.response?.data) {
@@ -811,7 +910,12 @@ export class OkxExchange implements ExchangeClient {
           JSON.stringify(retryError.response.data, null, 2),
         );
       }
-      throw retryError;
+      const retryErrMsg =
+        retryError instanceof Error ? retryError.message : String(retryError);
+      throw this.buildPayloadError(
+        `OKX order retry request failed: ${retryErrMsg}`,
+        retryBody,
+      );
     }
   }
 
@@ -821,6 +925,7 @@ export class OkxExchange implements ExchangeClient {
     quantity?: number,
   ): Promise<void> {
     const instId = this.toOkxSymbol(symbol);
+    const positionMode = await this.getPositionMode();
 
     // First get the position to know the side and margin mode
     const positions = await this.getOpenPositions();
@@ -832,25 +937,33 @@ export class OkxExchange implements ExchangeClient {
       throw new Error(`No open position found for ${symbol}`);
     }
 
-    const posSide = pos.side === "LONG" ? "long" : "short";
+    const posSide =
+      positionMode === "long_short_mode"
+        ? pos.side === "LONG"
+          ? "long"
+          : "short"
+        : undefined;
     const mgnMode = pos.marginType || "isolated";
 
     // Try close-position endpoint first
-    const closeBody = JSON.stringify({
+    const closePayload: Record<string, string> = {
       instId,
       mgnMode,
-      posSide,
       type: "market",
       sz: String(quantity || pos.quantity),
       side: pos.side === "LONG" ? "sell" : "buy",
       tdMode: mgnMode,
-    });
+    };
+    if (posSide) {
+      closePayload.posSide = posSide;
+    }
+    const closeBody = JSON.stringify(closePayload);
 
     const closePath = "/api/v5/trade/close-position";
     const closeHeaders = this.authHeaders("POST", closePath, closeBody);
 
     console.log(
-      `[OKX] 📤 Closing position: ${instId} ${posSide} (${mgnMode}) qty=${quantity || pos.quantity}...`,
+      `[OKX] 📤 Closing position: ${instId}${posSide ? ` ${posSide}` : ""} (${mgnMode}) qty=${quantity || pos.quantity}...`,
     );
 
     try {
@@ -875,15 +988,18 @@ export class OkxExchange implements ExchangeClient {
     }
 
     // Fallback: place opposite order
-    const fallbackBody = JSON.stringify({
+    const fallbackPayload: Record<string, string> = {
       instId,
       tdMode: mgnMode,
       side: pos.side === "LONG" ? "sell" : "buy",
-      posSide,
       ordType: "market",
       sz: String(quantity || pos.quantity),
       reduceOnly: "true",
-    });
+    };
+    if (posSide) {
+      fallbackPayload.posSide = posSide;
+    }
+    const fallbackBody = JSON.stringify(fallbackPayload);
 
     const orderPath = "/api/v5/trade/order";
     const fallbackHeaders = this.authHeaders("POST", orderPath, fallbackBody);
@@ -946,23 +1062,32 @@ export class OkxExchange implements ExchangeClient {
     quantity: number,
   ): Promise<string> {
     const instId = this.toOkxSymbol(symbol);
+    const positionMode = await this.getPositionMode();
 
     // `side` is the CLOSING direction passed from the executor:
     //   SELL → closing a LONG position → posSide="long", side="sell"
     //   BUY  → closing a SHORT position → posSide="short", side="buy"
-    const posSide = side === "SELL" ? "long" : "short";
+    const posSide =
+      positionMode === "long_short_mode"
+        ? side === "SELL"
+          ? "long"
+          : "short"
+        : undefined;
     const okxSide = side === "BUY" ? "buy" : "sell";
 
-    const body = JSON.stringify({
+    const payload: Record<string, string> = {
       instId,
       tdMode: "isolated",
       side: okxSide,
-      posSide,
       ordType: "conditional",
       sz: String(quantity),
       slTriggerPx: String(triggerPrice),
       slOrdPx: String(executePrice || triggerPrice),
-    });
+    };
+    if (posSide) {
+      payload.posSide = posSide;
+    }
+    const body = JSON.stringify(payload);
 
     const path = "/api/v5/trade/order-algo";
     const headers = this.authHeaders("POST", path, body);
@@ -986,23 +1111,32 @@ export class OkxExchange implements ExchangeClient {
     quantity: number,
   ): Promise<string> {
     const instId = this.toOkxSymbol(symbol);
+    const positionMode = await this.getPositionMode();
 
     // `side` is the CLOSING direction passed from the executor:
     //   SELL → closing a LONG position → posSide="long", side="sell"
     //   BUY  → closing a SHORT position → posSide="short", side="buy"
-    const posSide = side === "SELL" ? "long" : "short";
+    const posSide =
+      positionMode === "long_short_mode"
+        ? side === "SELL"
+          ? "long"
+          : "short"
+        : undefined;
     const okxSide = side === "BUY" ? "buy" : "sell";
 
-    const body = JSON.stringify({
+    const payload: Record<string, string> = {
       instId,
       tdMode: "isolated",
       side: okxSide,
-      posSide,
       ordType: "conditional",
       sz: String(quantity),
       tpTriggerPx: String(triggerPrice),
       tpOrdPx: String(executePrice || triggerPrice),
-    });
+    };
+    if (posSide) {
+      payload.posSide = posSide;
+    }
+    const body = JSON.stringify(payload);
 
     const path = "/api/v5/trade/order-algo";
     const headers = this.authHeaders("POST", path, body);

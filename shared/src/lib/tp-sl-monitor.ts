@@ -5,6 +5,7 @@ import {
 } from "./exchange/ExchangeFactory";
 import { ExchangeClient } from "./exchange/types";
 import { splitQuantityForTPs } from "./executor";
+import { inspectPendingLimitOrder } from "./pending-order-sync";
 
 /**
  * Resolve the exchange client for a position based on its accountId.
@@ -69,101 +70,54 @@ export async function runTpslMonitor(): Promise<{
         result.checked++;
         try {
           const exchange = await getExchangeForPosition(position);
+          const inspection = await inspectPendingLimitOrder(exchange, position);
 
-          // Check if limit order is still live on exchange
-          const openOrders = await exchange.getOpenOrders(position.symbol);
-          const orderStillOpen = openOrders.some(
-            (o) => o.orderId === position.orderId,
-          );
-
-          if (orderStillOpen) {
-            // Limit order still waiting — skip
+          if (inspection.type === "live") {
+            console.log(
+              `⏳ [TP/SL Monitor] Pending order still live: ${position.symbol} ${position.side} (${inspection.reason})`,
+            );
             continue;
           }
 
-          // Order no longer in open orders — check history for fill status
-          const orderHistory = await exchange.getOrderHistory(position.symbol);
-          const matchingOrder = orderHistory.find(
-            (o) => o.orderId === position.orderId,
-          );
+          if (inspection.type === "cancelled") {
+            position.status = "closed";
+            position.closedAt = new Date();
+            position.closeReason = inspection.reason;
+            position.tpSlPlaced = true; // No TP/SL needed for cancelled
+            await position.save();
 
-          let filled = false;
+            console.log(
+              `🚫 [TP/SL Monitor] Limit order cancelled: ${position.symbol} ${position.side} (${inspection.reason})`,
+            );
 
-          if (matchingOrder) {
-            const orderState =
-              (matchingOrder as any).state || matchingOrder.status;
-            if (
-              orderState === "filled" ||
-              orderState === "partially_filled" ||
-              orderState === "FILLED" ||
-              orderState === "PARTIALLY_FILLED"
-            ) {
-              filled = true;
-              // Update entry price from fill
-              if (matchingOrder.price && matchingOrder.price > 0) {
-                position.entryPrice = matchingOrder.price;
-              }
-            } else if (
-              orderState === "cancelled" ||
-              orderState === "canceled" ||
-              orderState === "CANCELLED" ||
-              orderState === "CANCELED"
-            ) {
-              // Cancelled — mark as closed, no TP/SL needed
-              position.status = "closed";
-              position.closedAt = new Date();
-              position.closeReason = "Limit order cancelled on exchange";
-              position.tpSlPlaced = true; // No TP/SL needed for cancelled
-              await position.save();
-
-              console.log(
-                `🚫 [TP/SL Monitor] Limit order cancelled: ${position.symbol} ${position.side}`,
-              );
-
-              await TradeLog.create({
-                type: "tpsl-monitor",
-                action: "limit_cancelled",
-                symbol: position.symbol,
-                details: `Limit order was cancelled on exchange. Marked as closed.`,
-                result: "success",
-              });
-              continue;
-            }
-          } else {
-            // Not in open orders or history — check if position exists on exchange
-            const exPositions = await exchange.getOpenPositions();
-            if (exPositions.some((ep) => ep.symbol === position.symbol)) {
-              filled = true;
-            } else {
-              // Not found anywhere — likely expired
-              position.status = "closed";
-              position.closedAt = new Date();
-              position.closeReason =
-                "Limit order not found on exchange (likely expired)";
-              position.tpSlPlaced = true;
-              await position.save();
-
-              console.warn(
-                `⚠️ [TP/SL Monitor] Limit order not found: ${position.symbol} — marking as closed`,
-              );
-              continue;
-            }
+            await TradeLog.create({
+              type: "tpsl-monitor",
+              action: "limit_cancelled",
+              symbol: position.symbol,
+              details: inspection.reason,
+              result: "success",
+            });
+            continue;
           }
 
-          if (filled) {
+          if (inspection.fillPrice && inspection.fillPrice > 0) {
+            position.entryPrice = inspection.fillPrice;
+          }
+
+          if (inspection.type === "filled") {
             // Promote to "open" — TP/SL will be placed in Step 2
             position.status = "open";
             await position.save();
 
             console.log(
-              `✅ [TP/SL Monitor] Limit order filled: ${position.symbol} ${position.side} — promoted to open`,
+              `✅ [TP/SL Monitor] Limit order filled: ${position.symbol} ${position.side} — promoted to open (${inspection.reason})`,
             );
 
             await TradeLog.create({
               type: "tpsl-monitor",
               action: "limit_filled",
               symbol: position.symbol,
-              details: `Limit order filled. Promoted to open. Entry: ${position.entryPrice}`,
+              details: `Limit order filled. Promoted to open. Entry: ${position.entryPrice}. ${inspection.reason}`,
               result: "success",
             });
 

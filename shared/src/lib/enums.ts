@@ -30,6 +30,19 @@ export const TradeAction = {
 
 export type TradeAction = (typeof TradeAction)[keyof typeof TradeAction];
 
+// ==================== Message Type ====================
+// High-level classification for an incoming message before execution.
+
+export const MessageType = {
+  NEW_ENTRY: "new_entry",
+  POSITION_UPDATE: "position_update",
+  CLOSE_CANCEL: "close_cancel",
+  RESULT_STATUS: "result_status",
+  IGNORE: "ignore",
+} as const;
+
+export type MessageType = (typeof MessageType)[keyof typeof MessageType];
+
 /** Actions that represent opening a new trade */
 export const ENTRY_ACTIONS: readonly TradeAction[] = [
   TradeAction.BUY,

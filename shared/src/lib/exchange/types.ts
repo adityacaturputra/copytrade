@@ -153,7 +153,7 @@ export interface ExchangeClient {
     leverage: number,
     marginType?: MarginType,
     side?: OrderSide,
-  ): Promise<void>;
+  ): Promise<number>;
 
   // ─── Stop Loss / Take Profit ────────────────────────────────────────
   placeStopLoss(
