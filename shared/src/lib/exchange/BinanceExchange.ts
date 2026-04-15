@@ -157,6 +157,49 @@ export class BinanceExchange implements ExchangeClient {
     return search.toString();
   }
 
+  private sanitizeParamsForLog(
+    params: Record<string, string | number | boolean | undefined>,
+  ): Record<string, string | number | boolean> {
+    const sanitized: Record<string, string | number | boolean> = {};
+
+    for (const [key, value] of Object.entries(params)) {
+      if (value === undefined || value === null) continue;
+      sanitized[key] =
+        key.toLowerCase() === "signature" ? "[redacted]" : value;
+    }
+
+    return sanitized;
+  }
+
+  private logSignedRequestError(
+    error: unknown,
+    method: HttpMethod,
+    path: string,
+    params: Record<string, string | number | boolean | undefined>,
+  ): void {
+    const payload = JSON.stringify(this.sanitizeParamsForLog(params));
+
+    if (axios.isAxiosError(error)) {
+      const status = error.response?.status;
+      const responseBody =
+        error.response?.data !== undefined
+          ? JSON.stringify(error.response.data)
+          : error.message;
+      console.error(
+        `[Binance] ❌ ${method} ${path}${status ? ` — HTTP ${status}` : ""}\n` +
+          `       ➡️ Payload: ${payload}\n` +
+          `       ⬅️ Response: ${responseBody}`,
+      );
+      return;
+    }
+
+    console.error(
+      `[Binance] ❌ ${method} ${path}\n` +
+        `       ➡️ Payload: ${payload}\n` +
+        `       ⬅️ Error: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
   private async signedRequest<T>(
     method: HttpMethod,
     path: string,
@@ -172,7 +215,8 @@ export class BinanceExchange implements ExchangeClient {
       });
       return response.data;
     } catch (error) {
-      throw this.normalizeError(error, `${method} ${path}`);
+      this.logSignedRequestError(error, method, path, params);
+      throw this.normalizeError(error, `${method} ${path}`, params);
     }
   }
 
@@ -188,7 +232,15 @@ export class BinanceExchange implements ExchangeClient {
     }
   }
 
-  private normalizeError(error: unknown, context: string): Error {
+  private normalizeError(
+    error: unknown,
+    context: string,
+    params?: Record<string, string | number | boolean | undefined>,
+  ): Error {
+    const payloadSuffix = params
+      ? ` | payload=${JSON.stringify(this.sanitizeParamsForLog(params))}`
+      : "";
+
     if (axios.isAxiosError(error)) {
       const data = error.response?.data as { code?: number; msg?: string };
       const code =
@@ -197,10 +249,12 @@ export class BinanceExchange implements ExchangeClient {
         data && typeof data.msg === "string"
           ? data.msg
           : error.message || "Unknown Binance error";
-      return new Error(`[Binance] ${context} failed${code}: ${msg}`);
+      return new Error(
+        `[Binance] ${context} failed${code}: ${msg}${payloadSuffix}`,
+      );
     }
     return new Error(
-      `[Binance] ${context} failed: ${error instanceof Error ? error.message : String(error)}`,
+      `[Binance] ${context} failed: ${error instanceof Error ? error.message : String(error)}${payloadSuffix}`,
     );
   }
 
