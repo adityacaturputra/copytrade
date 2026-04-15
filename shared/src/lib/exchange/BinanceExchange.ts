@@ -72,6 +72,12 @@ interface BinanceAlgoOrder {
   [key: string]: unknown;
 }
 
+interface BinanceInstrumentSpecs extends InstrumentSpecs {
+  marketLotSz: number;
+  marketMinSz: number;
+  marketQtyDecimals: number;
+}
+
 /**
  * Binance USD-M Futures exchange adapter.
  *
@@ -86,7 +92,7 @@ export class BinanceExchange implements ExchangeClient {
   private readonly client: AxiosInstance;
   private readonly specsCache = new Map<
     string,
-    { specs: InstrumentSpecs; ts: number }
+    { specs: BinanceInstrumentSpecs; ts: number }
   >();
 
   constructor(apiKey: string, secretKey: string, simulated: boolean = false) {
@@ -209,6 +215,14 @@ export class BinanceExchange implements ExchangeClient {
     return frac.replace(/0+$/, "").length;
   }
 
+  private countDecimalsFromString(value?: string): number {
+    if (!value) return 0;
+    const normalized = value.trim();
+    if (!normalized || !normalized.includes(".")) return 0;
+    const [_, frac = ""] = normalized.split(".");
+    return frac.replace(/0+$/, "").length;
+  }
+
   private clampToStep(value: number, step: number, decimals: number): number {
     const units = Math.floor(value / step + 1e-12);
     return Number((units * step).toFixed(decimals));
@@ -234,6 +248,39 @@ export class BinanceExchange implements ExchangeClient {
     return "conditional";
   }
 
+  private getQuantityRule(
+    specs: BinanceInstrumentSpecs,
+    orderType: "MARKET" | "LIMIT" | "STOP_MARKET" | "TAKE_PROFIT_MARKET",
+  ): { step: number; min: number; decimals: number } {
+    if (orderType === "MARKET" || orderType.endsWith("_MARKET")) {
+      return {
+        step: specs.marketLotSz,
+        min: specs.marketMinSz,
+        decimals: specs.marketQtyDecimals,
+      };
+    }
+    return {
+      step: specs.lotSz,
+      min: specs.minSz,
+      decimals: specs.qtyDecimals,
+    };
+  }
+
+  private pickPrecision(
+    explicitPrecision: number | undefined,
+    rawStep: string | undefined,
+    numericStep: number,
+  ): number {
+    if (explicitPrecision !== undefined) {
+      return explicitPrecision;
+    }
+    const fromString = this.countDecimalsFromString(rawStep);
+    if (fromString > 0) {
+      return fromString;
+    }
+    return this.countDecimals(numericStep);
+  }
+
   private async placeConditionalAlgoOrder(
     symbol: string,
     side: "BUY" | "SELL",
@@ -242,7 +289,8 @@ export class BinanceExchange implements ExchangeClient {
     quantity: number,
   ): Promise<string> {
     const specs = await this.getInstrumentSpecs(symbol);
-    const qty = this.clampToStep(quantity, specs.lotSz, specs.qtyDecimals);
+    const qtyRule = this.getQuantityRule(specs, type);
+    const qty = this.clampToStep(quantity, qtyRule.step, qtyRule.decimals);
     const trigger = this.clampToStep(
       stopPrice,
       specs.tickSz,
@@ -258,7 +306,7 @@ export class BinanceExchange implements ExchangeClient {
         side,
         type,
         triggerPrice: this.formatNum(trigger, specs.priceDecimals),
-        quantity: this.formatNum(qty, specs.qtyDecimals),
+        quantity: this.formatNum(qty, qtyRule.decimals),
         reduceOnly: true,
         workingType: "MARK_PRICE",
       },
@@ -426,23 +474,24 @@ export class BinanceExchange implements ExchangeClient {
     }
 
     const specs = await this.getInstrumentSpecs(symbol);
+    const type = orderParams.type === "LIMIT" ? "LIMIT" : "MARKET";
+    const qtyRule = this.getQuantityRule(specs, type);
     const qty = this.clampToStep(
       orderParams.quantity,
-      specs.lotSz,
-      specs.qtyDecimals,
+      qtyRule.step,
+      qtyRule.decimals,
     );
-    if (qty < specs.minSz) {
+    if (qty < qtyRule.min) {
       throw new Error(
-        `Order quantity too small for ${symbol}: ${qty} < ${specs.minSz}`,
+        `Order quantity too small for ${symbol}: ${qty} < ${qtyRule.min}`,
       );
     }
 
-    const type = orderParams.type === "LIMIT" ? "LIMIT" : "MARKET";
     const params: Record<string, string | number | boolean | undefined> = {
       symbol,
       side: orderParams.side,
       type,
-      quantity: this.formatNum(qty, specs.qtyDecimals),
+      quantity: this.formatNum(qty, qtyRule.decimals),
       newOrderRespType: "RESULT",
     };
 
@@ -519,10 +568,11 @@ export class BinanceExchange implements ExchangeClient {
       if (amt <= 0) continue;
 
       const closeQtyRaw = remaining === null ? amt : Math.min(remaining, amt);
+      const qtyRule = this.getQuantityRule(specs, "MARKET");
       const closeQty = this.clampToStep(
         closeQtyRaw,
-        specs.lotSz,
-        specs.qtyDecimals,
+        qtyRule.step,
+        qtyRule.decimals,
       );
       if (closeQty <= 0) continue;
 
@@ -533,7 +583,7 @@ export class BinanceExchange implements ExchangeClient {
         symbol: normalized,
         side,
         type: "MARKET",
-        quantity: this.formatNum(closeQty, specs.qtyDecimals),
+        quantity: this.formatNum(closeQty, qtyRule.decimals),
         reduceOnly: true,
         newOrderRespType: "RESULT",
       };
@@ -768,7 +818,7 @@ export class BinanceExchange implements ExchangeClient {
 
   // ─── Instrument Specs ──────────────────────────────────────────────
 
-  async getInstrumentSpecs(symbol: string): Promise<InstrumentSpecs> {
+  async getInstrumentSpecs(symbol: string): Promise<BinanceInstrumentSpecs> {
     const normalized = this.toSymbol(symbol);
     const cached = this.specsCache.get(normalized);
     if (cached && Date.now() - cached.ts < SPECS_CACHE_TTL) {
@@ -779,6 +829,8 @@ export class BinanceExchange implements ExchangeClient {
       symbols?: Array<{
         symbol: string;
         baseAsset: string;
+        quantityPrecision?: number;
+        pricePrecision?: number;
         filters: Array<{
           filterType: string;
           stepSize?: string;
@@ -794,20 +846,43 @@ export class BinanceExchange implements ExchangeClient {
     }
 
     const lotFilter = row.filters.find((f) => f.filterType === "LOT_SIZE");
+    const marketLotFilter = row.filters.find(
+      (f) => f.filterType === "MARKET_LOT_SIZE",
+    );
     const priceFilter = row.filters.find((f) => f.filterType === "PRICE_FILTER");
 
     const lotSz = parseFloat(lotFilter?.stepSize || "1");
     const minSz = parseFloat(lotFilter?.minQty || "1");
+    const marketLotSz = parseFloat(marketLotFilter?.stepSize || lotFilter?.stepSize || "1");
+    const marketMinSz = parseFloat(marketLotFilter?.minQty || lotFilter?.minQty || "1");
     const tickSz = parseFloat(priceFilter?.tickSize || "0.01");
+    const qtyDecimals = this.pickPrecision(
+      row.quantityPrecision,
+      lotFilter?.stepSize,
+      lotSz,
+    );
+    const marketQtyDecimals = this.pickPrecision(
+      row.quantityPrecision,
+      marketLotFilter?.stepSize || lotFilter?.stepSize,
+      marketLotSz,
+    );
+    const priceDecimals = this.pickPrecision(
+      row.pricePrecision,
+      priceFilter?.tickSize,
+      tickSz,
+    );
 
-    const specs: InstrumentSpecs = {
+    const specs: BinanceInstrumentSpecs = {
       ctVal: 1,
       lotSz,
       minSz,
       ctValCcy: row.baseAsset || normalized.replace(/USDT|BUSD|USDC$/, ""),
       tickSz,
-      qtyDecimals: this.countDecimals(lotSz),
-      priceDecimals: this.countDecimals(tickSz),
+      qtyDecimals,
+      priceDecimals,
+      marketLotSz,
+      marketMinSz,
+      marketQtyDecimals,
     };
 
     this.specsCache.set(normalized, { specs, ts: Date.now() });
