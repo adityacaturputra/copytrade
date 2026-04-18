@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
-import { connectDB, DraftTrade, TradeLog } from "@copytrade/shared/lib/database";
+import { connectDB, DraftTrade } from "@copytrade/shared/lib/database";
+import {
+  createTradeProcessId,
+  logProcessStep,
+} from "@copytrade/shared/lib/process-log";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +35,7 @@ export async function POST(
 
     const newDraft = await DraftTrade.create({
       accountId: draft.accountId || null,
+      processId: createTradeProcessId("draftproc"),
       messageId: draft.messageId,
       channelId: draft.channelId,
       messageUrl: draft.messageUrl,
@@ -54,12 +59,16 @@ export async function POST(
       resolvedAt: null,
     });
 
-    await TradeLog.create({
+    await logProcessStep({
       accountId: draft.accountId || undefined,
-      type: "draft",
-      action: `redrafted_${draft.action}`,
+      processId: newDraft.processId || undefined,
+      type: "draft_process",
+      action: "redraft_created",
       symbol: draft.symbol,
-      details: draft.signalData,
+      details: {
+        fromDraftId: draft._id.toString(),
+        newDraftId: newDraft._id.toString(),
+      },
       result: "drafted",
     });
 

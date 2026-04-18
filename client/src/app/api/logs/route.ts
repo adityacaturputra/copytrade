@@ -15,6 +15,8 @@ export async function GET(request: NextRequest) {
     );
     const hideCronNoise = searchParams.get("hideCronNoise") !== "false";
     const accountId = searchParams.get("accountId");
+    const processId = searchParams.get("processId");
+    const order = searchParams.get("order") === "asc" ? 1 : -1;
 
     // Build base query — optionally exclude routine cron heartbeat logs
     const baseFilter: Record<string, unknown> = {};
@@ -30,9 +32,13 @@ export async function GET(request: NextRequest) {
       baseFilter.accountId = accountId;
     }
 
+    if (processId) {
+      baseFilter.processId = processId;
+    }
+
     const [logs, totalCount] = await Promise.all([
       TradeLog.find(baseFilter)
-        .sort({ createdAt: -1 })
+        .sort({ createdAt: order })
         .skip((page - 1) * limit)
         .limit(limit)
         .lean(),

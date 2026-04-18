@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { connectDB, DraftTrade, TradeLog } from "@copytrade/shared/lib/database";
+import { connectDB, DraftTrade } from "@copytrade/shared/lib/database";
 import { TradingSignal } from "@copytrade/shared/lib/ai/types";
 import {
   executeSignal,
   resolveDraftWithExecution,
 } from "@copytrade/shared/lib/executor";
+import {
+  createTradeProcessId,
+  logProcessStep,
+} from "@copytrade/shared/lib/process-log";
 
 export const dynamic = "force-dynamic";
 
@@ -66,6 +70,25 @@ export async function POST(
       );
     }
 
+    const processId = draft.processId || createTradeProcessId("draftproc");
+    if (!draft.processId) {
+      draft.processId = processId;
+      await draft.save();
+    }
+
+    await logProcessStep({
+      accountId: draft.accountId || undefined,
+      processId,
+      type: "draft_process",
+      action: "manual_accept_requested",
+      symbol: draft.symbol,
+      details: {
+        draftId: draft._id.toString(),
+        messageId: draft.messageId,
+      },
+      result: "processing",
+    });
+
     // ─── Auto-calculate TP from RR if no TP but has entry + SL ──────
     let bodyData: { rr?: number } = {};
     try {
@@ -97,17 +120,22 @@ export async function POST(
       draft.channelId || undefined,
       undefined,
       draft.accountId || undefined,
+      processId,
     );
 
     const draftOutcome = await resolveDraftWithExecution(draft, execution);
 
     if (draftOutcome.status === "rejected") {
-      await TradeLog.create({
+      await logProcessStep({
         accountId: draft.accountId || undefined,
-        type: "draft",
-        action: `rejected_${draft.action}`,
+        processId,
+        type: "draft_process",
+        action: "manual_accept_rejected",
         symbol: draft.symbol,
-        details: draft.signalData,
+        details: {
+          draftId: draft._id.toString(),
+          result: draftOutcome.result,
+        },
         result: "rejected",
         error: draftOutcome.error,
       });
@@ -118,12 +146,17 @@ export async function POST(
       );
     }
 
-    await TradeLog.create({
+    await logProcessStep({
       accountId: draft.accountId || undefined,
-      type: "draft",
-      action: `accepted_${draft.action}`,
+      processId,
+      type: "draft_process",
+      action: "manual_accept_completed",
       symbol: draft.symbol,
-      details: draft.signalData,
+      details: {
+        draftId: draft._id.toString(),
+        positionId: draftOutcome.positionId || null,
+        message: draftOutcome.message || null,
+      },
       result: draftOutcome.result,
     });
 

@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { connectDB, DraftTrade, TradeLog } from "@copytrade/shared/lib/database";
+import { connectDB, DraftTrade } from "@copytrade/shared/lib/database";
+import {
+  createTradeProcessId,
+  logProcessStep,
+} from "@copytrade/shared/lib/process-log";
 
 export const dynamic = "force-dynamic";
 
@@ -26,15 +30,23 @@ export async function POST(
       );
     }
 
+    const processId = draft.processId || createTradeProcessId("draftproc");
+    draft.processId = processId;
+
     draft.status = "rejected";
     draft.resolvedAt = new Date();
     await draft.save();
 
-    await TradeLog.create({
-      type: "draft",
-      action: `rejected_${draft.action}`,
+    await logProcessStep({
+      accountId: draft.accountId || undefined,
+      processId,
+      type: "draft_process",
+      action: "manual_reject_completed",
       symbol: draft.symbol,
-      details: draft.signalData,
+      details: {
+        draftId: draft._id.toString(),
+        messageId: draft.messageId,
+      },
       result: "rejected",
     });
 

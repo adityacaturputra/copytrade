@@ -3,7 +3,6 @@ import {
   ProcessedMessage,
   Position,
   DraftTrade,
-  TradeLog,
   Account,
   getTradingMode,
   IDraftTrade,
@@ -23,6 +22,10 @@ import {
 } from "./exchange/ExchangeFactory";
 import { calculateRiskBasedPosition, getRiskConfig } from "./risk";
 import { getSignalConfig } from "./signal-config";
+import {
+  createTradeProcessId,
+  logProcessStep,
+} from "./process-log";
 import {
   TradeAction,
   PositionSide,
@@ -48,6 +51,23 @@ type DraftSourceMessage = Pick<
 > & {
   originalContent?: string;
   timestamp?: Date;
+  processId?: string;
+};
+
+type ProcessTrackedMessage = Pick<
+  BaseSourceMessage,
+  | "messageId"
+  | "channelId"
+  | "author"
+  | "content"
+  | "messageUrl"
+  | "imageUrls"
+  | "sourceId"
+  | "sourceName"
+> & {
+  originalContent?: string;
+  timestamp?: Date;
+  processId?: string;
 };
 
 export interface MessageAnalysisResult {
@@ -444,9 +464,12 @@ export async function runSignalCheck(): Promise<{
         (d) => `${d.messageId}::${d.accountId?.toString() || "null"}`,
       ),
     );
-    const newMessages = allMessages.filter(
-      (m) => !existingKeys.has(`${m.messageId}::${m.sourceId || "null"}`),
-    );
+    const newMessages: ProcessTrackedMessage[] = allMessages
+      .filter((m) => !existingKeys.has(`${m.messageId}::${m.sourceId || "null"}`))
+      .map((msg) => ({
+        ...msg,
+        processId: createTradeProcessId("draftproc"),
+      }));
 
     if (newMessages.length === 0) {
       console.log("📭 No new messages to process");
@@ -461,6 +484,7 @@ export async function runSignalCheck(): Promise<{
         await ProcessedMessage.insertMany(
           newMessages.map((msg) => ({
             accountId: msg.sourceId || null,
+            processId: msg.processId || null,
             messageId: msg.messageId,
             channelId: msg.channelId,
             author: msg.author,
@@ -483,6 +507,26 @@ export async function runSignalCheck(): Promise<{
           "⚠️ Duplicate processed message keys detected during insertMany; continuing with existing records",
         );
       }
+
+      await Promise.all(
+        newMessages.map((msg) =>
+          logProcessStep({
+            accountId: msg.sourceId,
+            processId: msg.processId,
+            type: "draft_process",
+            action: "message_fetched",
+            details: {
+              messageId: msg.messageId,
+              channelId: msg.channelId,
+              author: msg.author,
+              sourceName: msg.sourceName || null,
+              timestamp: msg.timestamp || null,
+              imageCount: msg.imageUrls?.length || 0,
+            },
+            result: "fetched",
+          }),
+        ),
+      );
 
       const batchSize = signalConfig.batchSize || 5;
 
@@ -520,11 +564,11 @@ export async function runSignalCheck(): Promise<{
                 { status: "failed", processedAt: new Date() },
               );
 
-              await TradeLog.create({
-                accountId: msg.sourceId || undefined,
-                type: "signal",
-                action: "error",
-                symbol: undefined,
+              await logProcessStep({
+                accountId: msg.sourceId,
+                processId: msg.processId,
+                type: "draft_process",
+                action: "message_parse_failed",
                 details: msg.content,
                 result: "parse_failed",
                 error: parseError,
@@ -542,6 +586,18 @@ export async function runSignalCheck(): Promise<{
                 },
                 { status: "ignored", processedAt: new Date() },
               );
+
+              await logProcessStep({
+                accountId: msg.sourceId,
+                processId: msg.processId,
+                type: "draft_process",
+                action: "message_ignored",
+                details: {
+                  messageId: msg.messageId,
+                  reason: "No actionable trading signal detected",
+                },
+                result: "ignored",
+              });
               continue;
             }
 
@@ -551,15 +607,34 @@ export async function runSignalCheck(): Promise<{
                 `🚫 Cancel request detected for ${signal.symbol} from ${msg.author}`,
               );
 
-              // Find and reject any pending drafts for this symbol
-              const cancelledDrafts = await DraftTrade.updateMany(
-                { symbol: signal.symbol, status: "pending" },
-                { status: "rejected", resolvedAt: new Date() },
-              );
+              const draftsToCancel = await DraftTrade.find({
+                symbol: signal.symbol,
+                status: "pending",
+              });
 
-              if (cancelledDrafts.modifiedCount > 0) {
+              for (const pendingDraft of draftsToCancel) {
+                pendingDraft.status = "rejected";
+                pendingDraft.resolvedAt = new Date();
+                await pendingDraft.save();
+
+                await logProcessStep({
+                  accountId: pendingDraft.accountId || undefined,
+                  processId: pendingDraft.processId || undefined,
+                  type: "draft_process",
+                  action: "draft_rejected_by_cancel_signal",
+                  symbol: pendingDraft.symbol,
+                  details: {
+                    draftId: pendingDraft._id.toString(),
+                    cancelMessageId: msg.messageId,
+                    author: msg.author,
+                  },
+                  result: "rejected",
+                });
+              }
+
+              if (draftsToCancel.length > 0) {
                 console.log(
-                  `🚫 Cancelled ${cancelledDrafts.modifiedCount} pending draft(s) for ${signal.symbol}`,
+                  `🚫 Cancelled ${draftsToCancel.length} pending draft(s) for ${signal.symbol}`,
                 );
               }
 
@@ -576,13 +651,15 @@ export async function runSignalCheck(): Promise<{
                 },
               );
 
-              await TradeLog.create({
-                type: "signal",
+              await logProcessStep({
+                accountId: msg.sourceId,
+                processId: msg.processId,
+                type: "draft_process",
                 action: "cancel_request",
                 symbol: signal.symbol,
-                details: `Cancel request from ${msg.author}: ${signal.reasoning || "no reason provided"}. ${cancelledDrafts.modifiedCount} draft(s) cancelled.`,
+                details: `Cancel request from ${msg.author}: ${signal.reasoning || "no reason provided"}. ${draftsToCancel.length} draft(s) cancelled.`,
                 result:
-                  cancelledDrafts.modifiedCount > 0
+                  draftsToCancel.length > 0
                     ? "cancelled_drafts"
                     : "no_pending_drafts",
               });
@@ -653,6 +730,20 @@ export async function runSignalCheck(): Promise<{
               },
             );
 
+            await logProcessStep({
+              accountId: msg.sourceId,
+              processId: msg.processId,
+              type: "draft_process",
+              action: "signal_detected",
+              symbol: signal.symbol,
+              details: {
+                messageId: msg.messageId,
+                action: signal.action,
+                tradingMode: mode,
+              },
+              result: "processed",
+            });
+
             let autoDraft: IDraftTrade | null = null;
 
             // Execute or draft based on trading mode
@@ -664,6 +755,7 @@ export async function runSignalCheck(): Promise<{
                 msg.channelId,
                 msg.sourceName,
                 msg.sourceId,
+                msg.processId,
               );
               const draftOutcome = await resolveDraftWithExecution(
                 autoDraft,
@@ -686,12 +778,18 @@ export async function runSignalCheck(): Promise<{
                 result.executed++;
               }
 
-              await TradeLog.create({
-                accountId: msg.sourceId || undefined,
-                type: "signal",
-                action: signal.action,
+              await logProcessStep({
+                accountId: msg.sourceId,
+                processId: msg.processId,
+                type: "draft_process",
+                action: "auto_execution_completed",
                 symbol: signal.symbol,
-                details: JSON.stringify(signal),
+                details: {
+                  messageId: msg.messageId,
+                  draftId: autoDraft._id.toString(),
+                  outcome: draftOutcome.result,
+                  status: draftOutcome.status,
+                },
                 result: draftOutcome.result,
                 error: draftOutcome.error,
               });
@@ -705,15 +803,19 @@ export async function runSignalCheck(): Promise<{
                   messageId: msg.messageId,
                   accountId: msg.sourceId || null,
                 },
-                { status: "drafted" },
+                { status: "drafted", processedAt: new Date() },
               );
 
-              await TradeLog.create({
-                accountId: msg.sourceId || undefined,
-                type: "signal",
-                action: signal.action,
+              await logProcessStep({
+                accountId: msg.sourceId,
+                processId: msg.processId,
+                type: "draft_process",
+                action: "manual_draft_ready",
                 symbol: signal.symbol,
-                details: JSON.stringify(signal),
+                details: {
+                  messageId: msg.messageId,
+                  action: signal.action,
+                },
                 result: "drafted",
               });
             }
@@ -739,12 +841,13 @@ export async function runSignalCheck(): Promise<{
               await rejectDraftWithReason(autoDraft, errMsg);
             }
 
-            await TradeLog.create({
-              accountId: msg.sourceId || undefined,
-              type: "signal",
-              action: "error",
-              symbol: undefined,
+            await logProcessStep({
+              accountId: msg.sourceId,
+              processId: msg.processId,
+              type: "draft_process",
+              action: "process_failed",
               details: msg.content,
+              result: "failed",
               error: errMsg,
             });
 
@@ -766,16 +869,27 @@ export async function runSignalCheck(): Promise<{
 }
 
 async function buildBulkInputForMessage(
-  msg: Pick<
-    BaseSourceMessage,
-    "messageId" | "content" | "imageUrls"
-  > & { originalContent?: string },
+  msg: ProcessTrackedMessage,
   signalConfig: Awaited<ReturnType<typeof getSignalConfig>>,
 ): Promise<BulkMessageInput> {
   let content = msg.originalContent || msg.content;
   const imageUrls = msg.imageUrls || [];
 
   if (signalConfig.visionAIEnabled && imageUrls.length > 0) {
+    if (msg.processId) {
+      await logProcessStep({
+        accountId: msg.sourceId,
+        processId: msg.processId,
+        type: "draft_process",
+        action: "vision_analysis_started",
+        details: {
+          messageId: msg.messageId,
+          imageCount: imageUrls.length,
+        },
+        result: "processing",
+      });
+    }
+
     try {
       const { enhancedContent } = await preprocessImagesWithVision(
         content,
@@ -785,12 +899,58 @@ async function buildBulkInputForMessage(
         console.log(
           `👁️ Vision AI enhanced message ${msg.messageId} with chart data`,
         );
+
+        if (msg.processId) {
+          await logProcessStep({
+            accountId: msg.sourceId,
+            processId: msg.processId,
+            type: "draft_process",
+            action: "vision_analysis_completed",
+            details: {
+              messageId: msg.messageId,
+              imageCount: imageUrls.length,
+              enhanced: true,
+            },
+            result: "enhanced",
+          });
+        }
+      } else if (msg.processId) {
+        await logProcessStep({
+          accountId: msg.sourceId,
+          processId: msg.processId,
+          type: "draft_process",
+          action: "vision_analysis_completed",
+          details: {
+            messageId: msg.messageId,
+            imageCount: imageUrls.length,
+            enhanced: false,
+          },
+          result: "unchanged",
+        });
       }
       content = enhancedContent;
     } catch (visionErr) {
+      const errorMessage =
+        visionErr instanceof Error ? visionErr.message : String(visionErr);
+
       console.warn(
-        `⚠️ Vision AI failed for ${msg.messageId}, using original content: ${visionErr instanceof Error ? visionErr.message : String(visionErr)}`,
+        `⚠️ Vision AI failed for ${msg.messageId}, using original content: ${errorMessage}`,
       );
+
+      if (msg.processId) {
+        await logProcessStep({
+          accountId: msg.sourceId,
+          processId: msg.processId,
+          type: "draft_process",
+          action: "vision_analysis_failed",
+          details: {
+            messageId: msg.messageId,
+            imageCount: imageUrls.length,
+          },
+          result: "failed",
+          error: errorMessage,
+        });
+      }
     }
   }
 
@@ -804,32 +964,111 @@ async function buildBulkInputForMessage(
 }
 
 export async function analyzeMessagesWithAI(
-  messages: Array<
-    Pick<BaseSourceMessage, "messageId" | "content" | "imageUrls"> & {
-      originalContent?: string;
-    }
-  >,
+  messages: ProcessTrackedMessage[],
 ): Promise<MessageAnalysisResult[]> {
   if (messages.length === 0) return [];
 
   const signalConfig = await getSignalConfig();
   const analyzer = AIFactory.getAnalyzer();
+
+  await Promise.all(
+    messages
+      .filter((msg) => msg.processId)
+      .map((msg) =>
+        logProcessStep({
+          accountId: msg.sourceId,
+          processId: msg.processId,
+          type: "draft_process",
+          action: "ai_analysis_started",
+          details: {
+            messageId: msg.messageId,
+            hasImages: (msg.imageUrls || []).length > 0,
+          },
+          result: "processing",
+        }),
+      ),
+  );
+
   const bulkInputs = await Promise.all(
     messages.map((msg) => buildBulkInputForMessage(msg, signalConfig)),
   );
 
   try {
-    return await analyzer.parseBulkSignals(bulkInputs);
+    const results = await analyzer.parseBulkSignals(bulkInputs);
+
+    await Promise.all(
+      results.map((result) => {
+        const msg = messages.find((item) => item.messageId === result.messageId);
+        if (!msg?.processId) return Promise.resolve();
+
+        return logProcessStep({
+          accountId: msg.sourceId,
+          processId: msg.processId,
+          type: "draft_process",
+          action: "ai_analysis_completed",
+          symbol: result.signal?.symbol,
+          details: {
+            messageId: result.messageId,
+            action: result.signal?.action || null,
+            confidence: result.signal?.confidence || null,
+          },
+          result: result.signal?.action || "no_signal",
+        });
+      }),
+    );
+
+    return results;
   } catch (bulkErr) {
+    const bulkErrorMessage =
+      bulkErr instanceof Error ? bulkErr.message : String(bulkErr);
+
     console.warn(
-      `⚠️ Bulk AI call failed, falling back to individual: ${bulkErr instanceof Error ? bulkErr.message : String(bulkErr)}`,
+      `⚠️ Bulk AI call failed, falling back to individual: ${bulkErrorMessage}`,
+    );
+
+    await Promise.all(
+      messages
+        .filter((msg) => msg.processId)
+        .map((msg) =>
+          logProcessStep({
+            accountId: msg.sourceId,
+            processId: msg.processId,
+            type: "draft_process",
+            action: "ai_analysis_bulk_fallback",
+            details: {
+              messageId: msg.messageId,
+            },
+            result: "fallback_to_individual",
+            error: bulkErrorMessage,
+          }),
+        ),
     );
 
     const results: MessageAnalysisResult[] = [];
-    for (const input of bulkInputs) {
+    for (let index = 0; index < bulkInputs.length; index++) {
+      const input = bulkInputs[index];
+      const msg = messages[index];
+
       try {
         const signal = await analyzer.parseSignal(input.content);
         results.push({ messageId: input.messageId, signal });
+
+        if (msg?.processId) {
+          await logProcessStep({
+            accountId: msg.sourceId,
+            processId: msg.processId,
+            type: "draft_process",
+            action: "ai_analysis_completed",
+            symbol: signal?.symbol,
+            details: {
+              messageId: input.messageId,
+              action: signal?.action || null,
+              confidence: signal?.confidence || null,
+              mode: "individual",
+            },
+            result: signal?.action || "no_signal",
+          });
+        }
       } catch (parseErr) {
         const parseError =
           parseErr instanceof Error
@@ -840,6 +1079,21 @@ export async function analyzeMessagesWithAI(
           signal: null,
           parseError,
         });
+
+        if (msg?.processId) {
+          await logProcessStep({
+            accountId: msg.sourceId,
+            processId: msg.processId,
+            type: "draft_process",
+            action: "ai_analysis_failed",
+            details: {
+              messageId: input.messageId,
+              mode: "individual",
+            },
+            result: "parse_failed",
+            error: parseError,
+          });
+        }
       }
     }
 
@@ -853,6 +1107,7 @@ async function buildDraftPayload(
   accountId?: string,
 ): Promise<{
   accountId: string | null;
+  processId: string | null;
   messageId: string;
   channelId: string;
   messageUrl: string;
@@ -923,6 +1178,7 @@ async function buildDraftPayload(
 
   return {
     accountId: accountId || null,
+    processId: msg.processId || null,
     messageId: msg.messageId,
     channelId: msg.channelId,
     messageUrl: msg.messageUrl,
@@ -949,14 +1205,31 @@ export async function createDraft(
   msg: DraftSourceMessage,
   accountId?: string,
 ): Promise<IDraftTrade> {
+  const payload = await buildDraftPayload(signal, msg, accountId);
   const draft = await DraftTrade.create({
-    ...(await buildDraftPayload(signal, msg, accountId)),
+    ...payload,
     status: "pending",
   });
 
   console.log(
     `📝 Created draft: ${signal.action} ${signal.symbol} — sourceTimestamp: ${msg.timestamp}`,
   );
+
+  if (payload.processId) {
+    await logProcessStep({
+      accountId,
+      processId: payload.processId,
+      type: "draft_process",
+      action: "draft_created",
+      symbol: signal.symbol,
+      details: {
+        draftId: draft._id.toString(),
+        messageId: msg.messageId,
+        draftStatus: "pending",
+      },
+      result: "drafted",
+    });
+  }
 
   return draft;
 }
@@ -966,11 +1239,25 @@ export async function refreshDraftFromSignal(
   signal: TradingSignal,
   msg: DraftSourceMessage,
 ): Promise<IDraftTrade> {
-  Object.assign(
-    draft,
-    await buildDraftPayload(signal, msg, draft.accountId || undefined),
-  );
+  const payload = await buildDraftPayload(signal, msg, draft.accountId || undefined);
+  Object.assign(draft, payload);
   await draft.save();
+
+  if (payload.processId) {
+    await logProcessStep({
+      accountId: draft.accountId || undefined,
+      processId: payload.processId,
+      type: "draft_process",
+      action: "draft_refreshed",
+      symbol: signal.symbol,
+      details: {
+        draftId: draft._id.toString(),
+        messageId: msg.messageId,
+      },
+      result: "drafted",
+    });
+  }
+
   return draft;
 }
 
@@ -1300,6 +1587,7 @@ export async function executeSignal(
   channelId?: string,
   sourceName?: string,
   accountId?: string,
+  processId?: string,
 ): Promise<SignalExecutionResult> {
   const riskCfg = await getRiskConfig();
   const side = signal.action === "SELL" ? "SHORT" : "LONG";
@@ -1319,9 +1607,11 @@ export async function executeSignal(
           console.warn(
             `🚫 Max positions reached (${openCount}/${riskCfg.maxPositions}) — skipping ${signal.action} ${signal.symbol}`,
           );
-          await TradeLog.create({
-            type: "signal",
-            action: "skipped_max_positions",
+          await logProcessStep({
+            accountId,
+            processId,
+            type: "draft_process",
+            action: "execution_skipped_max_positions",
             symbol: signal.symbol,
             details: `Trade skipped: ${openCount} open positions, max is ${riskCfg.maxPositions}`,
             result: "skipped",
@@ -1369,9 +1659,11 @@ export async function executeSignal(
           console.log(
             `⚠️ Duplicate ${side} ${signal.symbol}: same entry=${existingEntry}, TP=${existingTP}, SL=${existingSL} — skipping`,
           );
-          await TradeLog.create({
-            type: "signal",
-            action: "skipped_duplicate",
+          await logProcessStep({
+            accountId,
+            processId,
+            type: "draft_process",
+            action: "execution_skipped_duplicate",
             symbol: signal.symbol,
             details: `Exact duplicate: open ${side} position exists with same entry=${existingEntry}, TP=${existingTP}, SL=${existingSL}`,
             result: "skipped",
@@ -1405,9 +1697,11 @@ export async function executeSignal(
             console.log(
               `🔄 Updated ${side} ${signal.symbol} TP/SL: ${updates.join(", ")}`,
             );
-            await TradeLog.create({
-              type: "signal",
-              action: "updated_tp_sl",
+            await logProcessStep({
+              accountId,
+              processId,
+              type: "draft_process",
+              action: "execution_updated_tp_sl",
               symbol: signal.symbol,
               details: `Existing position TP/SL updated instead of opening duplicate: ${updates.join(", ")}`,
               result: "updated",
@@ -1421,9 +1715,11 @@ export async function executeSignal(
             console.log(
               `⚠️ Duplicate ${side} ${signal.symbol}: entry matches but no new TP/SL values to update — skipping`,
             );
-            await TradeLog.create({
-              type: "signal",
-              action: "skipped_duplicate",
+            await logProcessStep({
+              accountId,
+              processId,
+              type: "draft_process",
+              action: "execution_skipped_duplicate",
               symbol: signal.symbol,
               details: `Open ${side} position exists with same entry but no valid TP/SL update provided`,
               result: "skipped",
@@ -1470,11 +1766,13 @@ export async function executeSignal(
           console.warn(
             `🚫 Skipping ${signal.action} ${signal.symbol}: no stop loss (and no TP to derive SL from) and skipNoSL is enabled`,
           );
-          await TradeLog.create({
-            type: "signal",
-            action: "skipped_no_sl",
+          await logProcessStep({
+            accountId,
+            processId,
+            type: "draft_process",
+            action: "execution_skipped_no_sl",
             symbol: signal.symbol,
-            details: `Trade skipped: no stop loss provided and skipNoSL is enabled`,
+            details: "Trade skipped: no stop loss provided and skipNoSL is enabled",
             result: "skipped",
           });
           return {
@@ -1501,6 +1799,21 @@ export async function executeSignal(
       }
 
       // ─── Execute trade via shared core function ───────────────────
+      await logProcessStep({
+        accountId,
+        processId,
+        type: "draft_process",
+        action: "execution_started",
+        symbol: signal.symbol,
+        details: {
+          messageId,
+          orderType: signal.orderType === "limit" ? "LIMIT" : "MARKET",
+          leverage,
+          quantity,
+        },
+        result: "processing",
+      });
+
       const position = await executeTrade({
         symbol: signal.symbol,
         action: signal.action,
@@ -1515,6 +1828,19 @@ export async function executeSignal(
         sourceName,
         signalData: JSON.stringify(signal),
         accountId,
+      });
+
+      await logProcessStep({
+        accountId,
+        processId,
+        type: "draft_process",
+        action: "execution_completed",
+        symbol: signal.symbol,
+        details: {
+          positionId: position._id.toString(),
+          side: position.side,
+        },
+        result: "executed",
       });
 
       return { type: "opened", position };
@@ -1551,12 +1877,34 @@ export async function executeSignal(
         console.log(`✅ Closed position: ${pos.symbol} ${pos.side}`);
       }
       if (positions.length === 0) {
+        await logProcessStep({
+          accountId,
+          processId,
+          type: "draft_process",
+          action: "close_no_open_position",
+          symbol: signal.symbol,
+          details: `No open position found for ${signal.symbol} (channel=${channelId || "any"}) to close`,
+          result: "noop",
+        });
         return {
           type: "noop",
           code: "no_open_position",
           details: `No open position found for ${signal.symbol} (channel=${channelId || "any"}) to close`,
         };
       }
+
+      await logProcessStep({
+        accountId,
+        processId,
+        type: "draft_process",
+        action: "close_completed",
+        symbol: signal.symbol,
+        details: {
+          closedCount: positions.length,
+        },
+        result: "updated",
+      });
+
       return { type: "closed", closedCount: positions.length };
     }
 
@@ -1598,6 +1946,15 @@ export async function executeSignal(
         console.log(
           `✅ Updated ${signal.action} for ${signal.symbol} (channel=${channelId || "any"}): SL=${position.stopLossPrice}, TPs=[${position.takeProfitTargets.map((t) => `${t.price}(${t.status})`).join(", ")}]`,
         );
+        await logProcessStep({
+          accountId,
+          processId,
+          type: "draft_process",
+          action: "position_update_completed",
+          symbol: signal.symbol,
+          details: `${signal.action} applied for ${signal.symbol}`,
+          result: "updated",
+        });
         return {
           type: "updated",
           code: signal.action.toLowerCase(),
@@ -1607,6 +1964,15 @@ export async function executeSignal(
         console.log(
           `⚠️ No open position found for ${signal.symbol} (channel=${channelId || "any"}) to update`,
         );
+        await logProcessStep({
+          accountId,
+          processId,
+          type: "draft_process",
+          action: "position_update_noop",
+          symbol: signal.symbol,
+          details: `No open position found for ${signal.symbol} (channel=${channelId || "any"}) to update`,
+          result: "noop",
+        });
         return {
           type: "noop",
           code: "no_open_position",

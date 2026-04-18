@@ -3,13 +3,16 @@ import {
   connectDB,
   DraftTrade,
   ProcessedMessage,
-  TradeLog,
 } from "@copytrade/shared/lib/database";
 import {
   analyzeMessagesWithAI,
   createDraft,
   refreshDraftFromSignal,
 } from "@copytrade/shared/lib/executor";
+import {
+  createTradeProcessId,
+  logProcessStep,
+} from "@copytrade/shared/lib/process-log";
 
 export const dynamic = "force-dynamic";
 
@@ -29,6 +32,29 @@ export async function POST(
       );
     }
 
+    const processId =
+      draft.status === "pending"
+        ? draft.processId || createTradeProcessId("draftproc")
+        : createTradeProcessId("draftproc");
+
+    if (draft.status === "pending" && !draft.processId) {
+      draft.processId = processId;
+      await draft.save();
+    }
+
+    await logProcessStep({
+      accountId: draft.accountId || undefined,
+      processId,
+      type: "draft_process",
+      action: "reanalyze_requested",
+      symbol: draft.symbol,
+      details: {
+        draftId: draft._id.toString(),
+        originalStatus: draft.status,
+      },
+      result: "processing",
+    });
+
     const message = {
       messageId: draft.messageId,
       channelId: draft.channelId,
@@ -38,6 +64,8 @@ export async function POST(
       messageUrl: draft.messageUrl,
       imageUrls: [...(draft.imageUrls || [])],
       timestamp: draft.sourceTimestamp || draft.createdAt || new Date(),
+      sourceId: draft.accountId || undefined,
+      processId,
     };
 
     const [result] = await analyzeMessagesWithAI([message]);
@@ -99,15 +127,20 @@ export async function POST(
       );
     }
 
-    await TradeLog.create({
+    await logProcessStep({
       accountId: draft.accountId || undefined,
-      type: "draft",
+      processId,
+      type: "draft_process",
       action:
         draft.status === "pending"
-          ? `reanalyzed_${signal.action}`
-          : `reanalyzed_to_draft_${signal.action}`,
+          ? "reanalyze_completed"
+          : "reanalyze_created_new_draft",
       symbol: signal.symbol,
-      details: JSON.stringify(signal),
+      details: {
+        originalDraftId: draft._id.toString(),
+        resultingDraftId: refreshedDraft._id.toString(),
+        action: signal.action,
+      },
       result: "drafted",
     });
 

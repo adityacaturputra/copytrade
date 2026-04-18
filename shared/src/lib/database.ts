@@ -61,6 +61,7 @@ async function ensureProcessedMessageIndexes(): Promise<void> {
 
 export interface IProcessedMessage extends Document {
   accountId?: string;
+  processId?: string;
   messageId: string;
   channelId: string;
   author: string;
@@ -113,6 +114,7 @@ export interface IPosition extends Document {
 
 export interface ITradeLog extends Document {
   accountId?: string;
+  processId?: string;
   type: string;
   action: string;
   symbol?: string;
@@ -124,6 +126,7 @@ export interface ITradeLog extends Document {
 
 export interface IDraftTrade extends Document {
   accountId?: string;
+  processId?: string;
   messageId: string;
   channelId: string;
   messageUrl: string;
@@ -256,6 +259,7 @@ export interface ISignalConfig extends Document {
 const ProcessedMessageSchema = new Schema<IProcessedMessage>(
   {
     accountId: { type: String, default: null },
+    processId: { type: String, default: null },
     messageId: { type: String, required: true },
     channelId: { type: String, required: true },
     author: { type: String, required: true },
@@ -281,6 +285,7 @@ const ProcessedMessageSchema = new Schema<IProcessedMessage>(
 );
 
 ProcessedMessageSchema.index({ status: 1 });
+ProcessedMessageSchema.index({ processId: 1 });
 ProcessedMessageSchema.index({ createdAt: -1 });
 ProcessedMessageSchema.index({ sourceTimestamp: -1 });
 ProcessedMessageSchema.index({ messageId: 1, accountId: 1 }, { unique: true });
@@ -334,6 +339,7 @@ PositionSchema.index({ symbol: 1, side: 1, channelId: 1, status: 1 });
 const TradeLogSchema = new Schema<ITradeLog>(
   {
     accountId: { type: String, default: null },
+    processId: { type: String, default: null },
     type: { type: String, required: true },
     action: { type: String, required: true },
     symbol: { type: String, default: null },
@@ -345,11 +351,13 @@ const TradeLogSchema = new Schema<ITradeLog>(
 );
 
 TradeLogSchema.index({ type: 1 });
+TradeLogSchema.index({ processId: 1, createdAt: 1 });
 TradeLogSchema.index({ createdAt: -1 });
 
 const DraftTradeSchema = new Schema<IDraftTrade>(
   {
     accountId: { type: String, default: null },
+    processId: { type: String, default: null },
     messageId: { type: String, required: true },
     channelId: { type: String, required: true },
     messageUrl: { type: String, default: null },
@@ -380,6 +388,7 @@ const DraftTradeSchema = new Schema<IDraftTrade>(
 );
 
 DraftTradeSchema.index({ status: 1 });
+DraftTradeSchema.index({ processId: 1 });
 DraftTradeSchema.index({ createdAt: -1 });
 
 const DiscordSourceSchema = new Schema<IDiscordSource>(

@@ -52,6 +52,7 @@ interface Message {
 interface Log {
   _id?: string;
   id?: number;
+  processId?: string;
   type: string;
   action: string;
   symbol?: string;
@@ -64,6 +65,7 @@ interface Log {
 
 interface DraftTrade {
   _id: string;
+  processId?: string;
   messageId: string;
   channelId: string;
   messageUrl: string;
@@ -1100,6 +1102,212 @@ function StatCard({
   );
 }
 
+function formatProcessActionLabel(action: string) {
+  return action
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function renderStructuredLogDetails(details?: string) {
+  if (!details) return null;
+
+  try {
+    const parsed = JSON.parse(details);
+    return (
+      <pre className="mt-2 overflow-x-auto rounded-lg bg-slate-950/70 p-3 text-[11px] text-slate-300">
+        {JSON.stringify(parsed, null, 2)}
+      </pre>
+    );
+  } catch {
+    return (
+      <p className="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-slate-400">
+        {details}
+      </p>
+    );
+  }
+}
+
+function ProcessLogsAccordion({
+  processId,
+  refreshKey,
+}: {
+  processId?: string;
+  refreshKey: number;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [logs, setLogs] = useState<Log[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [loadedProcessId, setLoadedProcessId] = useState<string | null>(null);
+
+  const fetchProcessLogs = useCallback(async () => {
+    if (!processId) return;
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const params = new URLSearchParams({
+        processId,
+        page: "1",
+        limit: "200",
+        hideCronNoise: "false",
+        order: "asc",
+      });
+
+      const res = await fetch(`/api/logs?${params}`);
+      const json = await res.json();
+      if (!json.success) {
+        throw new Error(json.error || "Failed to load process logs");
+      }
+
+      setLogs(json.data.logs || []);
+      setLoadedProcessId(processId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load process logs");
+    } finally {
+      setLoading(false);
+    }
+  }, [processId]);
+
+  useEffect(() => {
+    if (!isOpen || !processId) return;
+    fetchProcessLogs();
+  }, [isOpen, processId, refreshKey, fetchProcessLogs]);
+
+  return (
+    <div className="mt-3 rounded-lg border border-slate-700/70 bg-slate-900/30">
+      <button
+        onClick={() => setIsOpen((value) => !value)}
+        className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left text-sm"
+      >
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="text-slate-300">{isOpen ? "▼" : "▶"}</span>
+          <span className="font-medium text-slate-200">Process Logs</span>
+          {processId ? (
+            <span className="truncate rounded bg-slate-800 px-2 py-0.5 font-mono text-[10px] text-slate-400">
+              {processId}
+            </span>
+          ) : (
+            <span className="rounded bg-slate-800 px-2 py-0.5 text-[10px] text-slate-500">
+              legacy draft
+            </span>
+          )}
+        </div>
+        <span className="text-xs text-slate-500">
+          {processId ? `${logs.length} logs` : "No processId"}
+        </span>
+      </button>
+
+      {isOpen && (
+        <div className="border-t border-slate-700/70 px-3 py-3">
+          {!processId ? (
+            <p className="text-xs text-slate-500">
+              Draft lama ini belum punya `processId`, jadi timeline proses belum
+              bisa ditampilkan.
+            </p>
+          ) : (
+            <>
+              <div className="mb-3 flex items-center justify-between">
+                <p className="text-xs text-slate-500">
+                  Timeline proses dari fetch/analyze sampai draft dieksekusi atau
+                  direview.
+                </p>
+                <button
+                  onClick={() => fetchProcessLogs()}
+                  disabled={loading}
+                  className="rounded-lg border border-slate-700 px-2.5 py-1 text-xs text-slate-300 transition hover:bg-slate-800 disabled:opacity-40"
+                >
+                  Refresh
+                </button>
+              </div>
+
+              {loading && (
+                <div className="flex items-center gap-2 py-3 text-xs text-slate-400">
+                  <div className="spinner h-4 w-4 border-2" />
+                  Loading process logs...
+                </div>
+              )}
+
+              {!loading && error && (
+                <p className="rounded-lg border border-red-900/50 bg-red-950/20 px-3 py-2 text-xs text-red-300">
+                  {error}
+                </p>
+              )}
+
+              {!loading && !error && logs.length === 0 && loadedProcessId === processId && (
+                <p className="text-xs text-slate-500">
+                  Belum ada log proses untuk draft ini.
+                </p>
+              )}
+
+              {!loading && !error && logs.length > 0 && (
+                <div className="space-y-3">
+                  {logs.map((log, index) => (
+                    <div
+                      key={log._id || `${log.processId}-${index}`}
+                      className={`rounded-lg border px-3 py-2.5 ${
+                        log.error
+                          ? "border-red-900/50 bg-red-950/20"
+                          : log.result === "executed" || log.result === "drafted"
+                            ? "border-emerald-900/40 bg-emerald-950/10"
+                            : "border-slate-700/70 bg-slate-950/40"
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <span className="badge badge-info">{log.type}</span>
+                        <span className="font-medium text-slate-200">
+                          {formatProcessActionLabel(log.action)}
+                        </span>
+                        {log.symbol && (
+                          <span className="font-mono text-primary-400">
+                            {log.symbol}
+                          </span>
+                        )}
+                        {log.result && (
+                          <span
+                            className={`badge ${
+                              log.result === "executed" ||
+                              log.result === "updated" ||
+                              log.result === "drafted" ||
+                              log.result === "processed"
+                                ? "badge-success"
+                                : log.result === "failed" ||
+                                    log.result === "rejected" ||
+                                    log.result === "parse_failed"
+                                  ? "badge-danger"
+                                  : "badge-neutral"
+                            }`}
+                          >
+                            {log.result}
+                          </span>
+                        )}
+                        <span className="ml-auto text-[11px] text-slate-500">
+                          {new Date(
+                            log.createdAt || log.created_at || "",
+                          ).toLocaleString()}
+                        </span>
+                      </div>
+                      {renderStructuredLogDetails(log.details)}
+                      {log.error && (
+                        <p className="mt-2 whitespace-pre-wrap text-xs text-red-300">
+                          Error: {log.error}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DraftsTab({
   channelIdFilter,
   accountIdFilter,
@@ -1212,6 +1420,7 @@ function DraftsTab({
             onDraftAction={onDraftAction}
             riskConfig={riskConfig}
             accountBalance={accountBalance}
+            refreshKey={refreshKey}
           />
         ))}
       </div>
@@ -1234,6 +1443,7 @@ function DraftCard({
   onDraftAction,
   riskConfig,
   accountBalance,
+  refreshKey,
 }: {
   draft: DraftTrade;
   acting: boolean;
@@ -1244,6 +1454,7 @@ function DraftCard({
   ) => void;
   riskConfig: RiskConfig | null;
   accountBalance: number;
+  refreshKey: number;
 }) {
   const [showDetails, setShowDetails] = useState(false);
   const [modalIndex, setModalIndex] = useState<number | null>(null);
@@ -1274,8 +1485,10 @@ function DraftCard({
 
   // Parse orderType from signalData
   let orderType: string | null = null;
+  let parsedSignalData: unknown = null;
   try {
     const signal = JSON.parse(draft.signalData);
+    parsedSignalData = signal;
     orderType = signal.orderType || null;
   } catch {}
 
@@ -1604,6 +1817,11 @@ function DraftCard({
                 {showDetails ? "▼ Hide" : "▶ Show"} original
               </button>
             </div>
+
+            <ProcessLogsAccordion
+              processId={draft.processId}
+              refreshKey={refreshKey}
+            />
           </div>
 
           {/* Action Buttons — only for pending */}
@@ -1713,7 +1931,7 @@ function DraftCard({
               📋 Raw AI Signal Data
             </summary>
             <pre className="text-xs text-slate-400 mt-2 bg-slate-900/50 rounded p-3 overflow-x-auto">
-              {JSON.stringify(JSON.parse(draft.signalData), null, 2)}
+              {JSON.stringify(parsedSignalData || draft.signalData, null, 2)}
             </pre>
           </details>
         </div>
