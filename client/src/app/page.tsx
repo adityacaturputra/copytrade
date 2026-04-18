@@ -88,6 +88,8 @@ interface DraftTrade {
   resolvedAt?: string;
 }
 
+type DraftAction = "accept" | "reject" | "redraft" | "reanalyze";
+
 interface AccountInfo {
   totalBalance: number;
   availableBalance: number;
@@ -291,8 +293,8 @@ export default function Dashboard() {
 
   const handleDraftAction = async (
     draftId: string,
-    action: "accept" | "reject",
-    extraBody?: Record<string, any>,
+    action: DraftAction,
+    extraBody?: Record<string, unknown>,
   ) => {
     setActingDraft(draftId);
     try {
@@ -303,7 +305,16 @@ export default function Dashboard() {
       });
       const json = await res.json();
       if (json.success) {
-        alert(`Draft ${action}ed successfully!`);
+        const successMessage =
+          json.data?.message ||
+          (action === "accept"
+            ? "Draft accepted successfully!"
+            : action === "reject"
+              ? "Draft rejected successfully!"
+              : action === "redraft"
+                ? "Draft created again successfully!"
+                : "Draft re-analyzed successfully!");
+        alert(successMessage);
         setRefreshKey((k) => k + 1);
         await fetchData();
       } else {
@@ -1004,8 +1015,7 @@ export default function Dashboard() {
               accountIdFilter={selectedAccountId}
               refreshKey={refreshKey}
               actingDraft={actingDraft}
-              onAccept={handleDraftAction}
-              onReject={handleDraftAction}
+              onDraftAction={handleDraftAction}
               riskConfig={data?.riskConfig || null}
               accountBalance={
                 displayAccountInfo?.availableBalance ||
@@ -1095,8 +1105,7 @@ function DraftsTab({
   accountIdFilter,
   refreshKey,
   actingDraft,
-  onAccept,
-  onReject,
+  onDraftAction,
   riskConfig,
   accountBalance,
 }: {
@@ -1104,15 +1113,10 @@ function DraftsTab({
   accountIdFilter: string;
   refreshKey: number;
   actingDraft: string | null;
-  onAccept: (
+  onDraftAction: (
     id: string,
-    action: "accept" | "reject",
-    extraBody?: Record<string, any>,
-  ) => void;
-  onReject: (
-    id: string,
-    action: "accept" | "reject",
-    extraBody?: Record<string, any>,
+    action: DraftAction,
+    extraBody?: Record<string, unknown>,
   ) => void;
   riskConfig: RiskConfig | null;
   accountBalance: number;
@@ -1205,8 +1209,7 @@ function DraftsTab({
             key={draft._id}
             draft={draft}
             acting={actingDraft === draft._id}
-            onAccept={onAccept}
-            onReject={onReject}
+            onDraftAction={onDraftAction}
             riskConfig={riskConfig}
             accountBalance={accountBalance}
           />
@@ -1228,22 +1231,16 @@ function DraftsTab({
 function DraftCard({
   draft,
   acting,
-  onAccept,
-  onReject,
+  onDraftAction,
   riskConfig,
   accountBalance,
 }: {
   draft: DraftTrade;
   acting: boolean;
-  onAccept: (
+  onDraftAction: (
     id: string,
-    action: "accept" | "reject",
-    extraBody?: Record<string, any>,
-  ) => void;
-  onReject: (
-    id: string,
-    action: "accept" | "reject",
-    extraBody?: Record<string, any>,
+    action: DraftAction,
+    extraBody?: Record<string, unknown>,
   ) => void;
   riskConfig: RiskConfig | null;
   accountBalance: number;
@@ -1614,7 +1611,7 @@ function DraftCard({
             <div className="flex sm:flex-col gap-2 sm:min-w-[120px]">
               <button
                 onClick={() =>
-                  onAccept(
+                  onDraftAction(
                     draft._id,
                     "accept",
                     canCalcTPFromRR ? { rr: customRR } : undefined,
@@ -1627,11 +1624,18 @@ function DraftCard({
                 Accept{canCalcTPFromRR ? ` (${customRR}RR)` : ""}
               </button>
               <button
-                onClick={() => onReject(draft._id, "reject")}
+                onClick={() => onDraftAction(draft._id, "reject")}
                 disabled={acting}
                 className="flex-1 sm:flex-none bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold px-4 py-2 rounded-lg text-sm transition flex items-center justify-center gap-1"
               >
                 ❌ Reject
+              </button>
+              <button
+                onClick={() => onDraftAction(draft._id, "reanalyze")}
+                disabled={acting}
+                className="flex-1 sm:flex-none bg-sky-600 hover:bg-sky-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold px-4 py-2 rounded-lg text-sm transition flex items-center justify-center gap-1"
+              >
+                🔄 Re-analyze
               </button>
             </div>
           )}
@@ -1639,6 +1643,21 @@ function DraftCard({
           {/* Collapse button for resolved */}
           {isResolved && (
             <div className="flex flex-col gap-2 sm:min-w-[120px]">
+              <button
+                onClick={() => onDraftAction(draft._id, "redraft")}
+                disabled={acting}
+                className="bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold px-4 py-2 rounded-lg text-sm transition flex items-center justify-center gap-1"
+              >
+                {acting ? <div className="spinner w-4 h-4 border-2" /> : "📝"}
+                Draft Again
+              </button>
+              <button
+                onClick={() => onDraftAction(draft._id, "reanalyze")}
+                disabled={acting}
+                className="bg-sky-600 hover:bg-sky-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold px-4 py-2 rounded-lg text-sm transition flex items-center justify-center gap-1"
+              >
+                🔄 Re-analyze
+              </button>
               <button
                 onClick={() => setIsExpanded(false)}
                 className="bg-slate-700 hover:bg-slate-600 text-white font-semibold px-4 py-2 rounded-lg text-sm transition flex items-center justify-center gap-1"

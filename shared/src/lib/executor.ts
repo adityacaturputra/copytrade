@@ -37,6 +37,25 @@ import {
   signalToExchangeOrderType,
 } from "./enums";
 
+type DraftSourceMessage = Pick<
+  BaseSourceMessage,
+  | "messageId"
+  | "channelId"
+  | "author"
+  | "content"
+  | "messageUrl"
+  | "imageUrls"
+> & {
+  originalContent?: string;
+  timestamp?: Date;
+};
+
+export interface MessageAnalysisResult {
+  messageId: string;
+  signal: TradingSignal | null;
+  parseError?: string;
+}
+
 /**
  * Auto-calculate Take Profit targets based on RR (Risk-Reward) ratio.
  * If a signal has entryPrice + stopLoss but no TP, generate TP levels using RR.
@@ -465,81 +484,11 @@ export async function runSignalCheck(): Promise<{
         );
       }
 
-      // Batch AI parsing
-      const analyzer = AIFactory.getAnalyzer();
       const batchSize = signalConfig.batchSize || 5;
 
       for (let i = 0; i < newMessages.length; i += batchSize) {
         const batch = newMessages.slice(i, i + batchSize);
-
-        // Build BulkMessageInput[] — AI returns messageId so we can map back
-        // Vision AI pre-layer: extract text from chart images before main AI
-        const bulkInputs: BulkMessageInput[] = [];
-
-        for (const msg of batch) {
-          let content = msg.originalContent || msg.content;
-          const imageUrls = msg.imageUrls || [];
-
-          // If vision AI is enabled and message has images, preprocess through Gemini Vision
-          if (signalConfig.visionAIEnabled && imageUrls.length > 0) {
-            try {
-              const { enhancedContent } = await preprocessImagesWithVision(
-                content,
-                imageUrls,
-              );
-              if (enhancedContent !== content) {
-                console.log(
-                  `👁️ Vision AI enhanced message ${msg.messageId} with chart data`,
-                );
-              }
-              content = enhancedContent;
-            } catch (visionErr) {
-              console.warn(
-                `⚠️ Vision AI failed for ${msg.messageId}, using original content: ${visionErr instanceof Error ? visionErr.message : String(visionErr)}`,
-              );
-            }
-          }
-
-          bulkInputs.push({
-            messageId: msg.messageId,
-            content,
-            ...(signalConfig.includeImageUrls && imageUrls.length > 0
-              ? { imageUrls }
-              : {}),
-          });
-        }
-
-        let batchResults: Array<{
-          messageId: string;
-          signal: TradingSignal | null;
-          parseError?: string;
-        }>;
-
-        try {
-          batchResults = await analyzer.parseBulkSignals(bulkInputs);
-        } catch (bulkErr) {
-          // If bulk fails entirely, fall back to individual parsing
-          console.warn(
-            `⚠️ Bulk AI call failed, falling back to individual: ${bulkErr instanceof Error ? bulkErr.message : String(bulkErr)}`,
-          );
-          batchResults = [];
-          for (const input of bulkInputs) {
-            try {
-              const signal = await analyzer.parseSignal(input.content);
-              batchResults.push({ messageId: input.messageId, signal });
-            } catch (parseErr) {
-              const parseError =
-                parseErr instanceof Error
-                  ? parseErr.message
-                  : String(parseErr || "Unknown parse error");
-              batchResults.push({
-                messageId: input.messageId,
-                signal: null,
-                parseError,
-              });
-            }
-          }
-        }
+        const batchResults = await analyzeMessagesWithAI(batch);
 
         // Build a lookup map from messageId → original Discord message
         const msgLookup = new Map<string, (typeof batch)[number]>();
@@ -816,19 +765,113 @@ export async function runSignalCheck(): Promise<{
   return result;
 }
 
-async function createDraft(
+async function buildBulkInputForMessage(
+  msg: Pick<
+    BaseSourceMessage,
+    "messageId" | "content" | "imageUrls"
+  > & { originalContent?: string },
+  signalConfig: Awaited<ReturnType<typeof getSignalConfig>>,
+): Promise<BulkMessageInput> {
+  let content = msg.originalContent || msg.content;
+  const imageUrls = msg.imageUrls || [];
+
+  if (signalConfig.visionAIEnabled && imageUrls.length > 0) {
+    try {
+      const { enhancedContent } = await preprocessImagesWithVision(
+        content,
+        imageUrls,
+      );
+      if (enhancedContent !== content) {
+        console.log(
+          `👁️ Vision AI enhanced message ${msg.messageId} with chart data`,
+        );
+      }
+      content = enhancedContent;
+    } catch (visionErr) {
+      console.warn(
+        `⚠️ Vision AI failed for ${msg.messageId}, using original content: ${visionErr instanceof Error ? visionErr.message : String(visionErr)}`,
+      );
+    }
+  }
+
+  return {
+    messageId: msg.messageId,
+    content,
+    ...(signalConfig.includeImageUrls && imageUrls.length > 0
+      ? { imageUrls }
+      : {}),
+  };
+}
+
+export async function analyzeMessagesWithAI(
+  messages: Array<
+    Pick<BaseSourceMessage, "messageId" | "content" | "imageUrls"> & {
+      originalContent?: string;
+    }
+  >,
+): Promise<MessageAnalysisResult[]> {
+  if (messages.length === 0) return [];
+
+  const signalConfig = await getSignalConfig();
+  const analyzer = AIFactory.getAnalyzer();
+  const bulkInputs = await Promise.all(
+    messages.map((msg) => buildBulkInputForMessage(msg, signalConfig)),
+  );
+
+  try {
+    return await analyzer.parseBulkSignals(bulkInputs);
+  } catch (bulkErr) {
+    console.warn(
+      `⚠️ Bulk AI call failed, falling back to individual: ${bulkErr instanceof Error ? bulkErr.message : String(bulkErr)}`,
+    );
+
+    const results: MessageAnalysisResult[] = [];
+    for (const input of bulkInputs) {
+      try {
+        const signal = await analyzer.parseSignal(input.content);
+        results.push({ messageId: input.messageId, signal });
+      } catch (parseErr) {
+        const parseError =
+          parseErr instanceof Error
+            ? parseErr.message
+            : String(parseErr || "Unknown parse error");
+        results.push({
+          messageId: input.messageId,
+          signal: null,
+          parseError,
+        });
+      }
+    }
+
+    return results;
+  }
+}
+
+async function buildDraftPayload(
   signal: TradingSignal,
-  msg: {
-    messageId: string;
-    channelId: string;
-    author: string;
-    content: string;
-    messageUrl: string;
-    imageUrls: string[];
-    timestamp?: Date;
-  },
+  msg: DraftSourceMessage,
   accountId?: string,
-): Promise<IDraftTrade> {
+): Promise<{
+  accountId: string | null;
+  messageId: string;
+  channelId: string;
+  messageUrl: string;
+  author: string;
+  originalContent: string;
+  imageUrls: string[];
+  signalData: string;
+  action: string;
+  symbol: string;
+  side: "LONG" | "SHORT";
+  entryPrice: number | null;
+  takeProfitTargets: number[];
+  stopLoss: number | null;
+  leverage: number;
+  quantity: number;
+  confidence: number;
+  reasoning: string;
+  sourceTimestamp: Date | null;
+}> {
   const riskCfg = await getRiskConfig();
   const side = signal.action === "SELL" ? "SHORT" : "LONG";
   const quantity = signal.positionSize || riskCfg.defaultPositionSize;
@@ -878,13 +921,13 @@ async function createDraft(
     }
   }
 
-  const draft = await DraftTrade.create({
+  return {
     accountId: accountId || null,
     messageId: msg.messageId,
     channelId: msg.channelId,
     messageUrl: msg.messageUrl,
     author: msg.author,
-    originalContent: msg.content,
+    originalContent: msg.originalContent || msg.content,
     imageUrls: msg.imageUrls,
     signalData: JSON.stringify(signal),
     action: signal.action,
@@ -897,14 +940,37 @@ async function createDraft(
     quantity,
     confidence: signal.confidence || 0,
     reasoning: signal.reasoning || "",
-    status: "pending",
     sourceTimestamp: msg.timestamp || null,
+  };
+}
+
+export async function createDraft(
+  signal: TradingSignal,
+  msg: DraftSourceMessage,
+  accountId?: string,
+): Promise<IDraftTrade> {
+  const draft = await DraftTrade.create({
+    ...(await buildDraftPayload(signal, msg, accountId)),
+    status: "pending",
   });
 
   console.log(
     `📝 Created draft: ${signal.action} ${signal.symbol} — sourceTimestamp: ${msg.timestamp}`,
   );
 
+  return draft;
+}
+
+export async function refreshDraftFromSignal(
+  draft: IDraftTrade,
+  signal: TradingSignal,
+  msg: DraftSourceMessage,
+): Promise<IDraftTrade> {
+  Object.assign(
+    draft,
+    await buildDraftPayload(signal, msg, draft.accountId || undefined),
+  );
+  await draft.save();
   return draft;
 }
 
