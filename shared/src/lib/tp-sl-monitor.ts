@@ -1,4 +1,4 @@
-import { connectDB, Position, TradeLog, Account, IPosition } from "./database";
+import { connectDB, Position, Account, IPosition } from "./database";
 import {
   ExchangeFactory,
   ExchangeCredentials,
@@ -6,6 +6,7 @@ import {
 import { ExchangeClient } from "./exchange/types";
 import { splitQuantityForTPs } from "./executor";
 import { inspectPendingLimitOrder } from "./pending-order-sync";
+import { createTradeLog } from "./trade-log-store";
 
 /**
  * Resolve the exchange client for a position based on its accountId.
@@ -90,7 +91,7 @@ export async function runTpslMonitor(): Promise<{
               `🚫 [TP/SL Monitor] Limit order cancelled: ${position.symbol} ${position.side} (${inspection.reason})`,
             );
 
-            await TradeLog.create({
+            await createTradeLog({
               type: "tpsl-monitor",
               action: "limit_cancelled",
               symbol: position.symbol,
@@ -113,7 +114,7 @@ export async function runTpslMonitor(): Promise<{
               `✅ [TP/SL Monitor] Limit order filled: ${position.symbol} ${position.side} — promoted to open (${inspection.reason})`,
             );
 
-            await TradeLog.create({
+            await createTradeLog({
               type: "tpsl-monitor",
               action: "limit_filled",
               symbol: position.symbol,
@@ -175,7 +176,7 @@ export async function runTpslMonitor(): Promise<{
         position.tpSlPlaced = false;
         await position.save();
 
-        await TradeLog.create({
+        await createTradeLog({
           type: "tpsl-monitor",
           action: "tpsl_error",
           symbol: position.symbol,
@@ -284,7 +285,7 @@ async function placeTpslForPosition(
   position.tpSlPlaced = true;
   await position.save();
 
-  await TradeLog.create({
+  await createTradeLog({
     type: "tpsl-monitor",
     action: "tpsl_placed",
     symbol: position.symbol,

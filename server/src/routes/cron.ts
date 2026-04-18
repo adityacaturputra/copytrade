@@ -2,7 +2,7 @@ import { Router, Request, Response, type Router as ExpressRouter } from "express
 import { runSignalCheck } from "@copytrade/shared/lib/executor";
 import { runPositionMonitor } from "@copytrade/shared/lib/monitor";
 import { runTpslMonitor } from "@copytrade/shared/lib/tp-sl-monitor";
-import { TradeLog, connectDB } from "@copytrade/shared/lib/database";
+import { connectDB } from "@copytrade/shared/lib/database";
 import {
   tryStart,
   updateProgress,
@@ -10,6 +10,7 @@ import {
   getCronStatus,
   getAllCronStatus,
 } from "@copytrade/shared/lib/cron-status";
+import { createTradeLog } from "@copytrade/shared/lib/trade-log-store";
 
 const router: ExpressRouter = Router();
 let loggedCronAuthMode = false;
@@ -76,7 +77,7 @@ async function runSignalCheckWork() {
     await connectDB();
     updateProgress(SIGNAL_CHECK_NAME, "Connected to database");
 
-    await TradeLog.create({
+    await createTradeLog({
       type: "cron",
       action: "signal_check_start",
       details: "Starting Discord signal check cron job",
@@ -93,7 +94,7 @@ async function runSignalCheckWork() {
     );
 
     await connectDB();
-    await TradeLog.create({
+    await createTradeLog({
       type: "cron",
       action: "signal_check_end",
       details: `Checked: ${result.checked}, Signals: ${result.newSignals}, Executed: ${result.executed}, Errors: ${result.errors.length}`,
@@ -108,7 +109,7 @@ async function runSignalCheckWork() {
 
     try {
       await connectDB();
-      await TradeLog.create({
+      await createTradeLog({
         type: "cron",
         action: "signal_check_error",
         error: errMsg,
@@ -153,7 +154,7 @@ async function runPositionMonitorWork() {
     await connectDB();
     updateProgress(POSITION_MONITOR_NAME, "Connected to database");
 
-    await TradeLog.create({
+    await createTradeLog({
       type: "cron",
       action: "position_monitor_start",
       details: "Starting position monitor cron job",
@@ -170,7 +171,7 @@ async function runPositionMonitorWork() {
     );
 
     await connectDB();
-    await TradeLog.create({
+    await createTradeLog({
       type: "cron",
       action: "position_monitor_end",
       details: `Checked: ${result.checked}, Actions: ${result.actions}, Errors: ${result.errors.length}`,
@@ -185,7 +186,7 @@ async function runPositionMonitorWork() {
 
     try {
       await connectDB();
-      await TradeLog.create({
+      await createTradeLog({
         type: "cron",
         action: "position_monitor_error",
         error: errMsg,
@@ -230,7 +231,7 @@ async function runTpSlMonitorWork() {
     await connectDB();
     updateProgress(TP_SL_MONITOR_NAME, "Connected to database");
 
-    await TradeLog.create({
+    await createTradeLog({
       type: "cron",
       action: "tpsl_monitor_start",
       details: "Starting TP/SL monitor cron job",
@@ -247,7 +248,7 @@ async function runTpSlMonitorWork() {
     );
 
     await connectDB();
-    await TradeLog.create({
+    await createTradeLog({
       type: "cron",
       action: "tpsl_monitor_end",
       details: `Checked: ${result.checked}, Promoted: ${result.promoted}, TP/SL placed: ${result.tpslPlaced}, Errors: ${result.errors.length}`,
@@ -262,7 +263,7 @@ async function runTpSlMonitorWork() {
 
     try {
       await connectDB();
-      await TradeLog.create({
+      await createTradeLog({
         type: "cron",
         action: "tpsl_monitor_error",
         error: errMsg,

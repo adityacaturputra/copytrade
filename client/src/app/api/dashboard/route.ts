@@ -6,7 +6,6 @@ import {
   getPendingDrafts,
   getTradingMode,
   Position,
-  TradeLog,
   Account,
 } from "@copytrade/shared/lib/database";
 import {
@@ -15,6 +14,7 @@ import {
 } from "@copytrade/shared/lib/exchange/ExchangeFactory";
 import { getRiskConfig } from "@copytrade/shared/lib/risk";
 import { getSignalConfig } from "@copytrade/shared/lib/signal-config";
+import { createTradeLog } from "@copytrade/shared/lib/trade-log-store";
 
 export const dynamic = "force-dynamic";
 
@@ -185,7 +185,7 @@ export async function GET() {
                 closeReason: "Closed on Exchange (external)",
               },
             );
-            await TradeLog.create({
+            await createTradeLog({
               type: "monitor",
               action: "sync_close",
               symbol: pos.symbol,

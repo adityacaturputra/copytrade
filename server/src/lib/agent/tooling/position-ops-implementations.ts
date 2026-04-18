@@ -3,13 +3,13 @@ import {
   DraftTrade,
   Position,
   ProcessedMessage,
-  TradeLog,
 } from "@copytrade/shared/lib/database";
 import { AIFactory } from "@copytrade/shared/lib/ai/AIFactory";
 import { buildPositionAnalysisInput } from "@copytrade/shared/lib/ai/PositionMonitorContext";
 import { createTradeProcessId, logProcessStep } from "@copytrade/shared/lib/process-log";
 import { DiscordSourceProvider } from "@copytrade/shared/lib/source/DiscordSourceProvider";
 import { SourceType } from "@copytrade/shared/lib/enums";
+import { getProcessTradeLogs } from "@copytrade/shared/lib/trade-log-store";
 import type { ToolExecutor } from "./shared";
 import {
   type AccountRecord,
@@ -375,11 +375,11 @@ export const positionOpsToolImplementations: Record<string, ToolExecutor> = {
       (drafts.find((item) => item.processId)?.processId as string | undefined);
 
     const processLogs = inferredProcessId
-      ? await TradeLog.find({ processId: inferredProcessId })
-          .sort({ createdAt: 1 })
-          .limit(limit)
-          .lean()
-          .exec()
+      ? await getProcessTradeLogs({
+          processId: inferredProcessId,
+          limit,
+          order: "asc",
+        })
       : [];
 
     let sourceContextMessages: Array<Record<string, unknown>> = [];
@@ -434,11 +434,11 @@ export const positionOpsToolImplementations: Record<string, ToolExecutor> = {
     const limit = normalizePositiveNumber(args.limit, 50, 200);
     const order = normalizeSortOrder(args.order);
 
-    const logs = await TradeLog.find({ processId })
-      .sort({ createdAt: order === "asc" ? 1 : -1 })
-      .limit(limit)
-      .lean()
-      .exec();
+    const logs = await getProcessTradeLogs({
+      processId,
+      limit,
+      order,
+    });
 
     return JSON.stringify({
       success: true,

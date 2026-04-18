@@ -1,5 +1,6 @@
 import mongoose, { Schema, Document, models, Model } from "mongoose";
 import { SourceType } from "./enums";
+import { countTradeLogs, getRecentTradeLogs } from "./trade-log-store";
 
 // ─── Connection ────────────────────────────────────────────────────────────────
 
@@ -653,31 +654,31 @@ export async function setTradingMode(mode: "auto" | "manual"): Promise<void> {
   await TradingMode.findOneAndUpdate({}, { mode }, { upsert: true, new: true });
 }
 
-export function getStats() {
-  return Promise.all([
+export async function getStats() {
+  const [
+    totalMessages,
+    executedSignals,
+    openPositions,
+    closedPositions,
+    totalLogs,
+    pendingDrafts,
+  ] = await Promise.all([
     ProcessedMessage.countDocuments(),
     ProcessedMessage.countDocuments({ status: "executed" }),
     Position.countDocuments({ status: "open" }),
     Position.countDocuments({ status: "closed" }),
-    TradeLog.countDocuments(),
+    countTradeLogs(),
     DraftTrade.countDocuments({ status: "pending" }),
-  ]).then(
-    ([
-      totalMessages,
-      executedSignals,
-      openPositions,
-      closedPositions,
-      totalLogs,
-      pendingDrafts,
-    ]) => ({
-      totalMessages,
-      executedSignals,
-      openPositions,
-      closedPositions,
-      totalLogs,
-      pendingDrafts,
-    }),
-  );
+  ]);
+
+  return {
+    totalMessages,
+    executedSignals,
+    openPositions,
+    closedPositions,
+    totalLogs,
+    pendingDrafts,
+  };
 }
 
 export function getOpenPositions() {
@@ -689,7 +690,7 @@ export function getRecentMessages(limit: number = 20) {
 }
 
 export function getRecentLogs(limit: number = 50) {
-  return TradeLog.find().sort({ createdAt: -1 }).limit(limit).lean();
+  return getRecentTradeLogs(limit);
 }
 
 export function getAllPositions(limit: number = 50) {

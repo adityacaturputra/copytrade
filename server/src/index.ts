@@ -11,6 +11,8 @@ import fs from "fs";
 import path from "path";
 import cronRoutes from "./routes/cron";
 import agentRoutes from "./routes/agent";
+import draftsRoutes from "./routes/drafts";
+import logsRoutes from "./routes/logs";
 
 // Load environment variables
 const serverDir = path.resolve(__dirname, "..");
@@ -26,6 +28,7 @@ for (const envFile of envCandidates) {
 }
 
 const app: Express = express();
+process.env.COPYTRADE_RUNTIME = "backend";
 const PORT = process.env.PORT || 3001;
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
 const RAW_CRON_SECRET = process.env.CRON_SECRET;
@@ -83,6 +86,8 @@ app.get("/health", (req: Request, res: Response) => {
 // Mount cron routes at /api/cron
 app.use("/api/cron", cronRoutes);
 app.use("/api/agent", agentRoutes);
+app.use("/api/drafts", draftsRoutes);
+app.use("/api/logs", logsRoutes);
 
 // ─── Error Handling ───────────────────────────────────────────────────────────
 

@@ -1,60 +1,28 @@
 import { NextRequest, NextResponse } from "next/server";
-import { connectDB, TradeLog } from "@copytrade/shared/lib/database";
+const BACKEND_URL = (process.env.BACKEND_URL || "http://localhost:3001").replace(
+  /\/+$/,
+  "",
+);
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
   try {
-    await connectDB();
+    const search = new URL(request.url).search;
+    const response = await fetch(`${BACKEND_URL}/api/logs${search}`, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      cache: "no-store",
+    });
 
-    const { searchParams } = new URL(request.url);
-    const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
-    const limit = Math.min(
-      100,
-      Math.max(1, parseInt(searchParams.get("limit") || "50", 10)),
-    );
-    const hideCronNoise = searchParams.get("hideCronNoise") !== "false";
-    const accountId = searchParams.get("accountId");
-    const processId = searchParams.get("processId");
-    const order = searchParams.get("order") === "asc" ? 1 : -1;
+    const text = await response.text();
 
-    // Build base query — optionally exclude routine cron heartbeat logs
-    const baseFilter: Record<string, unknown> = {};
-    if (hideCronNoise) {
-      baseFilter.$or = [
-        { type: { $ne: "cron" } },
-        { action: { $not: /(_start|_end)$/ } },
-      ];
-    }
-
-    // Filter by accountId when specified
-    if (accountId && accountId !== "all") {
-      baseFilter.accountId = accountId;
-    }
-
-    if (processId) {
-      baseFilter.processId = processId;
-    }
-
-    const [logs, totalCount] = await Promise.all([
-      TradeLog.find(baseFilter)
-        .sort({ createdAt: order })
-        .skip((page - 1) * limit)
-        .limit(limit)
-        .lean(),
-      TradeLog.countDocuments(baseFilter),
-    ]);
-
-    const totalPages = Math.ceil(totalCount / limit);
-
-    return NextResponse.json({
-      success: true,
-      data: {
-        logs,
-        page,
-        limit,
-        totalCount,
-        totalPages,
+    return new NextResponse(text, {
+      status: response.status,
+      headers: {
+        "Content-Type": "application/json",
       },
     });
   } catch (err) {

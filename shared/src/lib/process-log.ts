@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { TradeLog } from "./database";
+import { createTradeLog } from "./trade-log-store";
 
 export interface ProcessLogInput {
   accountId?: string | null;
@@ -48,7 +48,7 @@ export async function logProcessStep({
   result,
   error,
 }: ProcessLogInput) {
-  return TradeLog.create({
+  return createTradeLog({
     accountId: accountId || null,
     processId: processId || null,
     type,
