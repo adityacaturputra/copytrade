@@ -2,6 +2,7 @@ import { connectDB, Position, Account, IPosition } from "./database";
 import {
   ExchangeFactory,
   ExchangeCredentials,
+  normalizeExchangeProvider,
 } from "./exchange/ExchangeFactory";
 import { ExchangeClient } from "./exchange/types";
 import { splitQuantityForTPs } from "./executor";
@@ -19,8 +20,9 @@ async function getExchangeForPosition(position: {
   if (position.accountId) {
     const account = await Account.findById(position.accountId).lean();
     if (account?.exchangeData) {
+      const provider = normalizeExchangeProvider(account.tradingPlatform);
       const creds: ExchangeCredentials = {
-        provider: (account.tradingPlatform as any) || "paper",
+        provider: provider || "paper",
         apiKey: account.exchangeData.apiKey,
         secretKey: account.exchangeData.secretKey,
         passphrase: account.exchangeData.passphrase,

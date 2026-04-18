@@ -832,8 +832,8 @@ export default function SettingsPage() {
               </h2>
               <p className="text-xs text-slate-400">
                 Each account links a signal source (Discord/Telegram) with an
-                exchange (OKX/MEXC/Paper). Signals from the source channels are
-                auto-executed on the linked exchange.
+                exchange (OKX/Binance/Bybit/MEXC/Paper). Signals from the
+                source channels are auto-executed on the linked exchange.
               </p>
             </div>
 
@@ -1127,6 +1127,7 @@ export default function SettingsPage() {
                         >
                           <option value="okx">OKX</option>
                           <option value="binance">Binance Futures</option>
+                          <option value="bybit">Bybit</option>
                           <option value="mexc">MEXC</option>
                           <option value="paper">
                             📝 Paper Trading (simulated)

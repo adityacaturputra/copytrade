@@ -7,6 +7,7 @@ import {
   ExchangeFactory,
   type ExchangeProvider,
   type ExchangeCredentials,
+  normalizeExchangeProvider as normalizeSharedExchangeProvider,
 } from "@copytrade/shared/lib/exchange/ExchangeFactory";
 import type { ExchangeClient } from "@copytrade/shared/lib/exchange/types";
 import { SourceFactory } from "@copytrade/shared/lib/source/SourceFactory";
@@ -111,17 +112,7 @@ export function getAccountIdFromArgs(args: ToolArgs): string | undefined {
 }
 
 export function normalizeExchangeProvider(value: unknown): ExchangeProvider | null {
-  if (typeof value !== "string") return null;
-  const normalized = value.trim().toLowerCase();
-  if (
-    normalized === "okx" ||
-    normalized === "binance" ||
-    normalized === "mexc" ||
-    normalized === "paper"
-  ) {
-    return normalized;
-  }
-  return null;
+  return normalizeSharedExchangeProvider(value);
 }
 
 export function normalizeSourceType(value: unknown): SourceType | null {
@@ -218,6 +209,45 @@ export function normalizePositiveNumber(
 
 export function normalizeSortOrder(value: unknown): "asc" | "desc" {
   return value === "asc" ? "asc" : "desc";
+}
+
+export async function cancelAlgoOrdersByTypes(
+  exchange: ExchangeClient,
+  symbol: string,
+  types: Array<"tp" | "sl" | "conditional">,
+): Promise<{ cancelled: string[]; errors: string[] }> {
+  const supportsDirectAlgoCancel =
+    exchange.name === "bybit" || exchange.name === "binance";
+
+  if (!supportsDirectAlgoCancel) {
+    return exchange.cancelAlgoOrders(symbol);
+  }
+
+  const cancelled: string[] = [];
+  const errors: string[] = [];
+  const algoOrders = await exchange.getAlgoOrders(symbol);
+  const selectedOrders = algoOrders.filter((order) =>
+    types.includes((order.type || "conditional") as "tp" | "sl" | "conditional"),
+  );
+
+  for (const order of selectedOrders) {
+    try {
+      const ok = await exchange.cancelOrder(order.orderId, order.symbol);
+      if (ok) {
+        cancelled.push(order.orderId);
+      } else {
+        errors.push(`${order.orderId}: Unknown order`);
+      }
+    } catch (error) {
+      errors.push(
+        `${order.orderId}: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`,
+      );
+    }
+  }
+
+  return { cancelled, errors };
 }
 
 export function toClosingSide(positionSide: "LONG" | "SHORT"): "BUY" | "SELL" {
@@ -327,8 +357,13 @@ export async function getLivePositionSnapshot(position: PositionRecord): Promise
     accountId: position.accountId,
   });
   const exchangePositions = await exchange.exchange.getOpenPositions();
+  const matchingSide = position.side === "LONG" ? "LONG" : "SHORT";
   const exchangePosition =
-    exchangePositions.find((item) => item.symbol === position.symbol) || null;
+    exchangePositions.find(
+      (item) => item.symbol === position.symbol && item.side === matchingSide,
+    ) ||
+    exchangePositions.find((item) => item.symbol === position.symbol) ||
+    null;
   const currentPrice =
     exchangePosition?.markPrice ||
     (await exchange.exchange.getTickerPrice(position.symbol));

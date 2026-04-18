@@ -3,8 +3,30 @@ import { MexcExchange } from "./MexcExchange";
 import { OkxExchange } from "./OkxExchange";
 import { PaperExchange } from "./PaperExchange";
 import { BinanceExchange } from "./BinanceExchange";
+import { BybitExchange } from "./BybitExchange";
 
-export type ExchangeProvider = "mexc" | "okx" | "binance" | "paper";
+export const SUPPORTED_EXCHANGE_PROVIDERS = [
+  "mexc",
+  "okx",
+  "binance",
+  "bybit",
+  "paper",
+] as const;
+
+export type ExchangeProvider =
+  (typeof SUPPORTED_EXCHANGE_PROVIDERS)[number];
+
+export function normalizeExchangeProvider(
+  value: unknown,
+): ExchangeProvider | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  return (SUPPORTED_EXCHANGE_PROVIDERS as readonly string[]).includes(
+    normalized,
+  )
+    ? (normalized as ExchangeProvider)
+    : null;
+}
 
 /**
  * ExchangeCredentials — per-account exchange configuration stored in DB.
@@ -85,6 +107,18 @@ export class ExchangeFactory {
         }
         const simulated = creds?.simulated ?? false;
         return new BinanceExchange(apiKey, secretKey, simulated);
+      }
+
+      case "bybit": {
+        const apiKey = creds?.apiKey;
+        const secretKey = creds?.secretKey;
+        if (!apiKey || !secretKey) {
+          throw new Error(
+            "Bybit apiKey and secretKey must be configured in account settings",
+          );
+        }
+        const simulated = creds?.simulated ?? false;
+        return new BybitExchange(apiKey, secretKey, simulated);
       }
 
       default: {

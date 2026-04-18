@@ -12,6 +12,7 @@ import { SourceType } from "@copytrade/shared/lib/enums";
 import { getProcessTradeLogs } from "@copytrade/shared/lib/trade-log-store";
 import type { ToolExecutor } from "./shared";
 import {
+  cancelAlgoOrdersByTypes,
   type AccountRecord,
   findPositionRecord,
   getAccountIdFromArgs,
@@ -86,7 +87,9 @@ export const positionOpsToolImplementations: Record<string, ToolExecutor> = {
     }
 
     const processId = createTradeProcessId("agentmgr");
-    const { exchange, currentPrice } = await getLivePositionSnapshot(position);
+    const { exchange, currentPrice, exchangePosition } =
+      await getLivePositionSnapshot(position);
+    const exchangePositionId = exchangePosition?.positionId;
 
     await logProcessStep({
       accountId: position.accountId,
@@ -111,7 +114,7 @@ export const positionOpsToolImplementations: Record<string, ToolExecutor> = {
       const quantity = position.quantity;
       const closingSide = toClosingSide(position.side);
 
-      await exchange.cancelAlgoOrders(position.symbol);
+      await cancelAlgoOrdersByTypes(exchange, position.symbol, ["sl"]);
       const orderId = await exchange.placeStopLoss(
         position.symbol,
         roundedStopLoss,
@@ -136,7 +139,11 @@ export const positionOpsToolImplementations: Record<string, ToolExecutor> = {
 
     switch (action) {
       case "close": {
-        await exchange.closePosition(position.symbol, position.orderId || undefined);
+        await exchange.closePosition(
+          position.symbol,
+          exchangePositionId,
+          position.quantity,
+        );
         positionDoc.status = "closed";
         positionDoc.closedAt = new Date();
         positionDoc.closeReason = "Closed by agent manage_position tool";
@@ -164,7 +171,7 @@ export const positionOpsToolImplementations: Record<string, ToolExecutor> = {
 
         await exchange.closePosition(
           position.symbol,
-          position.orderId || undefined,
+          exchangePositionId,
           closeQuantity,
         );
 
@@ -221,7 +228,7 @@ export const positionOpsToolImplementations: Record<string, ToolExecutor> = {
         const quantity = position.quantity;
         const closingSide = toClosingSide(position.side);
 
-        await exchange.cancelAlgoOrders(position.symbol);
+        await cancelAlgoOrdersByTypes(exchange, position.symbol, ["tp"]);
         const orderId = await exchange.placeTakeProfit(
           position.symbol,
           newPrice,

@@ -4,6 +4,7 @@ import { buildPositionAnalysisInput } from "./ai/PositionMonitorContext";
 import {
   ExchangeFactory,
   ExchangeCredentials,
+  normalizeExchangeProvider,
 } from "./exchange/ExchangeFactory";
 import { ExchangeClient } from "./exchange/types";
 import { inspectPendingLimitOrder } from "./pending-order-sync";
@@ -26,8 +27,9 @@ async function getExchangeForPosition(position: {
   if (position.accountId) {
     const account = await Account.findById(position.accountId).lean();
     if (account?.exchangeData) {
+      const provider = normalizeExchangeProvider(account.tradingPlatform);
       const creds: ExchangeCredentials = {
-        provider: (account.tradingPlatform as any) || "paper",
+        provider: provider || "paper",
         apiKey: account.exchangeData.apiKey,
         secretKey: account.exchangeData.secretKey,
         passphrase: account.exchangeData.passphrase,
@@ -95,8 +97,9 @@ export async function runPositionMonitor(): Promise<{
           if (accountId !== "__global__") {
             const account = await Account.findById(accountId).lean();
             if (account?.exchangeData) {
+              const provider = normalizeExchangeProvider(account.tradingPlatform);
               const creds: ExchangeCredentials = {
-                provider: (account.tradingPlatform as any) || "paper",
+                provider: provider || "paper",
                 apiKey: account.exchangeData.apiKey,
                 secretKey: account.exchangeData.secretKey,
                 passphrase: account.exchangeData.passphrase,
@@ -254,8 +257,9 @@ export async function runPositionMonitor(): Promise<{
         if (accountId !== "__global__") {
           const account = await Account.findById(accountId).lean();
           if (account?.exchangeData) {
+            const provider = normalizeExchangeProvider(account.tradingPlatform);
             const creds: ExchangeCredentials = {
-              provider: (account.tradingPlatform as any) || "paper",
+              provider: provider || "paper",
               apiKey: account.exchangeData.apiKey,
               secretKey: account.exchangeData.secretKey,
               passphrase: account.exchangeData.passphrase,

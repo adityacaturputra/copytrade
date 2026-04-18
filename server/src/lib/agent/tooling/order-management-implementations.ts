@@ -1,5 +1,9 @@
 import type { ToolExecutor } from "./shared";
-import { resolveExchangeContext, roundPrice } from "./shared";
+import {
+  cancelAlgoOrdersByTypes,
+  resolveExchangeContext,
+  roundPrice,
+} from "./shared";
 
 export const orderManagementToolImplementations: Record<string, ToolExecutor> = {
   get_open_orders: async (args) => {
@@ -83,7 +87,7 @@ export const orderManagementToolImplementations: Record<string, ToolExecutor> = 
     const roundedTrigger = roundPrice(newTriggerPrice);
     const roundedExecute = roundPrice(newExecutePrice);
 
-    await exchange.cancelAlgoOrders(symbol);
+    await cancelAlgoOrdersByTypes(exchange, symbol, ["sl"]);
     const orderId = await exchange.placeStopLoss(
       symbol,
       roundedTrigger,
@@ -114,7 +118,7 @@ export const orderManagementToolImplementations: Record<string, ToolExecutor> = 
     const roundedTrigger = roundPrice(newTriggerPrice);
     const roundedExecute = roundPrice(newExecutePrice);
 
-    await exchange.cancelAlgoOrders(symbol);
+    await cancelAlgoOrdersByTypes(exchange, symbol, ["tp"]);
     const orderId = await exchange.placeTakeProfit(
       symbol,
       roundedTrigger,

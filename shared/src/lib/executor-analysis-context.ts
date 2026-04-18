@@ -2,6 +2,7 @@ import { Account, DraftTrade, Position } from "./database";
 import {
   ExchangeFactory,
   ExchangeCredentials,
+  normalizeExchangeProvider,
 } from "./exchange/ExchangeFactory";
 import type {
   AccountInfo as ExchangeAccountInfo,
@@ -72,16 +73,9 @@ function roundContextNumber(value: number | null | undefined): number | null {
 function buildExchangeCredentialsFromAccount(
   account: AnalysisAccountRecord,
 ): ExchangeCredentials {
-  const tradingPlatform = String(account.tradingPlatform || "")
-    .trim()
-    .toLowerCase();
+  const tradingPlatform = normalizeExchangeProvider(account.tradingPlatform);
 
-  if (
-    tradingPlatform !== "okx" &&
-    tradingPlatform !== "binance" &&
-    tradingPlatform !== "mexc" &&
-    tradingPlatform !== "paper"
-  ) {
+  if (!tradingPlatform) {
     throw new Error(
       `Account "${account.name || "unknown"}" has invalid trading platform "${account.tradingPlatform || "unset"}"`,
     );

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB, Account, DiscordSource } from "@copytrade/shared/lib/database";
 import { SourceType } from "@copytrade/shared/lib/enums";
+import { normalizeExchangeProvider } from "@copytrade/shared/lib/exchange/ExchangeFactory";
 
 // ─── GET /api/accounts ─────────────────────────────────────────────────────
 export async function GET() {
@@ -78,6 +79,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const provider = normalizeExchangeProvider(tradingPlatform || "paper");
+    if (!provider) {
+      return NextResponse.json(
+        { success: false, error: `Invalid trading platform: ${tradingPlatform}` },
+        { status: 400 },
+      );
+    }
+
     // Validate source credentials based on type
     if (sourceType === "discord") {
       if (!sourceData?.token) {
@@ -95,13 +104,20 @@ export async function POST(req: NextRequest) {
     }
 
     // Validate exchange credentials if trading platform specified
-    if (tradingPlatform && tradingPlatform !== "paper") {
+    if (provider !== "paper") {
       if (!exchangeData?.apiKey || !exchangeData?.secretKey) {
         return NextResponse.json(
           {
             success: false,
-            error: `Exchange API credentials are required for ${tradingPlatform}`,
+            error: `Exchange API credentials are required for ${provider}`,
           },
+          { status: 400 },
+        );
+      }
+
+      if (provider === "okx" && !exchangeData?.passphrase) {
+        return NextResponse.json(
+          { success: false, error: "OKX passphrase is required" },
           { status: 400 },
         );
       }
@@ -115,12 +131,12 @@ export async function POST(req: NextRequest) {
       channelIds,
       channelNames: channelNames || {},
       disabledChannelIds: [],
-      tradingPlatform: tradingPlatform || "paper",
+      tradingPlatform: provider,
       exchangeData: exchangeData || null,
     });
 
     console.log(
-      `✅ Created account: ${name} (${sourceType} → ${tradingPlatform || "paper"})`,
+      `✅ Created account: ${name} (${sourceType} → ${provider})`,
     );
 
     return NextResponse.json({ success: true, account });
@@ -156,6 +172,19 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json(
         { success: false, error: "Account not found" },
         { status: 404 },
+      );
+    }
+
+    if (
+      updates.tradingPlatform !== undefined &&
+      !normalizeExchangeProvider(updates.tradingPlatform)
+    ) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Invalid trading platform: ${updates.tradingPlatform}`,
+        },
+        { status: 400 },
       );
     }
 

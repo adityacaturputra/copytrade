@@ -3,6 +3,7 @@ import { SourceType } from "../enums";
 import {
   ExchangeCredentials,
   ExchangeFactory,
+  normalizeExchangeProvider,
 } from "../exchange/ExchangeFactory";
 import { ExchangeClient } from "../exchange/types";
 import {
@@ -74,8 +75,9 @@ function getExchangeForMonitorAccount(
   account: MonitorAccountLike | null,
 ): ExchangeClient {
   if (account?.exchangeData) {
+    const provider = normalizeExchangeProvider(account.tradingPlatform);
     const credentials: ExchangeCredentials = {
-      provider: (account.tradingPlatform as ExchangeCredentials["provider"]) || "paper",
+      provider: provider || "paper",
       apiKey: account.exchangeData.apiKey,
       secretKey: account.exchangeData.secretKey,
       passphrase: account.exchangeData.passphrase,
