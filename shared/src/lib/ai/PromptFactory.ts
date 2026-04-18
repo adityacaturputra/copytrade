@@ -6,6 +6,25 @@ import {
   MessageType,
 } from "../enums";
 
+function buildFreshnessRules(): string {
+  return `CRITICAL — Freshness / stale-chart rules:
+- NEVER return a fresh BUY/SELL new entry from an old chart snapshot if the trade has already progressed.
+- If the chart or message shows the setup is already running, already moved, already pumped/dumped, already late, already invalid, or already hit TP/SL, do NOT create a new entry.
+- If the current price marker or recent candles are already far beyond the entry zone, treat the setup as stale unless there is an explicit fresh re-entry instruction.
+- If any TP has clearly already been hit/traded through on the screenshot, do NOT create a fresh limit order from that old setup. If all TPs are already hit, classify it as "${MessageType.RESULT_STATUS}".
+- Prefer surrounding message text over the chart image when judging freshness/timing. Messages like "udah jalan", "sudah running", "ngacir", "already running", "already pumped", "already dumped", "missed", "telat", "TP hit", "TP1 kena", "target reached", "udah kena SL", "invalid", "expired", "jangan entry", "skip" mean it is NOT a fresh entry.
+- Only return "${MessageType.NEW_ENTRY}" when the setup is still actionable at the screenshot time and the message is clearly presenting a fresh setup.`;
+}
+
+function buildVisionFreshnessRules(): string {
+  return `Freshness rules for chart images:
+- Do NOT treat a chart as a fresh setup if the live/current price marker or latest candles already moved through the entry path and toward/through TP levels.
+- For LONG charts: if the current price is already above one or more TP levels, or especially above the final TP, classify it as "${MessageType.RESULT_STATUS}" or "${MessageType.IGNORE}", not "${MessageType.NEW_ENTRY}".
+- For SHORT charts: if the current price is already below one or more TP levels, or especially below the final TP, classify it as "${MessageType.RESULT_STATUS}" or "${MessageType.IGNORE}", not "${MessageType.NEW_ENTRY}".
+- If the chart looks like a historical result screenshot, a trade that already ran, or a setup that is no longer actionable, do NOT output a fresh signal summary.
+- Only classify as "${MessageType.NEW_ENTRY}" when the chart still looks pending/fresh and the shown entry/TP/SL levels are still valid.`;
+}
+
 function enumValues<T extends Record<string, string>>(e: T): string {
   return Object.values(e)
     .map((v) => `"${v}"`)
@@ -67,11 +86,15 @@ Important rules:
 - positionSize: extract position size in USDT if mentioned (e.g. "$100", "100 USDT")
 - defaultRR: Extract the risk-reward ratio if mentioned (e.g. "3R", "3RR", "RR 3", "risk reward 1:3"). This is a PLAIN NUMBER (e.g., 3). If the signal has no TP but has entry + SL + RR ratio, set defaultRR so the system can auto-calculate TP levels.
 
+${buildFreshnessRules()}
+
 IMPORTANT — Detect cancel/close requests in reply messages:
 - If someone replies to a signal saying they want to cancel, close, or invalidate it (e.g., "lupa cancel", "close aja", "bisa sl+ atau close posisi", "should be cancelled"), return action: "${TradeAction.CANCEL}" with the symbol from the quoted signal
 - Phrases indicating cancellation intent: "lupa cancel", "cancel aja", "close posisi", "bisa close", "should cancel", "forget to cancel", "jangan masuk", "skip aja"
 - Set confidence based on how clear the cancel request is
 - Copy the symbol from the quoted signal into the symbol field
+
+IMPORTANT — If the message contains an appended "[Chart Image Analysis]" section, treat it as supporting context from image OCR/vision, not as permission to override the original message timing. The original message text still decides whether the setup is fresh, stale, already running, already hit TP, or should be skipped.
 
 CRITICAL — Ignore these types of messages (return null):
 - Replies that are purely casual conversation with NO reference to trading actions (e.g., just chatting, saying thanks, asking questions)
@@ -100,6 +123,9 @@ Some messages may also include chart image URLs labeled as [Attached Images]. Th
 - Trendlines, orderblocks, or other technical patterns visible
 
 When a message has attached chart images, the ENTRY/SL/TP values may ONLY be visible in the chart (not in the text). In this case, you MUST extract those values from the image and include them in your response.
+
+IMPORTANT: attached chart images may be OLD snapshots. Use BOTH the text and the image to judge whether the setup is still fresh/actionable. If the text says the trade already ran, already hit TP, already pumped/dumped, is late, missed, invalid, or should be skipped, then do NOT convert the old chart into a new entry.
+If a message effectively contains a generated "[Chart Image Analysis]" summary, treat that as supporting context only. It must not override freshness cues from the original message text.
 
 Each message has a unique messageId. You MUST include the messageId in each parsed result so results can be mapped back.
 
@@ -134,6 +160,8 @@ Rules for each signal object:
 - positionSize: extract position size in USDT if mentioned (e.g. "$100", "100 USDT")
 - timeframe: extract timeframe if mentioned (e.g., "4h", "1D", "15m")
 - defaultRR: Extract the risk-reward ratio if mentioned (e.g., "3R", "3RR", "RR 3", "risk reward 1:3"). This is a PLAIN NUMBER (e.g., 3). If the signal has no TP but has entry + SL + RR ratio, set defaultRR so the system can auto-calculate TP levels.
+
+${buildFreshnessRules()}
 
 CRITICAL — Detect cancel/close requests in reply messages:
 - If someone replies to a signal saying they want to cancel, close, or invalidate it (e.g., "lupa cancel", "close aja", "bisa sl+ atau close posisi", "should be cancelled"), return action: "${TradeAction.CANCEL}" with the symbol from the quoted signal
@@ -203,6 +231,8 @@ Look for:
 
 IMPORTANT: Read the PRICE AXIS carefully. Look at the numbers on the right or left side of the chart to determine exact price values. Match horizontal lines to their corresponding price levels.
 
+${buildVisionFreshnessRules()}
+
 Respond in this EXACT JSON format:
 {
   "isSignal": true/false,
@@ -221,6 +251,7 @@ Rules:
 - Use messageType "close_cancel" for close/cancel/invalidation charts
 - Use messageType "result_status" for screenshots that only show results/status like TP hit, SL hit, running 1R, pnl update
 - Use messageType "ignore" for non-chart/noise images
+- If the chart shows price already beyond entry/TP in a way that makes the setup stale, use "result_status" or "ignore", not "new_entry"
 - If messageType is "result_status" or "ignore", set isSignal to false and extractedText to empty string
 
 If the image is NOT a trading chart (e.g., meme, screenshot of text, random photo), set isSignal to false, messageType to "ignore", and extractedText to empty string.
