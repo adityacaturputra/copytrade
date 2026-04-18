@@ -24,6 +24,9 @@ import { calculateRiskBasedPosition, getRiskConfig } from "./risk";
 import { getSignalConfig } from "./signal-config";
 import {
   createTradeProcessId,
+  logExecutorError,
+  logExecutorInfo,
+  logExecutorWarn,
   logProcessStep,
 } from "./process-log";
 import {
@@ -176,7 +179,7 @@ export async function splitQuantityForTPs(
     }
   }
 
-  console.log(
+  await logExecutorInfo(
     `📊 TP qty split (lotSz=${lotSz}, qtyDecimals=${qtyDecimals}): [${quantities.map((q) => q.toFixed(qtyDecimals)).join(", ")}] total=${quantities.reduce((a, b) => a + b, 0).toFixed(qtyDecimals)} (filledQty=${totalQty.toFixed(qtyDecimals)})`,
   );
 
@@ -312,11 +315,11 @@ export async function runSignalCheck(): Promise<{
   try {
     // 1. Get trading mode
     const mode = await getTradingMode();
-    console.log(`🔧 Trading mode: ${mode}`);
+    await logExecutorInfo(`🔧 Trading mode: ${mode}`);
 
     // 2. Get signal config (fetchLimit = page size, timeWindowHours)
     const signalConfig = await getSignalConfig();
-    console.log(
+    await logExecutorInfo(
       `🔧 Signal config: pageSize=${signalConfig.fetchLimit}, timeWindowHours=${signalConfig.timeWindowHours}`,
     );
 
@@ -335,7 +338,7 @@ export async function runSignalCheck(): Promise<{
       processedByAccount.get(aid)!.add(doc.messageId);
       allProcessedIds.add(doc.messageId);
     }
-    console.log(
+    await logExecutorInfo(
       `📦 Found ${allProcessedIds.size} previously processed messages in DB (${processedByAccount.size} accounts)`,
     );
 
@@ -347,9 +350,11 @@ export async function runSignalCheck(): Promise<{
       .lean();
 
     if (!activeAccounts || activeAccounts.length === 0) {
-      console.log("⚠️ No active accounts configured — skipping message fetch");
+      await logExecutorInfo(
+        "⚠️ No active accounts configured — skipping message fetch",
+      );
     } else {
-      console.log(
+      await logExecutorInfo(
         `📡 Found ${activeAccounts.length} active accounts, fetching messages...`,
       );
 
@@ -361,8 +366,11 @@ export async function runSignalCheck(): Promise<{
         );
 
         if (activeChannelIds.length === 0) {
-          console.log(
+          await logExecutorInfo(
             `⏭️ Account "${account.name}": all channels disabled, skipping`,
+            {
+              accountId: account._id.toString(),
+            },
           );
           result.sources.push({
             name: account.name,
@@ -413,8 +421,11 @@ export async function runSignalCheck(): Promise<{
             healthy: true,
           });
 
-          console.log(
+          await logExecutorInfo(
             `📡 Account "${account.name}" (${account.sourceType}): fetched ${messages.length} messages from ${activeChannelIds.length} channels`,
+            {
+              accountId: account._id.toString(),
+            },
           );
         } catch (error) {
           const errMsg =
@@ -430,13 +441,15 @@ export async function runSignalCheck(): Promise<{
             lastError: errMsg,
           });
 
-          console.error(`❌ Account "${account.name}" error: ${errMsg}`);
+          await logExecutorError(`❌ Account "${account.name}" error: ${errMsg}`, {
+            accountId: account._id.toString(),
+          });
         }
       }
     }
 
     result.checked = allMessages.length;
-    console.log(`📡 Total messages fetched: ${allMessages.length}`);
+    await logExecutorInfo(`📡 Total messages fetched: ${allMessages.length}`);
 
     // Sort ASCENDING (oldest first) for processing — so signals are
     // handled in chronological order.  Discord snowflake IDs are
@@ -472,9 +485,9 @@ export async function runSignalCheck(): Promise<{
       }));
 
     if (newMessages.length === 0) {
-      console.log("📭 No new messages to process");
+      await logExecutorInfo("📭 No new messages to process");
     } else {
-      console.log(
+      await logExecutorInfo(
         `📨 ${newMessages.length} new messages to process (bulk batchSize=${signalConfig.batchSize})`,
       );
 
@@ -503,7 +516,7 @@ export async function runSignalCheck(): Promise<{
           "code" in error &&
           (error as { code?: number }).code === 11000;
         if (!isDuplicateKey) throw error;
-        console.warn(
+        await logExecutorWarn(
           "⚠️ Duplicate processed message keys detected during insertMany; continuing with existing records",
         );
       }
@@ -574,7 +587,14 @@ export async function runSignalCheck(): Promise<{
                 error: parseError,
               });
 
-              console.error(`Error parsing message ${msg.messageId}:`, parseError);
+              await logExecutorError(
+                `Error parsing message ${msg.messageId}: ${parseError}`,
+                {
+                  accountId: msg.sourceId,
+                  processId: msg.processId,
+                  action: "console_parse_error",
+                },
+              );
               continue;
             }
 
@@ -603,8 +623,13 @@ export async function runSignalCheck(): Promise<{
 
             // Check for cancel requests on previously drafted signals
             if (signal.action === "CANCEL" && signal.symbol) {
-              console.log(
+              await logExecutorInfo(
                 `🚫 Cancel request detected for ${signal.symbol} from ${msg.author}`,
+                {
+                  accountId: msg.sourceId,
+                  processId: msg.processId,
+                  symbol: signal.symbol,
+                },
               );
 
               const draftsToCancel = await DraftTrade.find({
@@ -633,8 +658,13 @@ export async function runSignalCheck(): Promise<{
               }
 
               if (draftsToCancel.length > 0) {
-                console.log(
+                await logExecutorInfo(
                   `🚫 Cancelled ${draftsToCancel.length} pending draft(s) for ${signal.symbol}`,
+                  {
+                    accountId: msg.sourceId,
+                    processId: msg.processId,
+                    symbol: signal.symbol,
+                  },
                 );
               }
 
@@ -699,12 +729,22 @@ export async function runSignalCheck(): Promise<{
                       pos.closedAt = new Date();
                       pos.closeReason = `Cancel request by ${msg.author}: ${signal.reasoning || "signal author requested cancellation"}`;
                       await pos.save();
-                      console.log(
+                      await logExecutorInfo(
                         `🚫 Auto-cancelled position: ${pos.symbol} ${pos.side}`,
+                        {
+                          accountId: pos.accountId || msg.sourceId,
+                          processId: msg.processId,
+                          symbol: pos.symbol,
+                        },
                       );
                     } catch (closeErr) {
-                      console.warn(
+                      await logExecutorWarn(
                         `⚠️ Failed to auto-close ${pos.symbol}: ${closeErr instanceof Error ? closeErr.message : String(closeErr)}`,
+                        {
+                          accountId: pos.accountId || msg.sourceId,
+                          processId: msg.processId,
+                          symbol: pos.symbol,
+                        },
                       );
                     }
                   }
@@ -851,7 +891,11 @@ export async function runSignalCheck(): Promise<{
               error: errMsg,
             });
 
-            console.error(`Error processing message ${msg.messageId}:`, errMsg);
+            await logExecutorError(`Error processing message ${msg.messageId}: ${errMsg}`, {
+              accountId: msg.sourceId,
+              processId: msg.processId,
+              action: "console_process_error",
+            });
           }
         } // end for batchResults
       } // end for batch
@@ -859,10 +903,12 @@ export async function runSignalCheck(): Promise<{
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : "Unknown error";
     result.errors.push(`General: ${errMsg}`);
-    console.error("Signal check error:", errMsg);
+    await logExecutorError(`Signal check error: ${errMsg}`, {
+      action: "console_signal_check_error",
+    });
   }
 
-  console.log(
+  await logExecutorInfo(
     `✅ Signal check complete: ${result.checked} checked, ${result.newSignals} signals, ${result.executed} executed, ${result.drafted} drafted`,
   );
   return result;
@@ -896,8 +942,13 @@ async function buildBulkInputForMessage(
         imageUrls,
       );
       if (enhancedContent !== content) {
-        console.log(
+        await logExecutorInfo(
           `👁️ Vision AI enhanced message ${msg.messageId} with chart data`,
+          {
+            accountId: msg.sourceId,
+            processId: msg.processId,
+            action: "console_vision_enhanced",
+          },
         );
 
         if (msg.processId) {
@@ -933,8 +984,13 @@ async function buildBulkInputForMessage(
       const errorMessage =
         visionErr instanceof Error ? visionErr.message : String(visionErr);
 
-      console.warn(
+      await logExecutorWarn(
         `⚠️ Vision AI failed for ${msg.messageId}, using original content: ${errorMessage}`,
+        {
+          accountId: msg.sourceId,
+          processId: msg.processId,
+          action: "console_vision_failed",
+        },
       );
 
       if (msg.processId) {
@@ -1022,8 +1078,11 @@ export async function analyzeMessagesWithAI(
     const bulkErrorMessage =
       bulkErr instanceof Error ? bulkErr.message : String(bulkErr);
 
-    console.warn(
+    await logExecutorWarn(
       `⚠️ Bulk AI call failed, falling back to individual: ${bulkErrorMessage}`,
+      {
+        action: "console_bulk_ai_fallback",
+      },
     );
 
     await Promise.all(
@@ -1147,8 +1206,14 @@ async function buildDraftPayload(
         rr,
         side,
       );
-      console.log(
+      await logExecutorInfo(
         `📐 Auto-calculated SL from ${rr}RR using TP distance: entry=${signal.entryPrice}, TP=${tpTargets[0]} → SL=${autoSL}`,
+        {
+          accountId,
+          processId: msg.processId,
+          symbol: signal.symbol,
+          action: "console_auto_sl_from_rr",
+        },
       );
     }
   }
@@ -1170,8 +1235,14 @@ async function buildDraftPayload(
         rr,
         side,
       );
-      console.log(
+      await logExecutorInfo(
         `📐 Auto-calculated ${tpTargets.length} TP targets from ${rr}RR: [${tpTargets.join(", ")}]`,
+        {
+          accountId,
+          processId: msg.processId,
+          symbol: signal.symbol,
+          action: "console_auto_tp_from_rr",
+        },
       );
     }
   }
@@ -1211,8 +1282,14 @@ export async function createDraft(
     status: "pending",
   });
 
-  console.log(
+  await logExecutorInfo(
     `📝 Created draft: ${signal.action} ${signal.symbol} — sourceTimestamp: ${msg.timestamp}`,
+    {
+      accountId,
+      processId: payload.processId,
+      symbol: signal.symbol,
+      action: "console_draft_created",
+    },
   );
 
   if (payload.processId) {
@@ -1361,6 +1438,8 @@ export interface ExecuteTradeInput {
   logPrefix?: string;
   /** Account ID — ties position to a specific account for per-account exchange */
   accountId?: string;
+  /** Process ID — ties terminal logs to a draft processing timeline */
+  processId?: string;
 }
 
 /**
@@ -1389,6 +1468,7 @@ export async function executeTrade(
     signalData,
     logPrefix = "",
     accountId,
+    processId,
   } = input;
 
   const side = action === "SELL" ? ("SHORT" as const) : ("LONG" as const);
@@ -1408,13 +1488,23 @@ export async function executeTrade(
       };
       exchange = ExchangeFactory.getClientForAccount(creds);
     } else {
-      console.warn(
+      await logExecutorWarn(
         `${lp}⚠️ Account ${accountId} has no exchangeData, using paper exchange`,
+        {
+          accountId,
+          processId,
+          symbol,
+          action: "console_exchange_fallback",
+        },
       );
       exchange = ExchangeFactory.getPaperClient();
     }
   } else {
-    console.warn(`${lp}⚠️ No accountId provided, using paper exchange`);
+    await logExecutorWarn(`${lp}⚠️ No accountId provided, using paper exchange`, {
+      processId,
+      symbol,
+      action: "console_exchange_fallback",
+    });
     exchange = ExchangeFactory.getPaperClient();
   }
 
@@ -1426,12 +1516,24 @@ export async function executeTrade(
   try {
     const account = await exchange.getAccountInfo();
     riskAccountBalance = account.availableBalance || account.totalBalance;
-    console.log(
+    await logExecutorInfo(
       `${lp}💰 Risk balance source (${exchange.name}): $${riskAccountBalance.toFixed(2)}`,
+      {
+        accountId,
+        processId,
+        symbol,
+        action: "console_risk_balance",
+      },
     );
   } catch (balanceErr) {
-    console.warn(
+    await logExecutorWarn(
       `${lp}⚠️ Failed to fetch account balance for risk sizing: ${balanceErr instanceof Error ? balanceErr.message : String(balanceErr)}`,
+      {
+        accountId,
+        processId,
+        symbol,
+        action: "console_risk_balance_failed",
+      },
     );
   }
 
@@ -1448,17 +1550,45 @@ export async function executeTrade(
     if (riskCalc.applied) {
       orderQuantity = riskCalc.quantity;
       orderLeverage = riskCalc.leverage;
-      console.log(
+      await logExecutorInfo(
         `${lp}🛡️ Risk management applied: qty=${orderQuantity.toFixed(6)} → ${orderQuantity}, leverage=${leverage} → ${orderLeverage}`,
+        {
+          accountId,
+          processId,
+          symbol,
+          action: "console_risk_applied",
+        },
       );
-      console.log(
+      await logExecutorInfo(
         `${lp}🛡️ Risk details: balance=$${riskCalc.accountBalance.toFixed(2)}, margin=$${riskCalc.marginUsdt.toFixed(2)}, slDist=${(riskCalc.slDistancePercent * 100).toFixed(2)}%, notional=$${riskCalc.notionalSize.toFixed(2)}`,
+        {
+          accountId,
+          processId,
+          symbol,
+          action: "console_risk_details",
+        },
       );
     } else {
-      console.warn(`${lp}⚠️ Risk management skipped: ${riskCalc.skipReason}`);
+      await logExecutorWarn(
+        `${lp}⚠️ Risk management skipped: ${riskCalc.skipReason}`,
+        {
+          accountId,
+          processId,
+          symbol,
+          action: "console_risk_skipped",
+        },
+      );
     }
   } else if (!entryPrice || entryPrice <= 0) {
-    console.warn(`${lp}⚠️ Risk management skipped: no entry price available`);
+    await logExecutorWarn(
+      `${lp}⚠️ Risk management skipped: no entry price available`,
+      {
+        accountId,
+        processId,
+        symbol,
+        action: "console_risk_skipped",
+      },
+    );
   }
 
   // ─── Place order via exchange ────────────────────────────────────
@@ -1467,16 +1597,28 @@ export async function executeTrade(
   try {
     orderLeverage = await exchange.setLeverage(symbol, orderLeverage);
   } catch (levErr) {
-    console.warn(
+    await logExecutorWarn(
       `${lp}⚠️ Failed to set leverage (may already be set): ${levErr instanceof Error ? levErr.message : String(levErr)}`,
+      {
+        accountId,
+        processId,
+        symbol,
+        action: "console_set_leverage_failed",
+      },
     );
   }
 
   const orderSide = action === "BUY" ? "BUY" : "SELL";
   const closeSide = orderSide === "BUY" ? "SELL" : "BUY";
 
-  console.log(
+  await logExecutorInfo(
     `${lp}🔄 Placing ${orderType} ${action} order: symbol=${symbol}, qty=${orderQuantity}, leverage=${orderLeverage}${orderType === "LIMIT" ? `, price=${entryPrice}` : ""}`,
+    {
+      accountId,
+      processId,
+      symbol,
+      action: "console_place_order",
+    },
   );
 
   const orderResult = await exchange.placeOrder({
@@ -1488,8 +1630,14 @@ export async function executeTrade(
     leverage: orderLeverage,
   });
 
-  console.log(
+  await logExecutorInfo(
     `${lp}✅ Order placed: orderId=${orderResult.orderId}, price=${orderResult.price}, qty=${orderResult.quantity}`,
+    {
+      accountId,
+      processId,
+      symbol,
+      action: "console_order_placed",
+    },
   );
 
   const filledQty = orderResult.quantity || orderQuantity;
@@ -1515,12 +1663,24 @@ export async function executeTrade(
           closeSide,
           tpQty,
         );
-        console.log(
+        await logExecutorInfo(
           `${lp}🎯 Take Profit ${i + 1}/${tpTargets.length} set at ${tp} (qty: ${tpQty}/${filledQty}, plan order ${tpId})`,
+          {
+            accountId,
+            processId,
+            symbol,
+            action: "console_take_profit_set",
+          },
         );
       } catch (tpErr) {
-        console.warn(
+        await logExecutorWarn(
           `${lp}⚠️ Failed to place TP at ${tp}: ${tpErr instanceof Error ? tpErr.message : String(tpErr)}`,
+          {
+            accountId,
+            processId,
+            symbol,
+            action: "console_take_profit_failed",
+          },
         );
       }
     }
@@ -1534,18 +1694,36 @@ export async function executeTrade(
           closeSide,
           filledQty,
         );
-        console.log(
+        await logExecutorInfo(
           `${lp}🛑 Stop Loss set at ${stopLoss} (plan order ${slId})`,
+          {
+            accountId,
+            processId,
+            symbol,
+            action: "console_stop_loss_set",
+          },
         );
       } catch (slErr) {
-        console.warn(
+        await logExecutorWarn(
           `${lp}⚠️ Failed to place SL: ${slErr instanceof Error ? slErr.message : String(slErr)}`,
+          {
+            accountId,
+            processId,
+            symbol,
+            action: "console_stop_loss_failed",
+          },
         );
       }
     }
   } else {
-    console.log(
+    await logExecutorInfo(
       `${lp}⏳ LIMIT order — skipping TP/SL placement. Will be placed by tp-sl-monitor after order fills.`,
+      {
+        accountId,
+        processId,
+        symbol,
+        action: "console_limit_skip_tp_sl",
+      },
     );
   }
 
@@ -1553,8 +1731,14 @@ export async function executeTrade(
   const tpTargetObjects = buildTPTargets(tpTargets, filledQty);
   const positionStatus = orderType === "LIMIT" ? "pending" : "open";
 
-  console.log(
+  await logExecutorInfo(
     `${lp}💾 Saving position to database (status: ${positionStatus})...`,
+    {
+      accountId,
+      processId,
+      symbol,
+      action: "console_save_position",
+    },
   );
 
   const position = await Position.create({
@@ -1575,8 +1759,14 @@ export async function executeTrade(
     signalData,
   });
 
-  console.log(
+  await logExecutorInfo(
     `${lp}✅ ${orderType === "LIMIT" ? "Placed limit order for" : "Opened"} ${side} position: ${symbol} @ ${entryPrice || "market"} (status: ${positionStatus})`,
+    {
+      accountId,
+      processId,
+      symbol,
+      action: "console_position_saved",
+    },
   );
   return position;
 }
@@ -1604,8 +1794,14 @@ export async function executeSignal(
           status: { $in: ["open", "pending"] },
         });
         if (openCount >= riskCfg.maxPositions) {
-          console.warn(
+          await logExecutorWarn(
             `🚫 Max positions reached (${openCount}/${riskCfg.maxPositions}) — skipping ${signal.action} ${signal.symbol}`,
+            {
+              accountId,
+              processId,
+              symbol: signal.symbol,
+              action: "console_max_positions",
+            },
           );
           await logProcessStep({
             accountId,
@@ -1656,8 +1852,14 @@ export async function executeSignal(
 
         if (entryMatch && tpMatch && slMatch) {
           // Exact duplicate: same symbol, side, entry, TP, SL — skip entirely
-          console.log(
+          await logExecutorInfo(
             `⚠️ Duplicate ${side} ${signal.symbol}: same entry=${existingEntry}, TP=${existingTP}, SL=${existingSL} — skipping`,
+            {
+              accountId,
+              processId,
+              symbol: signal.symbol,
+              action: "console_duplicate_exact",
+            },
           );
           await logProcessStep({
             accountId,
@@ -1694,8 +1896,14 @@ export async function executeSignal(
 
           if (updated) {
             await existingPos.save();
-            console.log(
+            await logExecutorInfo(
               `🔄 Updated ${side} ${signal.symbol} TP/SL: ${updates.join(", ")}`,
+              {
+                accountId,
+                processId,
+                symbol: signal.symbol,
+                action: "console_duplicate_updated",
+              },
             );
             await logProcessStep({
               accountId,
@@ -1712,8 +1920,14 @@ export async function executeSignal(
               details: updates.join(", "),
             };
           } else {
-            console.log(
+            await logExecutorInfo(
               `⚠️ Duplicate ${side} ${signal.symbol}: entry matches but no new TP/SL values to update — skipping`,
+              {
+                accountId,
+                processId,
+                symbol: signal.symbol,
+                action: "console_duplicate_no_update",
+              },
             );
             await logProcessStep({
               accountId,
@@ -1734,8 +1948,14 @@ export async function executeSignal(
 
         // Different entry price — this is a genuinely new signal, don't block it
         // (the exchange may reject it anyway if hedging is not enabled)
-        console.log(
+        await logExecutorInfo(
           `⚠️ Open ${side} ${signal.symbol} exists (entry=${existingEntry}) but new signal has different entry=${newEntry} — proceeding as new order`,
+          {
+            accountId,
+            processId,
+            symbol: signal.symbol,
+            action: "console_duplicate_proceed_new_order",
+          },
         );
       }
 
@@ -1754,8 +1974,14 @@ export async function executeSignal(
             rr,
             side,
           );
-          console.log(
+          await logExecutorInfo(
             `📐 Auto-calculated SL from ${rr}RR using TP distance: entry=${entryPrice}, TP=${signalTPs[0]} → SL=${effectiveSL}`,
+            {
+              accountId,
+              processId,
+              symbol: signal.symbol,
+              action: "console_auto_sl_from_rr",
+            },
           );
         }
       }
@@ -1763,8 +1989,14 @@ export async function executeSignal(
       // Check skipNoSL — skip trades without stop loss if setting is enabled
       if (!effectiveSL) {
         if (riskCfg.skipNoSL) {
-          console.warn(
+          await logExecutorWarn(
             `🚫 Skipping ${signal.action} ${signal.symbol}: no stop loss (and no TP to derive SL from) and skipNoSL is enabled`,
+            {
+              accountId,
+              processId,
+              symbol: signal.symbol,
+              action: "console_skip_no_sl",
+            },
           );
           await logProcessStep({
             accountId,
@@ -1792,8 +2024,14 @@ export async function executeSignal(
             : riskCfg.defaultRR;
         if (rr > 0) {
           tpTargets = autoCalculateTPFromRR(entryPrice, effectiveSL, rr, side);
-          console.log(
+          await logExecutorInfo(
             `📐 Auto-calculated ${tpTargets.length} TP targets from ${rr}RR: [${tpTargets.join(", ")}]`,
+            {
+              accountId,
+              processId,
+              symbol: signal.symbol,
+              action: "console_auto_tp_from_rr",
+            },
           );
         }
       }
@@ -1828,6 +2066,7 @@ export async function executeSignal(
         sourceName,
         signalData: JSON.stringify(signal),
         accountId,
+        processId,
       });
 
       await logProcessStep({
@@ -1874,7 +2113,12 @@ export async function executeSignal(
         pos.closeReason = "AI Signal Close";
         await pos.save();
 
-        console.log(`✅ Closed position: ${pos.symbol} ${pos.side}`);
+        await logExecutorInfo(`✅ Closed position: ${pos.symbol} ${pos.side}`, {
+          accountId: pos.accountId || accountId,
+          processId,
+          symbol: pos.symbol,
+          action: "console_close_position",
+        });
       }
       if (positions.length === 0) {
         await logProcessStep({
@@ -1943,8 +2187,14 @@ export async function executeSignal(
         }
         await position.save();
 
-        console.log(
+        await logExecutorInfo(
           `✅ Updated ${signal.action} for ${signal.symbol} (channel=${channelId || "any"}): SL=${position.stopLossPrice}, TPs=[${position.takeProfitTargets.map((t) => `${t.price}(${t.status})`).join(", ")}]`,
+          {
+            accountId,
+            processId,
+            symbol: signal.symbol,
+            action: "console_position_updated",
+          },
         );
         await logProcessStep({
           accountId,
@@ -1961,8 +2211,14 @@ export async function executeSignal(
           details: `${signal.action} applied for ${signal.symbol}`,
         };
       } else {
-        console.log(
+        await logExecutorInfo(
           `⚠️ No open position found for ${signal.symbol} (channel=${channelId || "any"}) to update`,
+          {
+            accountId,
+            processId,
+            symbol: signal.symbol,
+            action: "console_position_update_noop",
+          },
         );
         await logProcessStep({
           accountId,
@@ -2036,8 +2292,14 @@ export async function executeSignal(
                   position.quantity,
                 );
               } catch (tpErr) {
-                console.warn(
+                await logExecutorWarn(
                   `⚠️ Failed to place TP on exchange at ${newTpPrice}: ${tpErr instanceof Error ? tpErr.message : String(tpErr)}`,
+                  {
+                    accountId: position.accountId || accountId,
+                    processId,
+                    symbol: signal.symbol,
+                    action: "console_add_tp_failed",
+                  },
                 );
               }
             }
@@ -2049,8 +2311,14 @@ export async function executeSignal(
           position.quantity,
         );
         await position.save();
-        console.log(
+        await logExecutorInfo(
           `✅ Updated TPs for ${signal.symbol}: ${position.takeProfitTargets.map((t) => `${t.price}(${t.percentage}%)`).join(", ")}`,
+          {
+            accountId: position.accountId || accountId,
+            processId,
+            symbol: signal.symbol,
+            action: "console_add_tp_updated",
+          },
         );
         return addedCount > 0
           ? {
@@ -2064,8 +2332,14 @@ export async function executeSignal(
               details: `All requested TP levels already exist for ${signal.symbol}`,
             };
       } else {
-        console.log(
+        await logExecutorInfo(
           `⚠️ No open position found for ${signal.symbol} (channel=${channelId || "any"}) to add TP`,
+          {
+            accountId,
+            processId,
+            symbol: signal.symbol,
+            action: "console_add_tp_noop",
+          },
         );
         return {
           type: "noop",
@@ -2076,7 +2350,12 @@ export async function executeSignal(
     }
 
     default:
-      console.log(`⚠️ Unhandled signal action: ${signal.action}`);
+      await logExecutorInfo(`⚠️ Unhandled signal action: ${signal.action}`, {
+        accountId,
+        processId,
+        symbol: signal.symbol,
+        action: "console_unhandled_action",
+      });
       return {
         type: "skipped",
         code: "unhandled_action",
