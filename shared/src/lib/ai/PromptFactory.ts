@@ -5,6 +5,7 @@ import {
   MarketCondition,
   MessageType,
 } from "../enums";
+import { PositionAnalysisInput } from "./types";
 
 function buildFreshnessRules(): string {
   return `CRITICAL — Freshness / stale-chart rules:
@@ -209,8 +210,62 @@ RULES:
 - If price is within 2% of SL, recommend ${PositionDecision.CLOSE} immediately
 - If PNL is positive >10%, recommend ${PositionDecision.MOVE_SL} to breakeven
 - Be conservative - prefer protecting capital over maximizing gains
+- You will also receive CURRENT TIME, account open positions, and Discord message context.
+- Use the Discord context timestamps relative to CURRENT TIME to understand whether the latest instruction is fresh.
+- If Discord context clearly says cancel/close/exit the trade, prefer ${PositionDecision.CLOSE}.
+- If Discord context clearly says move SL to breakeven / trailing / lock profit, prefer ${PositionDecision.MOVE_SL}.
+- If Discord context clearly gives a new TP target, prefer ${PositionDecision.UPDATE_TP}.
+- If Discord context is ambiguous, fall back to price action + risk protection.
+- Consider the account's other open positions to avoid inconsistent management decisions.
 
 OUTPUT ONLY THE RAW JSON OBJECT. No markdown, no backticks, no explanations.`;
+}
+
+export function buildPositionAnalysisUserMessage(
+  input: PositionAnalysisInput,
+): string {
+  const accountPositions =
+    input.accountOpenPositions && input.accountOpenPositions.length > 0
+      ? JSON.stringify(input.accountOpenPositions, null, 2)
+      : "[]";
+
+  const discordContext =
+    input.discordContextMessages && input.discordContextMessages.length > 0
+      ? JSON.stringify(input.discordContextMessages, null, 2)
+      : "[]";
+
+  return `Analyze this position using both market state and Discord signal context.
+
+CURRENT TIME:
+- ${input.currentTime}
+
+POSITION:
+- Symbol: ${input.symbol}
+- Side: ${input.side}
+- Entry Price: ${input.entryPrice}
+- Current Price: ${input.currentPrice}
+- Take Profit Targets: ${
+    input.takeProfitTargets && input.takeProfitTargets.length > 0
+      ? input.takeProfitTargets.join(", ")
+      : "Not set"
+  }
+- Stop Loss: ${input.stopLoss || "Not set"}
+- Current PNL: ${input.pnl || 0}
+- Quantity: ${input.quantity || "Unknown"}
+- Price change from entry: ${(((input.currentPrice - input.entryPrice) / input.entryPrice) * 100).toFixed(2)}%
+
+SOURCE CONTEXT:
+- Account Name: ${input.accountName || "Unknown"}
+- Trading Platform: ${input.tradingPlatform || "Unknown"}
+- Source Message ID: ${input.sourceMessageId || "Unknown"}
+- Source Channel ID: ${input.sourceChannelId || "Unknown"}
+- Source Message URL: ${input.sourceMessageUrl || "Unknown"}
+
+ACCOUNT OPEN POSITIONS:
+${accountPositions}
+
+DISCORD CONTEXT MESSAGES:
+${discordContext}`;
 }
 
 export function buildVisionExtractionPrompt(): string {

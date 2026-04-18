@@ -25,7 +25,6 @@ import {
   getRecentMessages,
   getRecentLogs,
   getAllPositions,
-  getAllDiscordSources,
   Account,
 } from "@copytrade/shared/lib/database";
 import {
@@ -38,7 +37,11 @@ import { calculateRisk } from "@copytrade/shared/lib/risk-calc";
 import { getRiskConfig } from "@copytrade/shared/lib/risk";
 import { SourceFactory } from "@copytrade/shared/lib/source/SourceFactory";
 import { SourceType } from "@copytrade/shared/lib/enums";
-import type { BaseSourceConfig } from "@copytrade/shared/lib/source/types";
+import type {
+  BaseSourceConfig,
+  BaseSourceMessage,
+  ISourceProvider,
+} from "@copytrade/shared/lib/source/types";
 
 /** Round a number to 2 decimal places (e.g., 62333.333333 → 62333.34) */
 function roundPrice(price: number): number {
@@ -92,6 +95,14 @@ interface ExchangeContext {
   provider: ExchangeProvider;
 }
 
+interface SourceContext {
+  provider: ISourceProvider;
+  config: BaseSourceConfig;
+  accountId: string;
+  accountName: string;
+  sourceType: SourceType;
+}
+
 function getAccountIdFromArgs(args: ToolArgs): string | undefined {
   const accountId = args.accountId;
   if (typeof accountId !== "string") return undefined;
@@ -110,6 +121,17 @@ function normalizeExchangeProvider(value: unknown): ExchangeProvider | null {
   ) {
     return normalized;
   }
+  return null;
+}
+
+function normalizeSourceType(value: unknown): SourceType | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+
+  if (normalized === SourceType.DISCORD || normalized === SourceType.TELEGRAM) {
+    return normalized as SourceType;
+  }
+
   return null;
 }
 
@@ -143,13 +165,114 @@ function toExchangeCredentials(account: AccountRecord): ExchangeCredentials {
 }
 
 function getSourceConfigForAccount(account: AccountRecord): BaseSourceConfig {
+  const sourceType = normalizeSourceType(account.sourceType);
+  if (!sourceType) {
+    throw new Error(
+      `Account "${account.name}" (${String(account._id)}) does not have a valid sourceType`,
+    );
+  }
+
   return {
     _id: String(account._id),
     name: account.name,
-    type: (account.sourceType as SourceType) || SourceType.DISCORD,
+    type: sourceType,
     channelIds: Array.isArray(account.channelIds) ? account.channelIds : [],
     ...((account.sourceData as Record<string, unknown>) || {}),
   };
+}
+
+function buildSourceSummary(account: AccountRecord) {
+  const sourceType = normalizeSourceType(account.sourceType);
+  const sourceData = (account.sourceData || {}) as Record<string, unknown>;
+
+  return {
+    accountId: String(account._id),
+    name: account.name,
+    sourceType,
+    providerName: sourceType || "unknown",
+    channelIds: Array.isArray(account.channelIds) ? account.channelIds : [],
+    isActive: account.isActive,
+    hasCredentials: Boolean(
+      typeof sourceData.token === "string" && sourceData.token.trim().length > 0,
+    ),
+    lastFetchedAt: account.lastFetchedAt || null,
+    lastError: account.lastError || null,
+  };
+}
+
+function normalizePositiveNumber(
+  value: unknown,
+  fallback: number,
+  max?: number,
+): number {
+  if (typeof value !== "number" || Number.isNaN(value) || value <= 0) {
+    return fallback;
+  }
+
+  if (typeof max === "number") {
+    return Math.min(value, max);
+  }
+
+  return value;
+}
+
+async function loadSourceAccounts(
+  args: ToolArgs = {},
+  options: {
+    fallbackSourceType?: SourceType;
+    activeOnly?: boolean;
+  } = {},
+): Promise<AccountRecord[]> {
+  await connectDB();
+
+  const requestedAccountId = getAccountIdFromArgs(args);
+  const requestedSourceType =
+    normalizeSourceType(args.sourceType) || options.fallbackSourceType;
+
+  const filter: Record<string, unknown> = {};
+  if (requestedAccountId) filter._id = requestedAccountId;
+  if (requestedSourceType) filter.sourceType = requestedSourceType;
+  if (options.activeOnly) filter.isActive = true;
+
+  const accounts = (await Account.find(filter)
+    .sort({ createdAt: 1 })
+    .lean()
+    .exec()) as AccountRecord[];
+
+  return accounts.filter((account) => Boolean(normalizeSourceType(account.sourceType)));
+}
+
+function getSourceContextForAccount(account: AccountRecord): SourceContext {
+  const sourceType = normalizeSourceType(account.sourceType);
+  if (!sourceType) {
+    throw new Error(
+      `Signal source account "${account.name}" (${String(account._id)}) does not have a valid sourceType`,
+    );
+  }
+
+  return {
+    provider: SourceFactory.getProvider(sourceType),
+    config: getSourceConfigForAccount(account),
+    accountId: String(account._id),
+    accountName: account.name,
+    sourceType,
+  };
+}
+
+function serializeSourceMessages(messages: BaseSourceMessage[]) {
+  return messages.map((message) => ({
+    messageId: message.messageId,
+    channelId: message.channelId,
+    author: message.author,
+    content: message.content,
+    originalContent: message.originalContent,
+    timestamp: message.timestamp,
+    messageUrl: message.messageUrl,
+    imageUrls: message.imageUrls,
+    isReply: message.isReply || false,
+    sourceId: message.sourceId,
+    sourceName: message.sourceName,
+  }));
 }
 
 async function resolveExchangeContext(args: ToolArgs = {}): Promise<ExchangeContext> {
@@ -222,7 +345,7 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "get_account_info",
       description:
-        "Get exchange account info for a trading account. Returns JSON: { provider: string ('okx'|'binance'|'mexc'|'paper'), totalBalance: number, availableBalance: number, unrealizedPnl: number, accountId: string, accountName: string }. If multiple trading accounts exist, pass accountId.",
+        "Get exchange account info for a trading account. The exchange provider is chosen from the selected account's tradingPlatform via ExchangeFactory. Returns JSON: { provider: string ('okx'|'binance'|'mexc'|'paper'), totalBalance: number, availableBalance: number, unrealizedPnl: number, accountId: string, accountName: string }. If multiple trading accounts exist, pass accountId.",
       parameters: {
         type: "object",
         properties: {
@@ -241,7 +364,7 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "get_ticker_price",
       description:
-        "Get the current mark price of a trading pair. Symbol MUST be in exchange-specific format: for OKX use 'BTC-USDT-SWAP' (instrument ID with dashes); for Binance/MEXC use 'BTCUSDT' (no dashes).",
+        "Get the current mark price of a trading pair from the exchange selected by the account's tradingPlatform via ExchangeFactory. Symbol MUST match that exchange format: for OKX use 'BTC-USDT-SWAP' (instrument ID with dashes); for Binance/MEXC use 'BTCUSDT' (no dashes).",
       parameters: {
         type: "object",
         properties: {
@@ -877,13 +1000,93 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     },
   },
 
-  // ─── Discord ───────────────────────────────────────────────────
+  // ─── Signal Sources ────────────────────────────────────────────
+  {
+    type: "function",
+    function: {
+      name: "get_signal_sources",
+      description:
+        "List configured signal source accounts from Account settings. Uses account sourceType to indicate which SourceFactory provider applies. Returns JSON array: [{ accountId, name, sourceType: 'discord'|'telegram', providerName, channelIds, isActive, hasCredentials, lastFetchedAt, lastError }]. Use this first before source-specific health or fetch operations.",
+      parameters: {
+        type: "object",
+        properties: {
+          sourceType: {
+            type: "string",
+            enum: ["discord", "telegram"],
+            description:
+              "Optional filter by source provider type. If omitted, returns all configured source accounts.",
+          },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "check_source_health",
+      description:
+        "Check source credential health through SourceFactory using the selected account's sourceType. If accountId is omitted, checks all matching source accounts. Returns JSON: { success, checked, results: [{ accountId, name, sourceType, health }] }.",
+      parameters: {
+        type: "object",
+        properties: {
+          accountId: {
+            type: "string",
+            description:
+              "Optional source account ID from get_signal_sources.",
+          },
+          sourceType: {
+            type: "string",
+            enum: ["discord", "telegram"],
+            description:
+              "Optional filter by provider type when accountId is omitted.",
+          },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "fetch_source_messages",
+      description:
+        "Fetch recent raw messages from configured signal source accounts through SourceFactory. The provider is chosen from each account's sourceType, so Discord accounts use DiscordSourceProvider and Telegram accounts use TelegramSourceProvider. Returns per-account grouped messages with timestamps, channel IDs, message URLs, and image URLs.",
+      parameters: {
+        type: "object",
+        properties: {
+          accountId: {
+            type: "string",
+            description:
+              "Optional source account ID from get_signal_sources. If omitted, fetches from all active matching source accounts.",
+          },
+          sourceType: {
+            type: "string",
+            enum: ["discord", "telegram"],
+            description:
+              "Optional source provider filter when accountId is omitted.",
+          },
+          fetchLimit: {
+            type: "number",
+            description:
+              "Max messages per source account to fetch. Default 10, max 50.",
+          },
+          timeWindowHours: {
+            type: "number",
+            description:
+              "Optional freshness filter in hours. Example: 24 means only fetch messages from the last 24 hours.",
+          },
+        },
+        required: [],
+      },
+    },
+  },
   {
     type: "function",
     function: {
       name: "get_discord_sources",
       description:
-        "Get all configured Discord signal sources. Returns JSON array: [{ name: string (source name), method: string ('bot'|'user'), channelIds: string[] (Discord channel IDs), isActive: boolean, lastFetchedAt: date|null, lastError: string|null, autoRefresh: boolean }]. Use to check if Discord monitoring is healthy.",
+        "Legacy alias for get_signal_sources filtered to Discord accounts. Returns configured Discord source accounts from Account settings, not a hardcoded provider list.",
       parameters: { type: "object", properties: {}, required: [] },
     },
   },
@@ -892,7 +1095,7 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "check_signal_now",
       description:
-        "Manually trigger a signal check cycle: fetches latest Discord messages from all active sources, runs AI analysis to detect trading signals, then either creates draft trades (manual mode) or executes trades directly (auto mode). Returns JSON: { checked: number, signals: number, executed: number, drafts: number, errors: string[] }.",
+        "Manually trigger a signal check cycle. This fetches latest messages from all active configured source accounts via SourceFactory, runs AI analysis to detect trading signals, then either creates draft trades (manual mode) or executes trades directly (auto mode). Returns JSON: { checked: number, signals: number, executed: number, drafts: number, errors: string[] }.",
       parameters: { type: "object", properties: {}, required: [] },
     },
   },
@@ -901,7 +1104,7 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "get_telegram_sources",
       description:
-        "Get all configured Telegram source accounts from Account settings. Returns JSON array with accountId, name, channelIds, isActive, lastFetchedAt, and lastError.",
+        "Legacy alias for get_signal_sources filtered to Telegram accounts.",
       parameters: { type: "object", properties: {}, required: [] },
     },
   },
@@ -910,7 +1113,7 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "check_telegram_source_health",
       description:
-        "Check Telegram source credential health. If accountId is omitted, checks all Telegram accounts.",
+        "Legacy alias for check_source_health filtered to Telegram accounts.",
       parameters: {
         type: "object",
         properties: {
@@ -958,7 +1161,7 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "get_recent_signals",
       description:
-        "Get recently processed Discord messages/signals. Returns the raw message content, parsed signal data (symbol, side, entry, TP/SL), parse status (success/failed/skipped), and timestamp. Use to see what signals the system has received.",
+        "Get recently processed source messages/signals from the database. Returns the raw message content, parsed signal data, source/account IDs, parse status (success/failed/skipped/executed/drafted), and timestamps. Use this to see what the system has received from Discord, Telegram, or other future providers.",
       parameters: {
         type: "object",
         properties: {
@@ -1604,22 +1807,117 @@ export const toolImplementations: Record<string, ToolExecutor> = {
     });
   },
 
-  // ─── Discord ───────────────────────────────────────────────────
+  // ─── Signal Sources ────────────────────────────────────────────
+
+  get_signal_sources: async (args) => {
+    const sourceAccounts = await loadSourceAccounts(args);
+    return JSON.stringify(sourceAccounts.map(buildSourceSummary));
+  },
+
+  check_source_health: async (args) => {
+    const sourceAccounts = await loadSourceAccounts(args);
+
+    if (sourceAccounts.length === 0) {
+      const requestedAccountId = getAccountIdFromArgs(args);
+      const requestedSourceType = normalizeSourceType(args.sourceType);
+
+      return JSON.stringify({
+        success: false,
+        error: requestedAccountId
+          ? `Source account not found: ${requestedAccountId}`
+          : requestedSourceType
+            ? `No ${requestedSourceType} source accounts found`
+            : "No source accounts found",
+      });
+    }
+
+    const results = [];
+
+    for (const account of sourceAccounts) {
+      const ctx = getSourceContextForAccount(account);
+      const health = await ctx.provider.checkHealth(ctx.config);
+      results.push({
+        accountId: ctx.accountId,
+        name: ctx.accountName,
+        sourceType: ctx.sourceType,
+        health,
+      });
+    }
+
+    return JSON.stringify({
+      success: true,
+      checked: results.length,
+      results,
+    });
+  },
+
+  fetch_source_messages: async (args) => {
+    const sourceAccounts = await loadSourceAccounts(args, { activeOnly: true });
+    const fetchLimit = normalizePositiveNumber(args.fetchLimit, 10, 50);
+    const timeWindowHours =
+      typeof args.timeWindowHours === "number" && args.timeWindowHours > 0
+        ? args.timeWindowHours
+        : undefined;
+
+    if (sourceAccounts.length === 0) {
+      const requestedAccountId = getAccountIdFromArgs(args);
+      const requestedSourceType = normalizeSourceType(args.sourceType);
+
+      return JSON.stringify({
+        success: false,
+        error: requestedAccountId
+          ? `Active source account not found: ${requestedAccountId}`
+          : requestedSourceType
+            ? `No active ${requestedSourceType} source accounts found`
+            : "No active source accounts found",
+      });
+    }
+
+    const results = [];
+
+    for (const account of sourceAccounts) {
+      const ctx = getSourceContextForAccount(account);
+
+      try {
+        const messages = await ctx.provider.fetchMessages(
+          ctx.config,
+          fetchLimit,
+          timeWindowHours,
+        );
+
+        results.push({
+          accountId: ctx.accountId,
+          name: ctx.accountName,
+          sourceType: ctx.sourceType,
+          fetched: messages.length,
+          messages: serializeSourceMessages(messages),
+        });
+      } catch (error) {
+        results.push({
+          accountId: ctx.accountId,
+          name: ctx.accountName,
+          sourceType: ctx.sourceType,
+          fetched: 0,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    return JSON.stringify({
+      success: true,
+      checked: results.length,
+      fetchLimit,
+      timeWindowHours: timeWindowHours || null,
+      results,
+    });
+  },
 
   get_discord_sources: async () => {
-    await connectDB();
-    const sources = await getAllDiscordSources();
-    return JSON.stringify(
-      sources.map((s) => ({
-        name: s.name,
-        method: s.method,
-        channelIds: s.channelIds,
-        isActive: s.isActive,
-        lastFetchedAt: s.lastFetchedAt,
-        lastError: s.lastError,
-        autoRefresh: s.autoRefresh,
-      })),
+    const sourceAccounts = await loadSourceAccounts(
+      { sourceType: SourceType.DISCORD },
+      { fallbackSourceType: SourceType.DISCORD },
     );
+    return JSON.stringify(sourceAccounts.map(buildSourceSummary));
   },
 
   check_signal_now: async () => {
@@ -1638,64 +1936,17 @@ export const toolImplementations: Record<string, ToolExecutor> = {
   },
 
   get_telegram_sources: async () => {
-    await connectDB();
-    const telegramAccounts = (await Account.find({
-      sourceType: SourceType.TELEGRAM,
-    })
-      .sort({ createdAt: 1 })
-      .lean()
-      .exec()) as AccountRecord[];
-
-    return JSON.stringify(
-      telegramAccounts.map((acc) => ({
-        accountId: String(acc._id),
-        name: acc.name,
-        channelIds: Array.isArray(acc.channelIds) ? acc.channelIds : [],
-        isActive: acc.isActive,
-        lastFetchedAt: acc.lastFetchedAt || null,
-        lastError: acc.lastError || null,
-      })),
+    const sourceAccounts = await loadSourceAccounts(
+      { sourceType: SourceType.TELEGRAM },
+      { fallbackSourceType: SourceType.TELEGRAM },
     );
+    return JSON.stringify(sourceAccounts.map(buildSourceSummary));
   },
 
   check_telegram_source_health: async (args) => {
-    await connectDB();
-    const requestedAccountId = getAccountIdFromArgs(args);
-    const filter = requestedAccountId
-      ? { _id: requestedAccountId, sourceType: SourceType.TELEGRAM }
-      : { sourceType: SourceType.TELEGRAM };
-
-    const telegramAccounts = (await Account.find(filter)
-      .sort({ createdAt: 1 })
-      .lean()
-      .exec()) as AccountRecord[];
-
-    if (telegramAccounts.length === 0) {
-      return JSON.stringify({
-        success: false,
-        error: requestedAccountId
-          ? `Telegram account not found: ${requestedAccountId}`
-          : "No Telegram accounts found",
-      });
-    }
-
-    const provider = SourceFactory.getTelegramProvider();
-    const results = [];
-
-    for (const account of telegramAccounts) {
-      const sourceConfig = getSourceConfigForAccount(account);
-      const health = await provider.checkHealth(sourceConfig);
-      results.push({
-        accountId: String(account._id),
-        name: account.name,
-        health,
-      });
-    }
-
-    return JSON.stringify({
-      success: true,
-      checked: results.length,
-      results,
+    return toolImplementations.check_source_health({
+      ...args,
+      sourceType: SourceType.TELEGRAM,
     });
   },
 
@@ -1728,7 +1979,22 @@ export const toolImplementations: Record<string, ToolExecutor> = {
     await connectDB();
     const limit = (args.limit as number) || 20;
     const messages = await getRecentMessages(limit);
-    return JSON.stringify(messages);
+    return JSON.stringify(
+      messages.map((message) => ({
+        accountId: message.accountId || null,
+        processId: message.processId || null,
+        messageId: message.messageId,
+        channelId: message.channelId,
+        author: message.author,
+        content: message.content,
+        signalType: message.signalType,
+        parsedSignal: message.parsedSignal,
+        status: message.status,
+        sourceTimestamp: message.sourceTimestamp || null,
+        processedAt: message.processedAt || null,
+        createdAt: message.createdAt,
+      })),
+    );
   },
 
   get_all_positions_history: async (args) => {

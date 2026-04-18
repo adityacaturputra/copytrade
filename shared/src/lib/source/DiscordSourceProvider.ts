@@ -142,6 +142,38 @@ export class DiscordSourceProvider implements ISourceProvider {
     ]);
   }
 
+  async fetchMessageContext(
+    config: BaseSourceConfig,
+    channelId: string,
+    aroundMessageId: string,
+    limit: number = 10,
+  ): Promise<DiscordMessage[]> {
+    const discordConfig = config as DiscordSourceConfig;
+
+    const messages =
+      discordConfig.method === "user"
+        ? await this.fetchViaUserTokenContext(
+            discordConfig.token,
+            channelId,
+            limit,
+            aroundMessageId,
+          )
+        : await this.fetchViaBotContext(
+            discordConfig.token,
+            channelId,
+            limit,
+            aroundMessageId,
+          );
+
+    return messages
+      .map((msg) => ({
+        ...msg,
+        sourceId: discordConfig._id,
+        sourceName: discordConfig.name,
+      }))
+      .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+  }
+
   // ==================== Bot Method ====================
 
   public static getBotClient(token: string): Client {
@@ -189,6 +221,56 @@ export class DiscordSourceProvider implements ISourceProvider {
     const fetched = await channel.messages.fetch({
       limit,
       ...(before ? { before } : {}),
+    });
+
+    for (const [, msg] of fetched) {
+      const imageUrls = extractImageUrls(msg.attachments, msg.embeds);
+      const isReply = msg.content.includes("> ");
+      const stripped = stripDiscordQuotes(msg.content);
+
+      messages.push({
+        messageId: msg.id,
+        channelId: msg.channelId,
+        author: msg.author.username,
+        content: stripped,
+        originalContent: stripped !== msg.content ? msg.content : undefined,
+        timestamp: msg.createdAt,
+        messageUrl: msg.url,
+        imageUrls,
+        isReply,
+      });
+    }
+
+    return messages;
+  }
+
+  private async fetchViaBotContext(
+    token: string,
+    channelId: string,
+    limit: number,
+    around: string,
+  ): Promise<DiscordMessage[]> {
+    const client = this.getBotClient(token);
+
+    if (!client.isReady()) {
+      await client.login(token);
+      await new Promise<void>((resolve) => {
+        if (client.isReady()) resolve();
+        else client.once("ready", () => resolve());
+      });
+    }
+
+    const channel = await client.channels.fetch(channelId);
+    if (!channel || !(channel instanceof TextChannel)) {
+      throw new Error(
+        `Channel ${channelId} not found or is not a text channel`,
+      );
+    }
+
+    const messages: DiscordMessage[] = [];
+    const fetched = await channel.messages.fetch({
+      limit,
+      around,
     });
 
     for (const [, msg] of fetched) {
@@ -282,6 +364,60 @@ export class DiscordSourceProvider implements ISourceProvider {
       console.log(
         `📨 Sample: [${messages[0].author}] ${messages[0].content.substring(0, 80)}...`,
       );
+    }
+
+    return messages;
+  }
+
+  private async fetchViaUserTokenContext(
+    token: string,
+    channelId: string,
+    limit: number,
+    around: string,
+  ): Promise<DiscordMessage[]> {
+    const response = await axios.get(
+      `https://discord.com/api/v9/channels/${channelId}/messages?limit=${limit}&around=${around}`,
+      {
+        headers: {
+          Authorization: token,
+          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+        },
+        timeout: 15000,
+      },
+    );
+
+    const rawMessages: DiscordRestMessage[] = response.data;
+    const messages: DiscordMessage[] = [];
+
+    for (const msg of rawMessages) {
+      const imageUrls: string[] = [];
+      for (const att of msg.attachments) {
+        if (
+          att.content_type?.startsWith("image/") ||
+          /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(att.url)
+        ) {
+          imageUrls.push(att.url);
+        }
+      }
+      for (const embed of msg.embeds) {
+        if (embed.image?.url) imageUrls.push(embed.image.url);
+        if (embed.thumbnail?.url) imageUrls.push(embed.thumbnail.url);
+      }
+
+      const isReply = msg.content.includes("> ");
+      const stripped = stripDiscordQuotes(msg.content);
+
+      messages.push({
+        messageId: msg.id,
+        channelId: msg.channel_id,
+        author: msg.author.username,
+        content: stripped,
+        originalContent: stripped !== msg.content ? msg.content : undefined,
+        timestamp: new Date(msg.timestamp),
+        messageUrl: `https://discord.com/channels/@me/${msg.channel_id}/${msg.id}`,
+        imageUrls,
+        isReply,
+      });
     }
 
     return messages;

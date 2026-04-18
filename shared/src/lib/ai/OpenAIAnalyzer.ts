@@ -3,6 +3,7 @@ import {
   AISignalAnalyzer,
   TradingSignal,
   PositionAnalysis,
+  PositionAnalysisInput,
   BulkSignalResult,
   BulkMessageInput,
 } from "./types";
@@ -10,6 +11,7 @@ import {
   buildSignalParserPrompt,
   buildBulkSignalParserPrompt,
   buildPositionAnalysisPrompt,
+  buildPositionAnalysisUserMessage,
 } from "./PromptFactory";
 import { MarketCondition } from "../enums";
 import {
@@ -88,27 +90,9 @@ export class OpenAIAnalyzer implements AISignalAnalyzer {
     return results;
   }
 
-  async analyzePosition(
-    symbol: string,
-    side: string,
-    entryPrice: number,
-    currentPrice: number,
-    takeProfit?: number,
-    stopLoss?: number,
-    pnl?: number,
-    quantity?: number,
-  ): Promise<PositionAnalysis> {
+  async analyzePosition(input: PositionAnalysisInput): Promise<PositionAnalysis> {
     const systemPrompt = buildPositionAnalysisPrompt();
-    const userMessage = `Analyze this position:
-- Symbol: ${symbol}
-- Side: ${side}
-- Entry Price: ${entryPrice}
-- Current Price: ${currentPrice}
-- Take Profit: ${takeProfit || "Not set"}
-- Stop Loss: ${stopLoss || "Not set"}
-- Current PNL: ${pnl || 0} USDT
-- Quantity: ${quantity || "Unknown"}
-- Price change from entry: ${(((currentPrice - entryPrice) / entryPrice) * 100).toFixed(2)}%`;
+    const userMessage = buildPositionAnalysisUserMessage(input);
 
     const response = await this.callAPI(systemPrompt, userMessage);
 
@@ -120,7 +104,7 @@ export class OpenAIAnalyzer implements AISignalAnalyzer {
     {
       return {
         decision: "HOLD",
-        symbol,
+        symbol: input.symbol,
         reason: "Failed to parse AI analysis, defaulting to HOLD",
         confidence: 0,
         currentMarketCondition: MarketCondition.NEUTRAL,

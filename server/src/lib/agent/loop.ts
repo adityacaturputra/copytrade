@@ -15,16 +15,25 @@
 import OpenAI from "openai";
 import { agentTools, toolImplementations } from "./tools";
 import { getCodexPatunginConfig } from "@copytrade/shared/lib/ai/CodexPatunginConfig";
+import { Account, connectDB } from "@copytrade/shared/lib/database";
 
 const MAX_ITERATIONS = 12; // Safety limit to prevent infinite loops
 
-const SYSTEM_PROMPT = `You are an intelligent trading assistant for a crypto copy-trading system. You have access to tools that let you:
+type SourcePromptAccount = {
+  _id: unknown;
+  name: string;
+  isActive: boolean;
+  sourceType?: string;
+  channelIds?: string[];
+};
+
+const BASE_SYSTEM_PROMPT = `You are an intelligent trading assistant for a crypto copy-trading system. You have access to tools that let you:
 
 📊 **Account & Market**: Check balances, get prices, view positions, get kline/candlestick data
 📈 **Trading**: Place orders (market/limit), close positions, set leverage, set TP/SL
 🔧 **Order Management**: Get/cancel open orders, get/cancel algo orders (TP/SL), modify TP/SL, view order history
 📝 **Drafts**: Review, accept, or reject pending signal drafts
-💬 **Discord**: Check Discord sources, trigger manual signal checks
+💬 **Signal Sources**: Inspect configured source accounts, check source health, fetch source messages, trigger manual signal checks
 🗄️ **Database**: View logs, signal history, position history
 ⚙️ **Settings**: Get/set trading mode, risk settings, calculate risk
 
@@ -37,6 +46,9 @@ const SYSTEM_PROMPT = `You are an intelligent trading assistant for a crypto cop
 **Guidelines:**
 - Always gather context FIRST before making trading decisions (check positions, account balance, current price)
 - If there are multiple trading accounts, call get_trading_accounts first and then pass accountId to exchange tools
+- If there are multiple signal source accounts, call get_signal_sources first and then pass accountId to source tools
+- Exchange tools are selected per account via that account's tradingPlatform using ExchangeFactory
+- Source tools are selected per account via that account's sourceType using SourceFactory
 - Be helpful and explain what you're doing step by step
 - When showing data, format it in a human-readable way (tables, summaries)
 - For risky operations (placing orders, closing positions), confirm with the user what you're about to do
@@ -68,7 +80,39 @@ const SYSTEM_PROMPT = `You are an intelligent trading assistant for a crypto cop
 - "Close all positions and switch to manual mode" → close_all_positions → set_trading_mode → confirm
 - "Calculate risk for LONG BTC at 65000 with SL at 62000" → calculate_risk_preview → explain
 
-The current exchange is determined by the EXCHANGE_PROVIDER env variable. Symbols must be in exchange format (e.g., BTC-USDT-SWAP for OKX, BTCUSDT for MEXC).`;
+The exchange is determined by the selected account's tradingPlatform, not by a global env variable. Symbols must match that exchange format (e.g., BTC-USDT-SWAP for OKX, BTCUSDT for Binance/MEXC).`;
+
+async function buildSystemPrompt(): Promise<string> {
+  try {
+    await connectDB();
+
+    const sourceAccounts = (await Account.find({
+      isActive: true,
+      sourceType: { $exists: true, $ne: null },
+    })
+      .sort({ createdAt: 1 })
+      .lean()
+      .exec()) as SourcePromptAccount[];
+
+    const sourceLines = sourceAccounts
+      .filter((account) => typeof account.sourceType === "string")
+      .map((account) => {
+        const channels = Array.isArray(account.channelIds)
+          ? account.channelIds.length
+          : 0;
+        return `- ${account.name} (${account.sourceType}, accountId=${String(account._id)}, channels=${channels})`;
+      });
+
+    const sourceSection =
+      sourceLines.length > 0
+        ? `\n\n**Configured Signal Sources Right Now:**\n${sourceLines.join("\n")}\n\n**Dynamic Source Example:**\n- "Check inputs from my configured sources" → get_signal_sources → check_source_health → fetch_source_messages → summarize by account name`
+        : `\n\n**Configured Signal Sources Right Now:**\n- No active source accounts found in the database yet.\n\n**Dynamic Source Example:**\n- "Check inputs from my configured sources" → get_signal_sources → check_source_health → fetch_source_messages → summarize`;
+
+    return `${BASE_SYSTEM_PROMPT}${sourceSection}`;
+  } catch (error) {
+    return `${BASE_SYSTEM_PROMPT}\n\n**Configured Signal Sources Right Now:**\n- Unable to load source accounts from the database.\n\n**Dynamic Source Example:**\n- "Check inputs from my configured sources" → get_signal_sources → check_source_health → fetch_source_messages → summarize`;
+  }
+}
 
 export interface AgentMessage {
   role: "user" | "assistant" | "tool" | "system";
@@ -100,6 +144,7 @@ export async function* runAgentLoop(
   history: Array<{ role: string; content: string }>,
   provider?: string,
 ): AsyncGenerator<AgentStep> {
+  const systemPrompt = await buildSystemPrompt();
   const codexPatunginCfg = getCodexPatunginConfig();
   const selectedProvider = (
     provider ||
@@ -169,7 +214,7 @@ export async function* runAgentLoop(
 
   // Build conversation messages
   const messages: OpenAI.ChatCompletionMessageParam[] = [
-    { role: "system", content: SYSTEM_PROMPT },
+    { role: "system", content: systemPrompt },
     // Add history (last 20 messages to keep context manageable)
     ...history.slice(-20).map(
       (m): OpenAI.ChatCompletionMessageParam => ({

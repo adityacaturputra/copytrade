@@ -1,11 +1,19 @@
-import { connectDB, Position, TradeLog, Account } from "./database";
+import { connectDB, Position, Account } from "./database";
 import { AIFactory } from "./ai/AIFactory";
+import { buildPositionAnalysisInput } from "./ai/PositionMonitorContext";
 import {
   ExchangeFactory,
   ExchangeCredentials,
 } from "./exchange/ExchangeFactory";
 import { ExchangeClient } from "./exchange/types";
 import { inspectPendingLimitOrder } from "./pending-order-sync";
+import {
+  createTradeProcessId,
+  logExecutorError,
+  logExecutorInfo,
+  logExecutorWarn,
+  logProcessStep,
+} from "./process-log";
 
 /**
  * Resolve the exchange client for a position based on its accountId.
@@ -31,6 +39,13 @@ async function getExchangeForPosition(position: {
   return ExchangeFactory.getPaperClient();
 }
 
+function getAccountPositionKey(
+  accountId: string | undefined,
+  symbol: string,
+): string {
+  return `${accountId || "__global__"}::${symbol}`;
+}
+
 export async function runPositionMonitor(): Promise<{
   checked: number;
   actions: number;
@@ -50,13 +65,20 @@ export async function runPositionMonitor(): Promise<{
     const openPositions = await Position.find({ status: "open" });
     result.checked = openPositions.length;
 
-    console.log(`📊 Monitoring ${openPositions.length} open positions`);
+    await logExecutorInfo(`📊 Monitoring ${openPositions.length} open positions`, {
+      type: "monitor",
+      action: "monitor_started",
+    });
 
     // ─── Check pending positions (limit orders waiting to fill) ────────
     const pendingPositions = await Position.find({ status: "pending" });
     if (pendingPositions.length > 0) {
-      console.log(
+      await logExecutorInfo(
         `⏳ Checking ${pendingPositions.length} pending positions (limit orders)`,
+        {
+          type: "monitor",
+          action: "pending_positions_check",
+        },
       );
 
       // Group pending positions by accountId to batch exchange calls
@@ -92,12 +114,35 @@ export async function runPositionMonitor(): Promise<{
         }
 
         for (const position of positions) {
+          const processId = createTradeProcessId("pendmon");
+
           try {
+            await logProcessStep({
+              accountId: position.accountId,
+              processId,
+              type: "monitor",
+              action: "pending_position_check_started",
+              symbol: position.symbol,
+              details: {
+                positionId: position._id.toString(),
+                currentTime: new Date().toISOString(),
+                orderId: position.orderId || null,
+              },
+              result: "processing",
+            });
+
             const inspection = await inspectPendingLimitOrder(exchange, position);
 
             if (inspection.type === "live") {
-              console.log(
+              await logExecutorInfo(
                 `⏳ Limit order still pending: ${position.symbol} ${position.side} (${inspection.reason})`,
+                {
+                  accountId: position.accountId,
+                  processId,
+                  symbol: position.symbol,
+                  type: "monitor",
+                  action: "pending_limit_still_live",
+                },
               );
               continue;
             }
@@ -108,11 +153,20 @@ export async function runPositionMonitor(): Promise<{
               position.closeReason = inspection.reason;
               await position.save();
 
-              console.log(
+              await logExecutorInfo(
                 `🚫 Limit order cancelled: ${position.symbol} ${position.side} (${inspection.reason})`,
+                {
+                  accountId: position.accountId,
+                  processId,
+                  symbol: position.symbol,
+                  type: "monitor",
+                  action: "limit_cancelled_summary",
+                },
               );
 
-              await TradeLog.create({
+              await logProcessStep({
+                accountId: position.accountId,
+                processId,
                 type: "monitor",
                 action: "limit_cancelled",
                 symbol: position.symbol,
@@ -131,11 +185,20 @@ export async function runPositionMonitor(): Promise<{
             }
             await position.save();
 
-            console.log(
+            await logExecutorInfo(
               `✅ Limit order filled: ${position.symbol} ${position.side} — promoted from ${oldStatus} to open (${inspection.reason})`,
+              {
+                accountId: position.accountId,
+                processId,
+                symbol: position.symbol,
+                type: "monitor",
+                action: "limit_filled_summary",
+              },
             );
 
-            await TradeLog.create({
+            await logProcessStep({
+              accountId: position.accountId,
+              processId,
               type: "monitor",
               action: "limit_filled",
               symbol: position.symbol,
@@ -150,9 +213,15 @@ export async function runPositionMonitor(): Promise<{
                 ? pendingErr.message
                 : String(pendingErr);
             result.errors.push(`Pending ${position.symbol}: ${errMsg}`);
-            console.error(
-              `Error checking pending position ${position.symbol}:`,
-              errMsg,
+            await logExecutorError(
+              `Error checking pending position ${position.symbol}: ${errMsg}`,
+              {
+                accountId: position.accountId,
+                processId,
+                symbol: position.symbol,
+                type: "monitor",
+                action: "pending_position_check_error",
+              },
             );
           }
         }
@@ -179,7 +248,7 @@ export async function runPositionMonitor(): Promise<{
       }
     > = new Map();
 
-    for (const [accountId, positions] of openByAccount) {
+    for (const [accountId] of openByAccount) {
       try {
         let exchange: ExchangeClient;
         if (accountId !== "__global__") {
@@ -202,7 +271,7 @@ export async function runPositionMonitor(): Promise<{
 
         const exPositions = await exchange.getOpenPositions();
         for (const ep of exPositions) {
-          exchangePositions.set(ep.symbol, {
+          exchangePositions.set(getAccountPositionKey(accountId, ep.symbol), {
             markPrice: ep.markPrice,
             unrealizedPnl: ep.unrealizedPnl,
             entryPrice: ep.entryPrice,
@@ -211,28 +280,50 @@ export async function runPositionMonitor(): Promise<{
         }
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
-        console.warn(
+        await logExecutorWarn(
           `⚠️ Failed to fetch exchange positions for account ${accountId}: ${errMsg}`,
+          {
+            accountId: accountId === "__global__" ? undefined : accountId,
+            type: "monitor",
+            action: "exchange_positions_fetch_failed",
+          },
         );
       }
     }
 
-    console.log(
+    await logExecutorInfo(
       `📊 Exchange has ${exchangePositions.size} open positions across all accounts`,
+      {
+        type: "monitor",
+        action: "exchange_positions_snapshot",
+      },
     );
 
     // Find DB positions that are no longer on the exchange
     for (const position of openPositions) {
-      if (!exchangePositions.has(position.symbol)) {
-        console.log(
+      const syncKey = getAccountPositionKey(position.accountId, position.symbol);
+
+      if (!exchangePositions.has(syncKey)) {
+        const processId = createTradeProcessId("syncmon");
+
+        await logExecutorInfo(
           `🔄 Sync: ${position.symbol} ${position.side} not found on exchange — marking as closed`,
+          {
+            accountId: position.accountId,
+            processId,
+            symbol: position.symbol,
+            type: "monitor",
+            action: "sync_close_detected",
+          },
         );
         position.status = "closed";
         position.closedAt = new Date();
         position.closeReason = "Closed on Exchange (external)";
         await position.save();
 
-        await TradeLog.create({
+        await logProcessStep({
+          accountId: position.accountId,
+          processId,
           type: "monitor",
           action: "sync_close",
           symbol: position.symbol,
@@ -248,12 +339,31 @@ export async function runPositionMonitor(): Promise<{
     const activePositions = await Position.find({ status: "open" });
 
     for (const position of activePositions) {
+      const processId = createTradeProcessId("posmon");
+
       try {
+        await logProcessStep({
+          accountId: position.accountId,
+          processId,
+          type: "monitor",
+          action: "position_monitor_started",
+          symbol: position.symbol,
+          details: {
+            positionId: position._id.toString(),
+            currentTime: new Date().toISOString(),
+            sourceMessageId: position.messageId || null,
+            sourceChannelId: position.channelId || null,
+          },
+          result: "processing",
+        });
+
         // Resolve exchange for this position based on accountId
         const exchange = await getExchangeForPosition(position);
 
         // Use exchange position data if available, otherwise fetch ticker
-        const exPos = exchangePositions.get(position.symbol);
+        const exPos = exchangePositions.get(
+          getAccountPositionKey(position.accountId, position.symbol),
+        );
         let currentPrice: number;
         if (exPos?.markPrice) {
           currentPrice = exPos.markPrice;
@@ -283,8 +393,22 @@ export async function runPositionMonitor(): Promise<{
               : currentPrice >= position.stopLossPrice;
 
           if (slHit) {
-            console.log(`🛑 SL hit for ${position.symbol} at ${currentPrice}`);
-            await closePosition(position, currentPrice, "Stop Loss Hit");
+            await logExecutorInfo(
+              `🛑 SL hit for ${position.symbol} at ${currentPrice}`,
+              {
+                accountId: position.accountId,
+                processId,
+                symbol: position.symbol,
+                type: "monitor",
+                action: "stop_loss_hit",
+              },
+            );
+            await closePosition(
+              position,
+              currentPrice,
+              "Stop Loss Hit",
+              processId,
+            );
             result.actions++;
             continue;
           }
@@ -301,8 +425,22 @@ export async function runPositionMonitor(): Promise<{
               : currentPrice <= nextTp.price;
 
           if (tpHit) {
-            console.log(`🎯 TP hit for ${position.symbol} at ${currentPrice}`);
-            await closePosition(position, currentPrice, "Take Profit Hit");
+            await logExecutorInfo(
+              `🎯 TP hit for ${position.symbol} at ${currentPrice}`,
+              {
+                accountId: position.accountId,
+                processId,
+                symbol: position.symbol,
+                type: "monitor",
+                action: "take_profit_hit",
+              },
+            );
+            await closePosition(
+              position,
+              currentPrice,
+              "Take Profit Hit",
+              processId,
+            );
             result.actions++;
             continue;
           }
@@ -311,19 +449,48 @@ export async function runPositionMonitor(): Promise<{
         // ─── AI-assisted analysis ─────────────────────────────────────
 
         const analyzer = AIFactory.getAnalyzer();
-        const analysis = await analyzer.analyzePosition(
-          position.symbol,
-          position.side,
-          position.entryPrice,
+        const aiInput = await buildPositionAnalysisInput(
+          position,
           currentPrice,
-          position.takeProfitTargets?.[0]?.price ?? undefined,
-          position.stopLossPrice ?? undefined,
           pnlPercent,
-          position.quantity,
+          processId,
         );
 
-        console.log(
+        await logProcessStep({
+          accountId: position.accountId,
+          processId,
+          type: "monitor",
+          action: "ai_analysis_requested",
+          symbol: position.symbol,
+          details: {
+            currentTime: aiInput.currentTime,
+            accountOpenPositionsCount: aiInput.accountOpenPositions?.length || 0,
+            discordContextCount: aiInput.discordContextMessages?.length || 0,
+          },
+          result: "processing",
+        });
+
+        const analysis = await analyzer.analyzePosition(aiInput);
+
+        await logProcessStep({
+          accountId: position.accountId,
+          processId,
+          type: "monitor",
+          action: "ai_analysis_completed",
+          symbol: position.symbol,
+          details: analysis,
+          result: "analyzed",
+        });
+
+        await logExecutorInfo(
           `🤖 AI analysis for ${position.symbol}: ${analysis.decision} (${analysis.confidence}%)`,
+          {
+            accountId: position.accountId,
+            processId,
+            symbol: position.symbol,
+            type: "monitor",
+            action: "ai_analysis_summary",
+          },
         );
 
         switch (analysis.decision) {
@@ -333,6 +500,7 @@ export async function runPositionMonitor(): Promise<{
                 position,
                 currentPrice,
                 `AI Close: ${analysis.reason}`,
+                processId,
               );
               result.actions++;
             }
@@ -345,7 +513,9 @@ export async function runPositionMonitor(): Promise<{
               position.stopLossPrice = analysis.newStopLoss;
               await position.save();
 
-              await TradeLog.create({
+              await logProcessStep({
+                accountId: position.accountId,
+                processId,
                 type: "monitor",
                 action: "move_sl",
                 symbol: position.symbol,
@@ -383,7 +553,9 @@ export async function runPositionMonitor(): Promise<{
                   await position.save();
                 }
 
-                await TradeLog.create({
+                await logProcessStep({
+                  accountId: position.accountId,
+                  processId,
                   type: "monitor",
                   action: "partial_close",
                   symbol: position.symbol,
@@ -392,9 +564,15 @@ export async function runPositionMonitor(): Promise<{
                 });
                 result.actions++;
               } catch (err) {
-                console.error(
-                  `Failed to partial close ${position.symbol}:`,
-                  err,
+                await logExecutorError(
+                  `Failed to partial close ${position.symbol}: ${err instanceof Error ? err.message : String(err)}`,
+                  {
+                    accountId: position.accountId,
+                    processId,
+                    symbol: position.symbol,
+                    type: "monitor",
+                    action: "partial_close_error",
+                  },
                 );
               }
             }
@@ -419,7 +597,9 @@ export async function runPositionMonitor(): Promise<{
               }
               await position.save();
 
-              await TradeLog.create({
+              await logProcessStep({
+                accountId: position.accountId,
+                processId,
                 type: "monitor",
                 action: "update_tp",
                 symbol: position.symbol,
@@ -440,24 +620,40 @@ export async function runPositionMonitor(): Promise<{
         const errMsg = error instanceof Error ? error.message : "Unknown error";
         result.errors.push(`${position.symbol}: ${errMsg}`);
 
-        await TradeLog.create({
+        await logProcessStep({
+          accountId: position.accountId,
+          processId,
           type: "monitor",
           action: "error",
           symbol: position.symbol,
           error: errMsg,
+          result: "failed",
         });
 
-        console.error(`Error monitoring ${position.symbol}:`, errMsg);
+        await logExecutorError(`Error monitoring ${position.symbol}: ${errMsg}`, {
+          accountId: position.accountId,
+          processId,
+          symbol: position.symbol,
+          type: "monitor",
+          action: "monitor_position_error",
+        });
       }
     }
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : "Unknown error";
     result.errors.push(`General: ${errMsg}`);
-    console.error("Position monitor error:", errMsg);
+    await logExecutorError(`Position monitor error: ${errMsg}`, {
+      type: "monitor",
+      action: "monitor_general_error",
+    });
   }
 
-  console.log(
+  await logExecutorInfo(
     `✅ Position monitor complete: ${result.checked} checked, ${result.actions} actions taken`,
+    {
+      type: "monitor",
+      action: "monitor_completed",
+    },
   );
   return result;
 }
@@ -466,6 +662,7 @@ async function closePosition(
   position: import("./database").IPosition & { save: () => Promise<unknown> },
   currentPrice: number,
   reason: string,
+  processId?: string,
 ): Promise<void> {
   try {
     const exchange = await getExchangeForPosition(position);
@@ -475,9 +672,15 @@ async function closePosition(
       position.quantity,
     );
   } catch (err) {
-    console.warn(
-      `Exchange close failed for ${position.symbol}, marking as closed in DB:`,
-      err instanceof Error ? err.message : err,
+    await logExecutorWarn(
+      `Exchange close failed for ${position.symbol}, marking as closed in DB: ${err instanceof Error ? err.message : String(err)}`,
+      {
+        accountId: position.accountId,
+        processId,
+        symbol: position.symbol,
+        type: "monitor",
+        action: "exchange_close_failed",
+      },
     );
   }
 
@@ -487,7 +690,9 @@ async function closePosition(
   position.currentPrice = currentPrice;
   await position.save();
 
-  await TradeLog.create({
+  await logProcessStep({
+    accountId: position.accountId,
+    processId,
     type: "monitor",
     action: "close",
     symbol: position.symbol,
@@ -495,5 +700,11 @@ async function closePosition(
     result: "success",
   });
 
-  console.log(`✅ Closed ${position.symbol}: ${reason}`);
+  await logExecutorInfo(`✅ Closed ${position.symbol}: ${reason}`, {
+    accountId: position.accountId,
+    processId,
+    symbol: position.symbol,
+    type: "monitor",
+    action: "close_completed",
+  });
 }
