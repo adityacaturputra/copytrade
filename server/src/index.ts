@@ -42,7 +42,12 @@ app.use(
   cors({
     origin: FRONTEND_URL,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Agent-Password",
+      "X-Agent-Auth",
+    ],
     credentials: true,
   })
 );

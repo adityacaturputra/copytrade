@@ -254,6 +254,51 @@ export interface ISignalConfig extends Document {
   updatedAt: Date;
 }
 
+export interface IAgentSession extends Document {
+  sessionId: string;
+  role: "viewer" | "operator" | "admin";
+  status: "active" | "closed";
+  userAgent?: string;
+  ipAddress?: string;
+  lastActivityAt: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface IAgentTurn extends Document {
+  sessionId: string;
+  processId: string;
+  role: "viewer" | "operator" | "admin";
+  provider: string;
+  status:
+    | "running"
+    | "awaiting_approval"
+    | "completed"
+    | "failed"
+    | "aborted";
+  userMessage: string;
+  assistantResponse?: string;
+  error?: string;
+  messages: unknown[];
+  history: Array<{
+    role: "user" | "assistant";
+    content: string;
+  }>;
+  pendingToolCalls: unknown[];
+  pendingApproval?: {
+    toolCallId: string;
+    toolName: string;
+    toolArgs: Record<string, unknown>;
+    minimumRole: "viewer" | "operator" | "admin";
+    requiresApproval: boolean;
+  } | null;
+  toolTraces: unknown[];
+  startedAt: Date;
+  completedAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 // ─── Schemas ───────────────────────────────────────────────────────────────────
 
 const ProcessedMessageSchema = new Schema<IProcessedMessage>(
@@ -473,6 +518,80 @@ const SignalConfigSchema = new Schema<ISignalConfig>(
   { timestamps: { createdAt: false, updatedAt: true } },
 );
 
+const AgentSessionSchema = new Schema<IAgentSession>(
+  {
+    sessionId: { type: String, required: true },
+    role: {
+      type: String,
+      enum: ["viewer", "operator", "admin"],
+      required: true,
+    },
+    status: {
+      type: String,
+      enum: ["active", "closed"],
+      default: "active",
+    },
+    userAgent: { type: String, default: null },
+    ipAddress: { type: String, default: null },
+    lastActivityAt: { type: Date, default: Date.now },
+  },
+  { timestamps: true },
+);
+
+AgentSessionSchema.index({ sessionId: 1 }, { unique: true });
+AgentSessionSchema.index({ updatedAt: -1 });
+
+const AgentTurnSchema = new Schema<IAgentTurn>(
+  {
+    sessionId: { type: String, required: true },
+    processId: { type: String, required: true },
+    role: {
+      type: String,
+      enum: ["viewer", "operator", "admin"],
+      required: true,
+    },
+    provider: { type: String, required: true },
+    status: {
+      type: String,
+      enum: [
+        "running",
+        "awaiting_approval",
+        "completed",
+        "failed",
+        "aborted",
+      ],
+      default: "running",
+    },
+    userMessage: { type: String, required: true },
+    assistantResponse: { type: String, default: null },
+    error: { type: String, default: null },
+    messages: { type: Array, default: [] },
+    history: {
+      type: [
+        {
+          role: {
+            type: String,
+            enum: ["user", "assistant"],
+            required: true,
+          },
+          content: { type: String, required: true },
+        },
+      ],
+      default: [],
+    },
+    pendingToolCalls: { type: Array, default: [] },
+    pendingApproval: { type: Schema.Types.Mixed, default: null },
+    toolTraces: { type: Array, default: [] },
+    startedAt: { type: Date, default: Date.now },
+    completedAt: { type: Date, default: null },
+  },
+  { timestamps: true },
+);
+
+AgentTurnSchema.index({ sessionId: 1, createdAt: -1 });
+AgentTurnSchema.index({ processId: 1 }, { unique: true });
+AgentTurnSchema.index({ status: 1, updatedAt: -1 });
+
 // ─── Models ────────────────────────────────────────────────────────────────────
 
 export const ProcessedMessage: Model<IProcessedMessage> =
@@ -507,6 +626,13 @@ export const RiskSettings: Model<IRiskSettings> =
 export const SignalConfig: Model<ISignalConfig> =
   models.SignalConfig ||
   mongoose.model<ISignalConfig>("SignalConfig", SignalConfigSchema);
+
+export const AgentSession: Model<IAgentSession> =
+  models.AgentSession ||
+  mongoose.model<IAgentSession>("AgentSession", AgentSessionSchema);
+
+export const AgentTurn: Model<IAgentTurn> =
+  models.AgentTurn || mongoose.model<IAgentTurn>("AgentTurn", AgentTurnSchema);
 
 // ─── Helper Functions ──────────────────────────────────────────────────────────
 

@@ -1,10 +1,8 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-
-// ==================== Types ====================
 
 interface AgentStep {
   type: "thinking" | "tool_call" | "tool_result" | "response";
@@ -14,20 +12,45 @@ interface AgentStep {
   duration?: number;
 }
 
+interface AgentApproval {
+  sessionId: string;
+  processId: string;
+  toolCallId: string;
+  toolName: string;
+  toolArgs: Record<string, unknown>;
+  role: "viewer" | "operator" | "admin";
+  minimumRole: "viewer" | "operator" | "admin";
+}
+
 interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
-  steps?: AgentStep[];
+  steps: AgentStep[];
   timestamp: Date;
-  streaming?: boolean; // still receiving tokens
+  streaming?: boolean;
+  approval?: AgentApproval | null;
+  processId?: string | null;
 }
 
-// ==================== Component ====================
+type AgentRole = "viewer" | "operator" | "admin";
 
-const AGENT_API_URL = `${(
+const API_BASE = (
   process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3001"
-).replace(/\/+$/, "")}/api/agent`;
+).replace(/\/+$/, "");
+const AGENT_API_URL = `${API_BASE}/api/agent`;
+const AGENT_AUTH_URL = `${API_BASE}/api/agent/auth`;
+const AGENT_APPROVAL_URL = `${API_BASE}/api/agent/approval`;
+const STORAGE_PASSWORD_KEY = "agent-chat-password";
+const STORAGE_SESSION_KEY = "agent-chat-session-id";
+
+function createSessionId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `agentsess_${crypto.randomUUID()}`;
+  }
+
+  return `agentsess_${Date.now()}`;
+}
 
 export default function AgentChatPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -35,8 +58,14 @@ export default function AgentChatPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
+  const [password, setPassword] = useState("");
+  const [sessionId, setSessionId] = useState("");
+  const [role, setRole] = useState<AgentRole | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [passwordInput, setPasswordInput] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const streamControllerRef = useRef<AbortController | null>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -47,8 +76,10 @@ export default function AgentChatPage() {
   }, [messages]);
 
   useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
+    if (role) {
+      inputRef.current?.focus();
+    }
+  }, [role]);
 
   const toggleSteps = (msgId: string) => {
     setExpandedSteps((prev) => {
@@ -62,58 +93,139 @@ export default function AgentChatPage() {
     });
   };
 
-  const sendMessage = useCallback(async () => {
-    const trimmed = input.trim();
-    if (!trimmed || loading) return;
-
-    setError(null);
-    const userMsg: ChatMessage = {
-      id: `user-${Date.now()}`,
-      role: "user",
-      content: trimmed,
-      timestamp: new Date(),
-    };
-
-    const assistantId = `assistant-${Date.now()}`;
-    const assistantMsg: ChatMessage = {
-      id: assistantId,
-      role: "assistant",
-      content: "",
-      steps: [],
-      timestamp: new Date(),
-      streaming: true,
-    };
-
-    setMessages((prev) => [...prev, userMsg, assistantMsg]);
-    setInput("");
-    setLoading(true);
-
-    try {
-      const history = messages.map((m) => ({
-        role: m.role,
-        content: m.content,
-      }));
-
-      const res = await fetch(AGENT_API_URL, {
+  const authenticate = useCallback(
+    async (nextPassword: string, preferredSessionId?: string) => {
+      const resolvedSessionId = preferredSessionId || createSessionId();
+      const res = await fetch(AGENT_AUTH_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: trimmed, history }),
+        body: JSON.stringify({
+          password: nextPassword,
+          sessionId: resolvedSessionId,
+        }),
       });
 
-      if (!res.ok) {
-        const errData = await res.json();
-        setError(errData.error || `HTTP ${res.status}`);
-        setMessages((prev) => prev.filter((m) => m.id !== assistantId));
-        return;
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Failed to authenticate agent chat");
       }
 
-      // Read SSE stream
-      const reader = res.body?.getReader();
-      if (!reader) {
-        setError("No response stream");
-        return;
-      }
+      sessionStorage.setItem(STORAGE_PASSWORD_KEY, nextPassword);
+      sessionStorage.setItem(STORAGE_SESSION_KEY, data.sessionId);
+      setPassword(nextPassword);
+      setPasswordInput(nextPassword);
+      setSessionId(data.sessionId);
+      setRole(data.role);
+    },
+    [],
+  );
 
+  useEffect(() => {
+    const savedPassword = sessionStorage.getItem(STORAGE_PASSWORD_KEY) || "";
+    const savedSessionId =
+      sessionStorage.getItem(STORAGE_SESSION_KEY) || createSessionId();
+
+    if (!savedPassword) {
+      setSessionId(savedSessionId);
+      setAuthLoading(false);
+      return;
+    }
+
+    authenticate(savedPassword, savedSessionId)
+      .catch(() => {
+        sessionStorage.removeItem(STORAGE_PASSWORD_KEY);
+        sessionStorage.removeItem(STORAGE_SESSION_KEY);
+        setPassword("");
+        setRole(null);
+        setSessionId(savedSessionId);
+      })
+      .finally(() => {
+        setAuthLoading(false);
+      });
+  }, [authenticate]);
+
+  const logout = () => {
+    streamControllerRef.current?.abort();
+    streamControllerRef.current = null;
+    sessionStorage.removeItem(STORAGE_PASSWORD_KEY);
+    sessionStorage.removeItem(STORAGE_SESSION_KEY);
+    setPassword("");
+    setPasswordInput("");
+    setRole(null);
+    setMessages([]);
+    setError(null);
+    setLoading(false);
+    setSessionId(createSessionId());
+  };
+
+  const applyStreamEventToMessage = useCallback(
+    (
+      messageId: string,
+      event:
+        | { type: "step"; data: AgentStep }
+        | { type: "token"; data: { token: string } }
+        | { type: "done"; data: { response: string; processId?: string; status?: string } }
+        | { type: "error"; data: { error: string; processId?: string } }
+        | { type: "approval_required"; data: AgentApproval },
+    ) => {
+      setMessages((prev) =>
+        prev.map((message) => {
+          if (message.id !== messageId) {
+            return message;
+          }
+
+          if (event.type === "step") {
+            return {
+              ...message,
+              steps: [...message.steps, event.data],
+            };
+          }
+
+          if (event.type === "token") {
+            return {
+              ...message,
+              content: message.content + (event.data.token || ""),
+            };
+          }
+
+          if (event.type === "approval_required") {
+            return {
+              ...message,
+              approval: event.data,
+              processId: event.data.processId,
+              streaming: false,
+              content:
+                message.content ||
+                `Waiting for approval to run \`${event.data.toolName}\`.`,
+            };
+          }
+
+          if (event.type === "done") {
+            return {
+              ...message,
+              content: event.data.response || message.content,
+              processId: event.data.processId || message.processId || null,
+              streaming: false,
+            };
+          }
+
+          return {
+            ...message,
+            content: `❌ ${event.data.error}`,
+            processId: event.data.processId || message.processId || null,
+            streaming: false,
+          };
+        }),
+      );
+    },
+    [],
+  );
+
+  const readSseStream = useCallback(
+    async (
+      reader: ReadableStreamDefaultReader<Uint8Array>,
+      messageId: string,
+    ) => {
       const decoder = new TextDecoder();
       let buffer = "";
 
@@ -122,102 +234,259 @@ export default function AgentChatPage() {
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
+        const chunks = buffer.split("\n\n");
+        buffer = chunks.pop() || "";
 
-        // Parse SSE events from buffer
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || ""; // Keep incomplete line in buffer
+        for (const chunk of chunks) {
+          const lines = chunk.split("\n");
+          const eventLine = lines.find((line) => line.startsWith("event: "));
+          const dataLine = lines.find((line) => line.startsWith("data: "));
+          if (!eventLine || !dataLine) continue;
 
-        let currentEvent = "";
-        let currentData = "";
+          const eventType = eventLine.slice("event: ".length).trim();
+          const payload = JSON.parse(dataLine.slice("data: ".length));
 
-        for (const line of lines) {
-          if (line.startsWith("event: ")) {
-            currentEvent = line.slice(7).trim();
-          } else if (line.startsWith("data: ")) {
-            currentData = line.slice(6);
-          } else if (line === "" && currentEvent && currentData) {
-            // Empty line = end of event
-            try {
-              const parsed = JSON.parse(currentData);
-
-              if (currentEvent === "step") {
-                const step = parsed as AgentStep;
-                // Tool call or result — add to steps
-                setMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === assistantId
-                      ? { ...m, steps: [...(m.steps || []), step] }
-                      : m,
-                  ),
-                );
-              } else if (currentEvent === "token") {
-                // Word-by-word streaming — append each token
-                setMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === assistantId
-                      ? { ...m, content: m.content + (parsed.token || "") }
-                      : m,
-                  ),
-                );
-              } else if (currentEvent === "done") {
-                // Finalize — use the full response from done event
-                // to ensure completeness (in case any tokens were missed)
-                setMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === assistantId
-                      ? {
-                          ...m,
-                          content: parsed.response || m.content,
-                          streaming: false,
-                        }
-                      : m,
-                  ),
-                );
-                // Auto-expand steps
-                setExpandedSteps((prev) => {
-                  const next = new Set(prev);
-                  next.add(assistantId);
-                  return next;
-                });
-              } else if (currentEvent === "error") {
-                setError(parsed.error || "Unknown error");
-                setMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === assistantId
-                      ? {
-                          ...m,
-                          content: `❌ ${parsed.error}`,
-                          streaming: false,
-                        }
-                      : m,
-                  ),
-                );
-              }
-            } catch {
-              // Ignore parse errors
-            }
-
-            currentEvent = "";
-            currentData = "";
+          if (eventType === "step") {
+            applyStreamEventToMessage(messageId, {
+              type: "step",
+              data: payload as AgentStep,
+            });
+          } else if (eventType === "token") {
+            applyStreamEventToMessage(messageId, {
+              type: "token",
+              data: payload as { token: string },
+            });
+          } else if (eventType === "approval_required") {
+            applyStreamEventToMessage(messageId, {
+              type: "approval_required",
+              data: payload as AgentApproval,
+            });
+            setExpandedSteps((prev) => {
+              const next = new Set(prev);
+              next.add(messageId);
+              return next;
+            });
+          } else if (eventType === "done") {
+            applyStreamEventToMessage(messageId, {
+              type: "done",
+              data: payload as {
+                response: string;
+                processId?: string;
+                status?: string;
+              },
+            });
+            setExpandedSteps((prev) => {
+              const next = new Set(prev);
+              next.add(messageId);
+              return next;
+            });
+          } else if (eventType === "error") {
+            applyStreamEventToMessage(messageId, {
+              type: "error",
+              data: payload as { error: string; processId?: string },
+            });
+            setError(payload.error || "Unknown agent error");
           }
         }
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Network error");
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantId ? { ...m, streaming: false } : m,
-        ),
+    },
+    [applyStreamEventToMessage],
+  );
+
+  const executeAgentRequest = useCallback(
+    async (
+      request: {
+        url: string;
+        body: Record<string, unknown>;
+      },
+      messageId: string,
+    ) => {
+      if (!password) {
+        throw new Error("Agent password is not set");
+      }
+
+      const controller = new AbortController();
+      streamControllerRef.current = controller;
+
+      const res = await fetch(request.url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-agent-password": password,
+        },
+        body: JSON.stringify(request.body),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+
+      const reader = res.body?.getReader();
+      if (!reader) {
+        throw new Error("No response stream");
+      }
+
+      await readSseStream(reader, messageId);
+    },
+    [password, readSseStream],
+  );
+
+  const sendMessage = useCallback(async () => {
+    const trimmed = input.trim();
+    if (!trimmed || loading || !role) return;
+
+    setError(null);
+    const timestamp = new Date();
+    const userMessage: ChatMessage = {
+      id: `user-${timestamp.getTime()}`,
+      role: "user",
+      content: trimmed,
+      steps: [],
+      timestamp,
+    };
+    const assistantId = `assistant-${timestamp.getTime()}`;
+    const assistantMessage: ChatMessage = {
+      id: assistantId,
+      role: "assistant",
+      content: "",
+      steps: [],
+      timestamp: new Date(),
+      streaming: true,
+      approval: null,
+      processId: null,
+    };
+
+    const history = messages.map((message) => ({
+      role: message.role,
+      content: message.content,
+    }));
+
+    setMessages((prev) => [...prev, userMessage, assistantMessage]);
+    setInput("");
+    setLoading(true);
+
+    try {
+      await executeAgentRequest(
+        {
+          url: AGENT_API_URL,
+          body: {
+            sessionId,
+            message: trimmed,
+            history,
+          },
+        },
+        assistantId,
       );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Network error";
+      if (message.toLowerCase().includes("abort")) {
+        setMessages((prev) =>
+          prev.map((item) =>
+            item.id === assistantId ? { ...item, streaming: false } : item,
+          ),
+        );
+      } else {
+        setError(message);
+        setMessages((prev) =>
+          prev.map((item) =>
+            item.id === assistantId
+              ? { ...item, content: `❌ ${message}`, streaming: false }
+              : item,
+          ),
+        );
+      }
     } finally {
+      streamControllerRef.current = null;
       setLoading(false);
       inputRef.current?.focus();
     }
-  }, [input, loading, messages]);
+  }, [executeAgentRequest, input, loading, messages, role, sessionId]);
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
+  const handleApproval = useCallback(
+    async (messageId: string, approval: AgentApproval, decision: "approve" | "reject") => {
+      if (loading) return;
+
+      setError(null);
+      setLoading(true);
+      setMessages((prev) =>
+        prev.map((message) =>
+          message.id === messageId
+            ? {
+                ...message,
+                approval: null,
+                streaming: true,
+                content:
+                  message.content ||
+                  `Processing ${decision} for \`${approval.toolName}\`...`,
+              }
+            : message,
+        ),
+      );
+
+      try {
+        await executeAgentRequest(
+          {
+            url: AGENT_APPROVAL_URL,
+            body: {
+              sessionId: approval.sessionId,
+              processId: approval.processId,
+              decision,
+            },
+          },
+          messageId,
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Network error";
+        if (message.toLowerCase().includes("abort")) {
+          setMessages((prev) =>
+            prev.map((item) =>
+              item.id === messageId ? { ...item, streaming: false } : item,
+            ),
+          );
+        } else {
+          setError(message);
+          setMessages((prev) =>
+            prev.map((item) =>
+              item.id === messageId
+                ? { ...item, content: `❌ ${message}`, streaming: false }
+                : item,
+            ),
+          );
+        }
+      } finally {
+        streamControllerRef.current = null;
+        setLoading(false);
+      }
+    },
+    [executeAgentRequest, loading],
+  );
+
+  const stopStreaming = () => {
+    streamControllerRef.current?.abort();
+    streamControllerRef.current = null;
+    setLoading(false);
+  };
+
+  const handlePasswordSubmit = async () => {
+    const trimmed = passwordInput.trim();
+    if (!trimmed) return;
+
+    setError(null);
+    setAuthLoading(true);
+    try {
+      await authenticate(trimmed, sessionId || createSessionId());
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Authentication failed");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
       sendMessage();
     }
   };
@@ -228,263 +497,241 @@ export default function AgentChatPage() {
   };
 
   const quickPrompts = [
-    "📊 What's my account balance?",
-    "📈 Show my open positions",
-    "📝 Check pending drafts",
-    "🔍 What's the BTC price?",
-    "⚙️ What are my current settings?",
-    "📊 Show recent activity logs",
+    "What's my account balance?",
+    "Show my open positions",
+    "Check pending drafts",
+    "What's the BTC price?",
+    "What are my current settings?",
+    "Show recent activity logs",
   ];
 
-  // Get current streaming assistant message
-  const streamingMsg = messages.find((m) => m.streaming);
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-dark-100 text-slate-300">
+        Loading agent access...
+      </div>
+    );
+  }
+
+  if (!role) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-dark-100 px-4">
+        <div className="w-full max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-6">
+          <h1 className="text-xl font-bold text-white">Agent Access</h1>
+          <p className="mt-2 text-sm text-slate-400">
+            Enter the agent password from `.env` to unlock chat access.
+          </p>
+          <input
+            type="password"
+            value={passwordInput}
+            onChange={(event) => setPasswordInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                void handlePasswordSubmit();
+              }
+            }}
+            className="mt-4 w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm text-white outline-none focus:border-primary-500"
+            placeholder="Agent password"
+          />
+          {error && (
+            <p className="mt-3 rounded-lg border border-red-700/40 bg-red-900/20 px-3 py-2 text-sm text-red-300">
+              {error}
+            </p>
+          )}
+          <button
+            onClick={() => void handlePasswordSubmit()}
+            className="mt-4 w-full rounded-xl bg-primary-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-primary-700"
+          >
+            Unlock Agent
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="flex flex-col h-screen">
-      {/* Header */}
-      <header className="border-b border-slate-700 bg-dark-100 shrink-0">
-        <div className="max-w-5xl mx-auto px-3 sm:px-4 py-2 sm:py-3 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-            <a
-              href="/"
-              className="text-slate-400 hover:text-white transition text-sm shrink-0"
-            >
-              ← <span className="hidden sm:inline">Dashboard</span>
-            </a>
-            <div className="w-px h-5 sm:h-6 bg-slate-700" />
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="text-xl sm:text-2xl shrink-0">🤖</span>
-              <div className="min-w-0">
-                <h1 className="text-base sm:text-lg font-bold text-white truncate">
-                  AI Trading Agent
-                </h1>
-                <p className="text-[10px] sm:text-xs text-slate-400 truncate">
-                  Real-time streaming • Agentic AI
-                </p>
-              </div>
-            </div>
+    <div className="flex h-screen flex-col">
+      <header className="shrink-0 border-b border-slate-700 bg-dark-100">
+        <div className="mx-auto flex max-w-5xl items-center justify-between gap-2 px-3 py-3 sm:px-4">
+          <div className="min-w-0">
+            <h1 className="truncate text-lg font-bold text-white">
+              AI Trading Agent
+            </h1>
+            <p className="text-xs text-slate-400">
+              True streaming • role: {role} • session: {sessionId}
+            </p>
           </div>
           <div className="flex items-center gap-2">
-            {messages.length > 0 && (
+            {loading ? (
+              <button
+                onClick={stopStreaming}
+                className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white"
+              >
+                Stop
+              </button>
+            ) : null}
+            {messages.length > 0 ? (
               <button
                 onClick={clearChat}
-                className="text-xs text-slate-400 hover:text-white bg-slate-800 px-3 py-1.5 rounded-lg transition"
+                className="rounded-lg bg-slate-800 px-3 py-1.5 text-xs text-slate-300"
               >
-                🗑️ Clear
+                Clear
               </button>
-            )}
-            {loading && (
-              <span className="badge badge-success text-xs animate-pulse">
-                ● Live
-              </span>
-            )}
+            ) : null}
+            <button
+              onClick={logout}
+              className="rounded-lg bg-slate-800 px-3 py-1.5 text-xs text-slate-300"
+            >
+              Lock
+            </button>
           </div>
         </div>
       </header>
 
-      {/* Messages Area */}
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
-          {/* Welcome */}
-          {messages.length === 0 && !loading && (
-            <div className="text-center py-12">
-              <div className="text-6xl mb-4">🤖</div>
-              <h2 className="text-2xl font-bold text-white mb-2">
-                AI Trading Agent
-              </h2>
-              <p className="text-slate-400 mb-8 max-w-md mx-auto">
-                Real-time streaming responses. I can check your portfolio, view
-                positions, manage drafts, place orders, and more.
+        <div className="mx-auto max-w-5xl space-y-6 px-4 py-6">
+          {messages.length === 0 && !loading ? (
+            <div className="py-12 text-center">
+              <div className="mb-4 text-6xl">🤖</div>
+              <h2 className="text-2xl font-bold text-white">Agent Chat</h2>
+              <p className="mx-auto mt-2 max-w-md text-slate-400">
+                Read-only or approval-gated execution depending on your role.
               </p>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-3 max-w-2xl mx-auto">
+              <div className="mx-auto mt-8 grid max-w-2xl grid-cols-2 gap-3 md:grid-cols-3">
                 {quickPrompts.map((prompt) => (
                   <button
                     key={prompt}
                     onClick={() => {
-                      setInput(prompt.slice(2).trim());
+                      setInput(prompt);
                       inputRef.current?.focus();
                     }}
-                    className="text-left bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 rounded-lg p-3 transition"
+                    className="rounded-lg border border-slate-700 bg-slate-800 p-3 text-left text-sm text-slate-300 transition hover:bg-slate-700"
                   >
-                    <span className="text-sm text-slate-300">{prompt}</span>
+                    {prompt}
                   </button>
                 ))}
               </div>
             </div>
-          )}
+          ) : null}
 
-          {/* Messages */}
-          {messages.map((msg) => (
+          {messages.map((message) => (
             <div
-              key={msg.id}
-              className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+              key={message.id}
+              className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
             >
               <div
-                className={`max-w-[85%] ${msg.role === "user" ? "order-2" : "order-1"}`}
+                className={`max-w-[85%] ${message.role === "user" ? "order-2" : "order-1"}`}
               >
-                {/* Role label */}
                 <div
-                  className={`flex items-center gap-2 mb-1 ${msg.role === "user" ? "justify-end" : ""}`}
+                  className={`mb-1 flex items-center gap-2 ${message.role === "user" ? "justify-end" : ""}`}
                 >
                   <span className="text-xs text-slate-500">
-                    {msg.role === "user" ? "👤 You" : "🤖 Agent"}
+                    {message.role === "user" ? "You" : "Agent"}
                   </span>
                   <span className="text-xs text-slate-600">
-                    {msg.timestamp.toLocaleTimeString()}
+                    {message.timestamp.toLocaleTimeString()}
                   </span>
-                  {msg.streaming && (
-                    <span className="text-xs text-primary-400 animate-pulse">
-                      ● streaming
+                  {message.processId ? (
+                    <span className="truncate text-xs text-slate-600">
+                      {message.processId}
                     </span>
-                  )}
+                  ) : null}
+                  {message.streaming ? (
+                    <span className="text-xs text-primary-400">● streaming</span>
+                  ) : null}
                 </div>
 
-                {/* Message bubble */}
                 <div
                   className={`rounded-2xl px-4 py-3 ${
-                    msg.role === "user"
-                      ? "bg-primary-600 text-white rounded-br-md"
-                      : "bg-slate-800 border border-slate-700 text-slate-200 rounded-bl-md"
+                    message.role === "user"
+                      ? "rounded-br-md bg-primary-600 text-white"
+                      : "rounded-bl-md border border-slate-700 bg-slate-800 text-slate-200"
                   }`}
                 >
-                  {msg.role === "assistant" ? (
+                  {message.role === "assistant" ? (
                     <div className="agent-markdown text-sm leading-relaxed">
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {msg.content}
+                        {message.content}
                       </ReactMarkdown>
-                      {msg.streaming && (
-                        <span className="inline-block w-1.5 h-4 bg-primary-400 animate-pulse ml-0.5 align-text-bottom" />
-                      )}
                     </div>
                   ) : (
                     <div className="whitespace-pre-wrap text-sm leading-relaxed">
-                      {msg.content}
+                      {message.content}
                     </div>
                   )}
                 </div>
 
-                {/* Agent steps — show in real-time */}
-                {msg.role === "assistant" &&
-                  msg.steps &&
-                  msg.steps.length > 0 && (
-                    <div className="mt-2">
-                      <button
-                        onClick={() => toggleSteps(msg.id)}
-                        className="text-xs text-slate-500 hover:text-slate-300 transition flex items-center gap-1"
-                      >
-                        {expandedSteps.has(msg.id) ? "▼" : "▶"}{" "}
-                        {msg.steps.filter((s) => s.type === "tool_call").length}{" "}
-                        tool calls •{" "}
-                        {
-                          msg.steps.filter((s) => s.type === "tool_result")
-                            .length
-                        }{" "}
-                        results
-                      </button>
-                      {expandedSteps.has(msg.id) && (
-                        <div className="mt-2 space-y-2">
-                          {msg.steps
-                            .filter(
-                              (s) =>
-                                s.type === "tool_call" ||
-                                s.type === "tool_result",
-                            )
-                            .map((step, idx) => (
-                              <StepCard key={idx} step={step} />
-                            ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
+                {message.approval ? (
+                  <ApprovalCard
+                    approval={message.approval}
+                    disabled={loading}
+                    onApprove={() =>
+                      void handleApproval(message.id, message.approval!, "approve")
+                    }
+                    onReject={() =>
+                      void handleApproval(message.id, message.approval!, "reject")
+                    }
+                  />
+                ) : null}
+
+                {message.role === "assistant" && message.steps.length > 0 ? (
+                  <div className="mt-2">
+                    <button
+                      onClick={() => toggleSteps(message.id)}
+                      className="flex items-center gap-1 text-xs text-slate-500"
+                    >
+                      {expandedSteps.has(message.id) ? "▼" : "▶"}{" "}
+                      {message.steps.filter((step) => step.type === "tool_call").length}{" "}
+                      tool calls
+                    </button>
+                    {expandedSteps.has(message.id) ? (
+                      <div className="mt-2 space-y-2">
+                        {message.steps.map((step, index) => (
+                          <StepCard key={`${message.id}-${index}`} step={step} />
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             </div>
           ))}
 
-          {/* Loading indicator — only show when no streaming message yet */}
-          {loading &&
-            (!streamingMsg ||
-              (!streamingMsg.content &&
-                (!streamingMsg.steps || streamingMsg.steps.length === 0))) && (
-              <div className="flex justify-start">
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-xs text-slate-500">🤖 Agent</span>
-                    <span className="text-xs text-slate-600">
-                      connecting...
-                    </span>
-                  </div>
-                  <div className="bg-slate-800 border border-slate-700 rounded-2xl rounded-bl-md px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <div className="flex gap-1">
-                        <div
-                          className="w-2 h-2 bg-primary-400 rounded-full animate-bounce"
-                          style={{ animationDelay: "0ms" }}
-                        />
-                        <div
-                          className="w-2 h-2 bg-primary-400 rounded-full animate-bounce"
-                          style={{ animationDelay: "150ms" }}
-                        />
-                        <div
-                          className="w-2 h-2 bg-primary-400 rounded-full animate-bounce"
-                          style={{ animationDelay: "300ms" }}
-                        />
-                      </div>
-                      <span className="text-sm text-slate-400">
-                        Thinking & connecting...
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-          {/* Error */}
-          {error && (
+          {error ? (
             <div className="flex justify-center">
-              <div className="bg-red-900/30 border border-red-700/50 rounded-lg px-4 py-3 text-sm text-red-300 max-w-md">
-                ❌ {error}
+              <div className="max-w-md rounded-lg border border-red-700/50 bg-red-900/30 px-4 py-3 text-sm text-red-300">
+                {error}
               </div>
             </div>
-          )}
+          ) : null}
 
           <div ref={messagesEndRef} />
         </div>
       </div>
 
-      {/* Input Area */}
-      <div className="border-t border-slate-700 bg-dark-100 shrink-0">
-        <div className="max-w-5xl mx-auto px-4 py-4">
+      <div className="shrink-0 border-t border-slate-700 bg-dark-100">
+        <div className="mx-auto max-w-5xl px-4 py-4">
           <div className="flex items-end gap-3">
-            <div className="flex-1 relative">
-              <textarea
-                ref={inputRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="Ask anything about your trading account, positions, or manage trades..."
-                rows={1}
-                className="w-full bg-slate-800 border border-slate-700 focus:border-primary-500 focus:ring-1 focus:ring-primary-500 rounded-xl px-4 py-3 text-sm text-white placeholder:text-slate-500 resize-none outline-none transition"
-                style={{ maxHeight: "120px" }}
-                onInput={(e) => {
-                  const target = e.target as HTMLTextAreaElement;
-                  target.style.height = "auto";
-                  target.style.height =
-                    Math.min(target.scrollHeight, 120) + "px";
-                }}
-                disabled={loading}
-              />
-            </div>
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Ask about positions, logs, drafts, or request a trade operation..."
+              rows={1}
+              disabled={loading}
+              className="min-h-[52px] flex-1 resize-none rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm text-white outline-none focus:border-primary-500"
+            />
             <button
-              onClick={sendMessage}
+              onClick={() => void sendMessage()}
               disabled={loading || !input.trim()}
-              className="bg-primary-600 hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold px-5 py-3 rounded-xl text-sm transition flex items-center gap-2 shrink-0"
+              className="rounded-xl bg-primary-600 px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {loading ? <div className="spinner w-4 h-4 border-2" /> : "Send"}
+              Send
             </button>
           </div>
-          <p className="text-xs text-slate-600 mt-2 text-center">
-            Real-time streaming • The agent has access to your exchange account,
-            positions, drafts, and settings.
+          <p className="mt-2 text-center text-xs text-slate-600">
+            Mutating tools are enforced server-side and require approval.
           </p>
         </div>
       </div>
@@ -492,65 +739,101 @@ export default function AgentChatPage() {
   );
 }
 
-// ==================== Sub-Components ====================
+function ApprovalCard({
+  approval,
+  disabled,
+  onApprove,
+  onReject,
+}: {
+  approval: AgentApproval;
+  disabled: boolean;
+  onApprove: () => void;
+  onReject: () => void;
+}) {
+  return (
+    <div className="mt-3 rounded-xl border border-amber-700/50 bg-amber-900/20 p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-amber-200">
+            Approval required for `{approval.toolName}`
+          </p>
+          <p className="mt-1 text-xs text-amber-100/80">
+            Current role: {approval.role} • minimum role: {approval.minimumRole}
+          </p>
+        </div>
+        <span className="text-xs text-amber-100/70">{approval.processId}</span>
+      </div>
+      <pre className="mt-3 max-h-48 overflow-y-auto whitespace-pre-wrap rounded-lg bg-slate-950/40 p-3 text-xs text-slate-300">
+        {JSON.stringify(approval.toolArgs, null, 2)}
+      </pre>
+      <div className="mt-3 flex gap-2">
+        <button
+          onClick={onApprove}
+          disabled={disabled}
+          className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
+        >
+          Approve
+        </button>
+        <button
+          onClick={onReject}
+          disabled={disabled}
+          className="rounded-lg bg-red-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
+        >
+          Reject
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function StepCard({ step }: { step: AgentStep }) {
   if (step.type === "tool_call") {
     return (
-      <div className="bg-slate-900/50 border border-slate-700/50 rounded-lg p-2.5">
+      <div className="rounded-lg border border-slate-700/50 bg-slate-900/50 p-2.5">
         <div className="flex items-center gap-2">
-          <span className="text-xs">🔧</span>
           <span className="text-xs font-mono text-primary-400">
             {step.toolName}
           </span>
-          {step.toolArgs && (
-            <span className="text-xs text-slate-500 truncate">
+          {step.toolArgs ? (
+            <span className="truncate text-xs text-slate-500">
               {Object.entries(step.toolArgs)
-                .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+                .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
                 .join(", ")}
             </span>
-          )}
-          {step.duration && (
-            <span className="text-xs text-slate-600 ml-auto">
+          ) : null}
+          {step.duration ? (
+            <span className="ml-auto text-xs text-slate-600">
               {step.duration}ms
             </span>
-          )}
+          ) : null}
         </div>
       </div>
     );
   }
 
-  if (step.type === "tool_result") {
-    const isError = step.content.includes('"error"');
-    return (
-      <div
-        className={`rounded-lg p-2.5 text-xs font-mono ${
-          isError
-            ? "bg-red-900/20 border border-red-700/30 text-red-300"
-            : "bg-green-900/10 border border-green-700/20 text-slate-400"
-        }`}
-      >
-        <div className="flex items-center gap-2 mb-1">
-          <span>{isError ? "❌" : "✅"}</span>
-          <span className="text-slate-500">{step.toolName} result</span>
-          {step.duration && (
-            <span className="text-slate-600 ml-auto">{step.duration}ms</span>
-          )}
-        </div>
-        <pre className="whitespace-pre-wrap break-all max-h-32 overflow-y-auto text-xs">
-          {formatToolResult(step.content)}
-        </pre>
+  const isError = step.content.includes('"error"');
+  return (
+    <div
+      className={`rounded-lg p-2.5 text-xs font-mono ${
+        isError
+          ? "border border-red-700/30 bg-red-900/20 text-red-300"
+          : "border border-green-700/20 bg-green-900/10 text-slate-300"
+      }`}
+    >
+      <div className="mb-1 flex items-center gap-2">
+        <span>{isError ? "❌" : "✅"}</span>
+        <span className="text-slate-500">{step.toolName} result</span>
       </div>
-    );
-  }
-
-  return null;
+      <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap break-all">
+        {formatToolResult(step.content)}
+      </pre>
+    </div>
+  );
 }
 
 function formatToolResult(content: string): string {
   try {
-    const parsed = JSON.parse(content);
-    return JSON.stringify(parsed, null, 2);
+    return JSON.stringify(JSON.parse(content), null, 2);
   } catch {
     return content;
   }
