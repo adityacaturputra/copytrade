@@ -73,6 +73,10 @@ CRITICAL — messageType MUST be one of:
 Important rules:
 - If messageType is "${MessageType.RESULT_STATUS}" or "${MessageType.IGNORE}", return null. Do NOT convert it into a new BUY/SELL entry.
 - Messages like "running 1R", "TP1 hit", "trade hit take profit", "trade hit stoploss", "SL kena", "closed in profit/loss" are status/result updates, not new entries.
+- If the message includes a "[LIVE ACCOUNT CONTEXT]" block, use it as the current account truth at analysis time: current time, balance, open positions, pending limit orders, exchange TP/SL algo orders, tracked DB TP/SL, pending drafts, and current prices.
+- When "[LIVE ACCOUNT CONTEXT]" shows an existing live/tracked position or pending order for the same symbol, strongly prefer classifying management instructions as "${MessageType.POSITION_UPDATE}" or "${MessageType.CLOSE_CANCEL}" instead of a fresh "${MessageType.NEW_ENTRY}".
+- When "[LIVE ACCOUNT CONTEXT]" shows TP/SL levels already placed for the same symbol, use those to interpret whether the message is updating SL, replacing TP, adding TP, cancelling, or closing.
+- When "[LIVE ACCOUNT CONTEXT]" shows pending limit orders for the same symbol, assume follow-up instructions may refer to those pending orders too, not only open positions.
 - Symbol MUST end with USDT (e.g., BTC → BTCUSDT, ETH → ETHUSDT)
 - If multiple TP targets, list them all in takeProfitTargets array
 - Distinguish between ${TradeAction.UPDATE_TP} (replacing/modifying an existing TP) and ${TradeAction.ADD_TP} (adding a new TP level, e.g. "pasang TP2 di 70K" means ${TradeAction.ADD_TP} because TP1 already exists)
@@ -147,6 +151,9 @@ Rules for each signal object:
 - signal.messageType is REQUIRED for every non-null signal object
 - If messageType is "${MessageType.RESULT_STATUS}" or "${MessageType.IGNORE}", set signal to null instead of returning an action
 - Messages like "running 1R", "TP1 hit", "trade hit take profit", "trade hit stoploss", "SL kena", "closed in profit/loss" are status/result updates and must map to signal: null
+- If a message includes a "[LIVE ACCOUNT CONTEXT]" block, use it as real current-state context: balance, open positions, pending limit orders, exchange TP/SL orders, tracked DB TP/SL, pending drafts, and live prices.
+- Use "[LIVE ACCOUNT CONTEXT]" to decide whether a message is a NEW_ENTRY versus POSITION_UPDATE / CLOSE_CANCEL. Existing positions or pending orders for the same symbol usually mean the message is managing something already in flight.
+- If "[LIVE ACCOUNT CONTEXT]" shows an existing TP/SL on the same symbol, use that to infer whether the message is updating TP, adding TP, updating SL, moving to breakeven, trailing, cancelling, or closing.
 - Symbol MUST end with USDT (e.g., BTC → BTCUSDT, ETH → ETHUSDT)
 - If multiple TP targets, list them all in takeProfitTargets array
 - Distinguish between ${TradeAction.UPDATE_TP} (replacing/modifying an existing TP) and ${TradeAction.ADD_TP} (adding a new TP level, e.g. "pasang TP2 di 70K" means ${TradeAction.ADD_TP} because TP1 already exists)

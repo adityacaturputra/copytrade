@@ -7,15 +7,12 @@ import {
   getTradingMode,
   IDraftTrade,
   IPosition,
-  ITPTarget,
   buildTPTargets,
   recalculateTPAllocation,
 } from "./database";
 import { BaseSourceMessage } from "./source/types";
 import { SourceFactory } from "./source/SourceFactory";
-import { AIFactory } from "./ai/AIFactory";
-import { TradingSignal, BulkMessageInput } from "./ai/types";
-import { preprocessImagesWithVision } from "./ai/ImageAIFactory";
+import { TradingSignal } from "./ai/types";
 import {
   ExchangeFactory,
   ExchangeCredentials,
@@ -29,107 +26,41 @@ import {
   logExecutorWarn,
   logProcessStep,
 } from "./process-log";
+import { analyzeMessagesWithAI } from "./executor-ai";
 import {
-  TradeAction,
-  PositionSide,
-  OrderSide,
-  ExchangeOrderType,
-  SignalOrderType,
-  PositionStatus,
-  TradingMode,
-  actionToSide,
-  actionToOrderSide,
-  closeSideForPosition,
-  signalToExchangeOrderType,
-} from "./enums";
+  createDraft,
+  refreshDraftFromSignal,
+  rejectDraftWithReason,
+  resolveDraftWithExecution,
+} from "./executor-drafts";
+import {
+  autoCalculateTPFromRR,
+  autoCalculateSLFromRR,
+  sanitizeLeverage,
+} from "./executor-signal-utils";
+import type {
+  DuplicateCheckResult,
+  ExecuteTradeInput,
+  ProcessTrackedMessage,
+  SignalExecutionResult,
+} from "./executor-types";
 
-type DraftSourceMessage = Pick<
-  BaseSourceMessage,
-  | "messageId"
-  | "channelId"
-  | "author"
-  | "content"
-  | "messageUrl"
-  | "imageUrls"
-> & {
-  originalContent?: string;
-  timestamp?: Date;
-  processId?: string;
-};
-
-type ProcessTrackedMessage = Pick<
-  BaseSourceMessage,
-  | "messageId"
-  | "channelId"
-  | "author"
-  | "content"
-  | "messageUrl"
-  | "imageUrls"
-  | "sourceId"
-  | "sourceName"
-> & {
-  originalContent?: string;
-  timestamp?: Date;
-  processId?: string;
-};
-
-export interface MessageAnalysisResult {
-  messageId: string;
-  signal: TradingSignal | null;
-  parseError?: string;
-}
-
-/**
- * Auto-calculate Take Profit targets based on RR (Risk-Reward) ratio.
- * If a signal has entryPrice + stopLoss but no TP, generate TP levels using RR.
- *
- * Example: Entry=95000, SL=94000, RR=3
- *   riskDistance = 1000
- *   TP1 (1R) = 96000, TP2 (2R) = 97000, TP3 (3R) = 98000
- *
- * For SHORT (SELL): TP is below entry
- *   TP1 (1R) = 94000, TP2 (2R) = 93000, TP3 (3R) = 92000
- */
-export function autoCalculateTPFromRR(
-  entryPrice: number,
-  stopLoss: number,
-  rr: number,
-  side: "LONG" | "SHORT",
-): number[] {
-  const riskDistance = Math.abs(entryPrice - stopLoss);
-  const direction = side === "LONG" ? 1 : -1;
-  const tps: number[] = [];
-
-  for (let i = 1; i <= rr; i++) {
-    const tp = entryPrice + direction * riskDistance * i;
-    tps.push(tp);
-  }
-
-  return tps;
-}
-
-/**
- * Auto-calculate Stop Loss from TP distance using RR ratio.
- * Reverse of autoCalculateTPFromRR — when signal has TP but no SL.
- *
- * Example: Entry=95000, TP=98000 (3R), RR=3
- *   tpDistance = 3000
- *   slDistance = tpDistance / RR = 1000
- *   For LONG: SL = 95000 - 1000 = 94000
- *   For SHORT: SL = 95000 + 1000 = 96000
- */
-function autoCalculateSLFromRR(
-  entryPrice: number,
-  tpPrice: number,
-  rr: number,
-  side: "LONG" | "SHORT",
-): number {
-  const tpDistance = Math.abs(tpPrice - entryPrice);
-  const slDistance = tpDistance / rr;
-  // SL is on the opposite side of entry from TP
-  const direction = side === "LONG" ? -1 : 1;
-  return entryPrice + direction * slDistance;
-}
+export { analyzeMessagesWithAI } from "./executor-ai";
+export {
+  createDraft,
+  refreshDraftFromSignal,
+  rejectDraftWithReason,
+  resolveDraftWithExecution,
+  summarizeExecutionForDraft,
+} from "./executor-drafts";
+export { autoCalculateTPFromRR } from "./executor-signal-utils";
+export type {
+  DraftExecutionOutcome,
+  DuplicateCheckResult,
+  ExecuteTradeInput,
+  MessageAnalysisResult,
+  SignalExecutionResult,
+} from "./executor-types";
 
 /**
  * Split a total quantity evenly across multiple TP levels,
@@ -184,113 +115,6 @@ export async function splitQuantityForTPs(
   );
 
   return quantities;
-}
-
-/**
- * Sanitize leverage value from AI response.
- * AI may return leverage as "10x", "10-25x", or other string formats.
- * This extracts the first valid number and ensures it's a plain number.
- */
-function sanitizeLeverage(
-  leverage: number | string | undefined | null,
-): number | null {
-  if (leverage === undefined || leverage === null) return null;
-  if (typeof leverage === "number") {
-    return isNaN(leverage) ? null : leverage;
-  }
-  // String: try to extract first number from patterns like "10x", "10-25x"
-  const match = String(leverage).match(/(\d+)/);
-  if (match) {
-    const num = parseInt(match[1], 10);
-    return isNaN(num) ? null : num;
-  }
-  return null;
-}
-
-export type SignalExecutionResult =
-  | { type: "opened"; position: IPosition }
-  | { type: "closed"; closedCount: number }
-  | { type: "updated"; code: string; details: string }
-  | { type: "noop"; code: string; details: string }
-  | { type: "skipped"; code: string; reason: string };
-
-export interface DraftExecutionOutcome {
-  status: "accepted" | "rejected";
-  result: "executed" | "updated" | "noop" | "rejected";
-  positionId?: string;
-  message?: string;
-  error?: string;
-}
-
-export function summarizeExecutionForDraft(
-  execution: SignalExecutionResult,
-): DraftExecutionOutcome {
-  if (execution.type === "opened") {
-    return {
-      status: "accepted",
-      result: "executed",
-      positionId: execution.position._id.toString(),
-    };
-  }
-
-  if (execution.type === "updated") {
-    return {
-      status: "accepted",
-      result: "updated",
-      message: execution.details,
-    };
-  }
-
-  if (execution.type === "closed") {
-    return {
-      status: "accepted",
-      result: "updated",
-      message: `Closed ${execution.closedCount} position(s)`,
-    };
-  }
-
-  if (execution.type === "noop") {
-    return {
-      status: "accepted",
-      result: "noop",
-      message: execution.details,
-    };
-  }
-
-  return {
-    status: "rejected",
-    result: "rejected",
-    message: execution.reason,
-    error: execution.reason,
-  };
-}
-
-export async function resolveDraftWithExecution(
-  draft: IDraftTrade,
-  execution: SignalExecutionResult,
-): Promise<DraftExecutionOutcome> {
-  const outcome = summarizeExecutionForDraft(execution);
-  draft.status = outcome.status;
-  draft.resolvedAt = new Date();
-  draft.positionId = outcome.positionId || undefined;
-  await draft.save();
-  return outcome;
-}
-
-export async function rejectDraftWithReason(
-  draft: IDraftTrade,
-  reason: string,
-): Promise<DraftExecutionOutcome> {
-  draft.status = "rejected";
-  draft.resolvedAt = new Date();
-  await draft.save();
-
-  return {
-    status: "rejected",
-    result: "rejected",
-    message: reason,
-    error: reason,
-  };
 }
 
 export async function runSignalCheck(): Promise<{
@@ -914,436 +738,6 @@ export async function runSignalCheck(): Promise<{
   return result;
 }
 
-async function buildBulkInputForMessage(
-  msg: ProcessTrackedMessage,
-  signalConfig: Awaited<ReturnType<typeof getSignalConfig>>,
-): Promise<BulkMessageInput> {
-  let content = msg.originalContent || msg.content;
-  const imageUrls = msg.imageUrls || [];
-
-  if (signalConfig.visionAIEnabled && imageUrls.length > 0) {
-    if (msg.processId) {
-      await logProcessStep({
-        accountId: msg.sourceId,
-        processId: msg.processId,
-        type: "draft_process",
-        action: "vision_analysis_started",
-        details: {
-          messageId: msg.messageId,
-          imageCount: imageUrls.length,
-        },
-        result: "processing",
-      });
-    }
-
-    try {
-      const { enhancedContent } = await preprocessImagesWithVision(
-        content,
-        imageUrls,
-      );
-      if (enhancedContent !== content) {
-        await logExecutorInfo(
-          `👁️ Vision AI enhanced message ${msg.messageId} with chart data`,
-          {
-            accountId: msg.sourceId,
-            processId: msg.processId,
-            action: "console_vision_enhanced",
-          },
-        );
-
-        if (msg.processId) {
-          await logProcessStep({
-            accountId: msg.sourceId,
-            processId: msg.processId,
-            type: "draft_process",
-            action: "vision_analysis_completed",
-            details: {
-              messageId: msg.messageId,
-              imageCount: imageUrls.length,
-              enhanced: true,
-            },
-            result: "enhanced",
-          });
-        }
-      } else if (msg.processId) {
-        await logProcessStep({
-          accountId: msg.sourceId,
-          processId: msg.processId,
-          type: "draft_process",
-          action: "vision_analysis_completed",
-          details: {
-            messageId: msg.messageId,
-            imageCount: imageUrls.length,
-            enhanced: false,
-          },
-          result: "unchanged",
-        });
-      }
-      content = enhancedContent;
-    } catch (visionErr) {
-      const errorMessage =
-        visionErr instanceof Error ? visionErr.message : String(visionErr);
-
-      await logExecutorWarn(
-        `⚠️ Vision AI failed for ${msg.messageId}, using original content: ${errorMessage}`,
-        {
-          accountId: msg.sourceId,
-          processId: msg.processId,
-          action: "console_vision_failed",
-        },
-      );
-
-      if (msg.processId) {
-        await logProcessStep({
-          accountId: msg.sourceId,
-          processId: msg.processId,
-          type: "draft_process",
-          action: "vision_analysis_failed",
-          details: {
-            messageId: msg.messageId,
-            imageCount: imageUrls.length,
-          },
-          result: "failed",
-          error: errorMessage,
-        });
-      }
-    }
-  }
-
-  return {
-    messageId: msg.messageId,
-    content,
-    ...(signalConfig.includeImageUrls && imageUrls.length > 0
-      ? { imageUrls }
-      : {}),
-  };
-}
-
-export async function analyzeMessagesWithAI(
-  messages: ProcessTrackedMessage[],
-): Promise<MessageAnalysisResult[]> {
-  if (messages.length === 0) return [];
-
-  const signalConfig = await getSignalConfig();
-  const analyzer = AIFactory.getAnalyzer();
-
-  await Promise.all(
-    messages
-      .filter((msg) => msg.processId)
-      .map((msg) =>
-        logProcessStep({
-          accountId: msg.sourceId,
-          processId: msg.processId,
-          type: "draft_process",
-          action: "ai_analysis_started",
-          details: {
-            messageId: msg.messageId,
-            hasImages: (msg.imageUrls || []).length > 0,
-          },
-          result: "processing",
-        }),
-      ),
-  );
-
-  const bulkInputs = await Promise.all(
-    messages.map((msg) => buildBulkInputForMessage(msg, signalConfig)),
-  );
-
-  try {
-    const results = await analyzer.parseBulkSignals(bulkInputs);
-
-    await Promise.all(
-      results.map((result) => {
-        const msg = messages.find((item) => item.messageId === result.messageId);
-        if (!msg?.processId) return Promise.resolve();
-
-        return logProcessStep({
-          accountId: msg.sourceId,
-          processId: msg.processId,
-          type: "draft_process",
-          action: "ai_analysis_completed",
-          symbol: result.signal?.symbol,
-          details: {
-            messageId: result.messageId,
-            action: result.signal?.action || null,
-            confidence: result.signal?.confidence || null,
-          },
-          result: result.signal?.action || "no_signal",
-        });
-      }),
-    );
-
-    return results;
-  } catch (bulkErr) {
-    const bulkErrorMessage =
-      bulkErr instanceof Error ? bulkErr.message : String(bulkErr);
-
-    await logExecutorWarn(
-      `⚠️ Bulk AI call failed, falling back to individual: ${bulkErrorMessage}`,
-      {
-        action: "console_bulk_ai_fallback",
-      },
-    );
-
-    await Promise.all(
-      messages
-        .filter((msg) => msg.processId)
-        .map((msg) =>
-          logProcessStep({
-            accountId: msg.sourceId,
-            processId: msg.processId,
-            type: "draft_process",
-            action: "ai_analysis_bulk_fallback",
-            details: {
-              messageId: msg.messageId,
-            },
-            result: "fallback_to_individual",
-            error: bulkErrorMessage,
-          }),
-        ),
-    );
-
-    const results: MessageAnalysisResult[] = [];
-    for (let index = 0; index < bulkInputs.length; index++) {
-      const input = bulkInputs[index];
-      const msg = messages[index];
-
-      try {
-        const signal = await analyzer.parseSignal(input.content);
-        results.push({ messageId: input.messageId, signal });
-
-        if (msg?.processId) {
-          await logProcessStep({
-            accountId: msg.sourceId,
-            processId: msg.processId,
-            type: "draft_process",
-            action: "ai_analysis_completed",
-            symbol: signal?.symbol,
-            details: {
-              messageId: input.messageId,
-              action: signal?.action || null,
-              confidence: signal?.confidence || null,
-              mode: "individual",
-            },
-            result: signal?.action || "no_signal",
-          });
-        }
-      } catch (parseErr) {
-        const parseError =
-          parseErr instanceof Error
-            ? parseErr.message
-            : String(parseErr || "Unknown parse error");
-        results.push({
-          messageId: input.messageId,
-          signal: null,
-          parseError,
-        });
-
-        if (msg?.processId) {
-          await logProcessStep({
-            accountId: msg.sourceId,
-            processId: msg.processId,
-            type: "draft_process",
-            action: "ai_analysis_failed",
-            details: {
-              messageId: input.messageId,
-              mode: "individual",
-            },
-            result: "parse_failed",
-            error: parseError,
-          });
-        }
-      }
-    }
-
-    return results;
-  }
-}
-
-async function buildDraftPayload(
-  signal: TradingSignal,
-  msg: DraftSourceMessage,
-  accountId?: string,
-): Promise<{
-  accountId: string | null;
-  processId: string | null;
-  messageId: string;
-  channelId: string;
-  messageUrl: string;
-  author: string;
-  originalContent: string;
-  imageUrls: string[];
-  signalData: string;
-  action: string;
-  symbol: string;
-  side: "LONG" | "SHORT";
-  entryPrice: number | null;
-  takeProfitTargets: number[];
-  stopLoss: number | null;
-  leverage: number;
-  quantity: number;
-  confidence: number;
-  reasoning: string;
-  sourceTimestamp: Date | null;
-}> {
-  const riskCfg = await getRiskConfig();
-  const side = signal.action === "SELL" ? "SHORT" : "LONG";
-  const quantity = signal.positionSize || riskCfg.defaultPositionSize;
-
-  let tpTargets = signal.takeProfitTargets || [];
-  let autoSL: number | null = null;
-
-  // Auto-calculate SL from TP distance if no SL but has TP + entry + RR
-  if (!signal.stopLoss && tpTargets.length > 0 && signal.entryPrice) {
-    const rr =
-      signal.defaultRR && signal.defaultRR > 0
-        ? signal.defaultRR
-        : riskCfg.defaultRR;
-    if (rr > 0) {
-      autoSL = autoCalculateSLFromRR(
-        signal.entryPrice,
-        tpTargets[0], // Use first TP target
-        rr,
-        side,
-      );
-      await logExecutorInfo(
-        `📐 Auto-calculated SL from ${rr}RR using TP distance: entry=${signal.entryPrice}, TP=${tpTargets[0]} → SL=${autoSL}`,
-        {
-          accountId,
-          processId: msg.processId,
-          symbol: signal.symbol,
-          action: "console_auto_sl_from_rr",
-        },
-      );
-    }
-  }
-
-  // Auto-calculate TP from RR if no TP targets but we have entry + SL + RR
-  if (
-    tpTargets.length === 0 &&
-    signal.entryPrice &&
-    (signal.stopLoss || autoSL)
-  ) {
-    const rr =
-      signal.defaultRR && signal.defaultRR > 0
-        ? signal.defaultRR
-        : riskCfg.defaultRR;
-    if (rr > 0) {
-      tpTargets = autoCalculateTPFromRR(
-        signal.entryPrice,
-        signal.stopLoss || autoSL!,
-        rr,
-        side,
-      );
-      await logExecutorInfo(
-        `📐 Auto-calculated ${tpTargets.length} TP targets from ${rr}RR: [${tpTargets.join(", ")}]`,
-        {
-          accountId,
-          processId: msg.processId,
-          symbol: signal.symbol,
-          action: "console_auto_tp_from_rr",
-        },
-      );
-    }
-  }
-
-  return {
-    accountId: accountId || null,
-    processId: msg.processId || null,
-    messageId: msg.messageId,
-    channelId: msg.channelId,
-    messageUrl: msg.messageUrl,
-    author: msg.author,
-    originalContent: msg.originalContent || msg.content,
-    imageUrls: msg.imageUrls,
-    signalData: JSON.stringify(signal),
-    action: signal.action,
-    symbol: signal.symbol,
-    side,
-    entryPrice: signal.entryPrice || null,
-    takeProfitTargets: tpTargets,
-    stopLoss: signal.stopLoss || autoSL || null,
-    leverage: sanitizeLeverage(signal.leverage) || riskCfg.defaultLeverage,
-    quantity,
-    confidence: signal.confidence || 0,
-    reasoning: signal.reasoning || "",
-    sourceTimestamp: msg.timestamp || null,
-  };
-}
-
-export async function createDraft(
-  signal: TradingSignal,
-  msg: DraftSourceMessage,
-  accountId?: string,
-): Promise<IDraftTrade> {
-  const payload = await buildDraftPayload(signal, msg, accountId);
-  const draft = await DraftTrade.create({
-    ...payload,
-    status: "pending",
-  });
-
-  await logExecutorInfo(
-    `📝 Created draft: ${signal.action} ${signal.symbol} — sourceTimestamp: ${msg.timestamp}`,
-    {
-      accountId,
-      processId: payload.processId,
-      symbol: signal.symbol,
-      action: "console_draft_created",
-    },
-  );
-
-  if (payload.processId) {
-    await logProcessStep({
-      accountId,
-      processId: payload.processId,
-      type: "draft_process",
-      action: "draft_created",
-      symbol: signal.symbol,
-      details: {
-        draftId: draft._id.toString(),
-        messageId: msg.messageId,
-        draftStatus: "pending",
-      },
-      result: "drafted",
-    });
-  }
-
-  return draft;
-}
-
-export async function refreshDraftFromSignal(
-  draft: IDraftTrade,
-  signal: TradingSignal,
-  msg: DraftSourceMessage,
-): Promise<IDraftTrade> {
-  const payload = await buildDraftPayload(signal, msg, draft.accountId || undefined);
-  Object.assign(draft, payload);
-  await draft.save();
-
-  if (payload.processId) {
-    await logProcessStep({
-      accountId: draft.accountId || undefined,
-      processId: payload.processId,
-      type: "draft_process",
-      action: "draft_refreshed",
-      symbol: signal.symbol,
-      details: {
-        draftId: draft._id.toString(),
-        messageId: msg.messageId,
-      },
-      result: "drafted",
-    });
-  }
-
-  return draft;
-}
-
-// ─── Result types for duplicate / max-positions checks ────────────
-export type DuplicateCheckResult =
-  | { type: "new" }
-  | { type: "duplicate_exact" }
-  | { type: "duplicate_updated"; updates: string[] }
-  | { type: "duplicate_no_update" };
 
 /**
  * Check for duplicate open positions (same symbol + side + channel).
@@ -1419,27 +813,6 @@ export async function checkDuplicatePosition(
 
   // Different entry price — genuinely new signal
   return { type: "new" };
-}
-
-export interface ExecuteTradeInput {
-  symbol: string;
-  action: "BUY" | "SELL";
-  entryPrice?: number;
-  stopLoss?: number | null;
-  takeProfitTargets: number[];
-  leverage: number;
-  quantity: number;
-  orderType: "MARKET" | "LIMIT";
-  channelId?: string;
-  messageId?: string;
-  sourceName?: string;
-  signalData: string;
-  /** Custom log prefix for request tracing (e.g. "[accept-abc123]") */
-  logPrefix?: string;
-  /** Account ID — ties position to a specific account for per-account exchange */
-  accountId?: string;
-  /** Process ID — ties terminal logs to a draft processing timeline */
-  processId?: string;
 }
 
 /**
