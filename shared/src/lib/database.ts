@@ -93,6 +93,7 @@ export interface ITPTarget {
 
 export interface IPosition extends Document {
   accountId?: string;
+  processId?: string;
   symbol: string;
   side: "LONG" | "SHORT";
   entryPrice: number;
@@ -334,6 +335,7 @@ ProcessedMessageSchema.index({ messageId: 1, accountId: 1 }, { unique: true });
 const PositionSchema = new Schema<IPosition>(
   {
     accountId: { type: String, default: null },
+    processId: { type: String, default: null },
     symbol: { type: String, required: true, uppercase: true },
     side: { type: String, enum: ["LONG", "SHORT"], required: true },
     entryPrice: { type: Number, default: 0 },
@@ -376,6 +378,7 @@ const PositionSchema = new Schema<IPosition>(
 PositionSchema.index({ status: 1 });
 PositionSchema.index({ symbol: 1 });
 PositionSchema.index({ symbol: 1, side: 1, channelId: 1, status: 1 });
+PositionSchema.index({ processId: 1, openedAt: 1 });
 
 const TradeLogSchema = new Schema<ITradeLog>(
   {
@@ -495,7 +498,7 @@ const RiskSettingsSchema = new Schema<IRiskSettings>(
     maxLeverage: { type: Number, default: 100, min: 1, max: 125 },
     minLeverage: { type: Number, default: 1, min: 1, max: 125 },
     skipNoSL: { type: Boolean, default: true },
-    defaultRR: { type: Number, default: 3, min: 1, max: 20 },
+    defaultRR: { type: Number, default: 3, min: 0.5, max: 20 },
     defaultPositionSize: { type: Number, default: 50, min: 1 },
     defaultLeverage: { type: Number, default: 10, min: 1, max: 125 },
     maxPositions: { type: Number, default: 5, min: 0 },

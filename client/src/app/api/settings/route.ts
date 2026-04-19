@@ -98,9 +98,9 @@ export async function POST(request: NextRequest) {
 
       const { defaultRR, defaultPositionSize, defaultLeverage, maxPositions } =
         body.risk;
-      if (defaultRR !== undefined && (defaultRR < 1 || defaultRR > 20)) {
+      if (defaultRR !== undefined && (defaultRR < 0.5 || defaultRR > 20)) {
         return NextResponse.json(
-          { success: false, error: "Default RR must be between 1 and 20" },
+          { success: false, error: "Default RR must be between 0.5 and 20" },
           { status: 400 },
         );
       }

@@ -6,7 +6,13 @@ import {
 import { ExchangeClient } from "./exchange/types";
 import { splitQuantityForTPs } from "./executor";
 import { inspectPendingLimitOrder } from "./pending-order-sync";
-import { createTradeLog } from "./trade-log-store";
+import {
+  logExecutorError,
+  logExecutorInfo,
+  logExecutorWarn,
+  logProcessStep,
+} from "./process-log";
+import { ensurePersistedProcessId } from "./process-id";
 
 /**
  * Resolve the exchange client for a position based on its accountId.
@@ -60,19 +66,45 @@ export async function runTpslMonitor(): Promise<{
     const pendingPositions = await Position.find({ status: "pending" });
 
     if (pendingPositions.length > 0) {
-      console.log(
+      await logExecutorInfo(
         `⏳ [TP/SL Monitor] Checking ${pendingPositions.length} pending positions...`,
+        {
+          type: "tpsl-monitor",
+          action: "pending_positions_check",
+        },
       );
 
       for (const position of pendingPositions) {
         result.checked++;
+        const processId = await ensurePersistedProcessId(position, "tpslmon");
         try {
+          await logProcessStep({
+            accountId: position.accountId,
+            processId,
+            type: "tpsl-monitor",
+            action: "pending_position_check_started",
+            symbol: position.symbol,
+            details: {
+              positionId: position._id.toString(),
+              orderId: position.orderId || null,
+              currentTime: new Date().toISOString(),
+            },
+            result: "processing",
+          });
+
           const exchange = await getExchangeForPosition(position);
           const inspection = await inspectPendingLimitOrder(exchange, position);
 
           if (inspection.type === "live") {
-            console.log(
+            await logExecutorInfo(
               `⏳ [TP/SL Monitor] Pending order still live: ${position.symbol} ${position.side} (${inspection.reason})`,
+              {
+                accountId: position.accountId,
+                processId,
+                symbol: position.symbol,
+                type: "tpsl-monitor",
+                action: "pending_limit_still_live",
+              },
             );
             continue;
           }
@@ -84,11 +116,20 @@ export async function runTpslMonitor(): Promise<{
             position.tpSlPlaced = true; // No TP/SL needed for cancelled
             await position.save();
 
-            console.log(
+            await logExecutorInfo(
               `🚫 [TP/SL Monitor] Limit order cancelled: ${position.symbol} ${position.side} (${inspection.reason})`,
+              {
+                accountId: position.accountId,
+                processId,
+                symbol: position.symbol,
+                type: "tpsl-monitor",
+                action: "limit_cancelled_summary",
+              },
             );
 
-            await createTradeLog({
+            await logProcessStep({
+              accountId: position.accountId,
+              processId,
               type: "tpsl-monitor",
               action: "limit_cancelled",
               symbol: position.symbol,
@@ -107,11 +148,20 @@ export async function runTpslMonitor(): Promise<{
             position.status = "open";
             await position.save();
 
-            console.log(
+            await logExecutorInfo(
               `✅ [TP/SL Monitor] Limit order filled: ${position.symbol} ${position.side} — promoted to open (${inspection.reason})`,
+              {
+                accountId: position.accountId,
+                processId,
+                symbol: position.symbol,
+                type: "tpsl-monitor",
+                action: "limit_filled_summary",
+              },
             );
 
-            await createTradeLog({
+            await logProcessStep({
+              accountId: position.accountId,
+              processId,
               type: "tpsl-monitor",
               action: "limit_filled",
               symbol: position.symbol,
@@ -127,8 +177,15 @@ export async function runTpslMonitor(): Promise<{
               ? pendingErr.message
               : String(pendingErr);
           result.errors.push(`Pending ${position.symbol}: ${errMsg}`);
-          console.error(
+          await logExecutorError(
             `[TP/SL Monitor] Error checking pending ${position.symbol}: ${errMsg}`,
+            {
+              accountId: position.accountId,
+              processId,
+              symbol: position.symbol,
+              type: "tpsl-monitor",
+              action: "pending_position_check_error",
+            },
           );
         }
       }
@@ -150,35 +207,56 @@ export async function runTpslMonitor(): Promise<{
 
       tpslClaimed++;
       result.checked++;
+      const processId = await ensurePersistedProcessId(position, "tpslmon");
 
       if (tpslClaimed === 1) {
-        console.log(
+        await logExecutorInfo(
           `🎯 [TP/SL Monitor] Placing TP/SL for open positions (atomic claim)...`,
+          {
+            type: "tpsl-monitor",
+            action: "tpsl_placement_started",
+          },
         );
       }
 
       try {
+        await logProcessStep({
+          accountId: position.accountId,
+          processId,
+          type: "tpsl-monitor",
+          action: "tpsl_position_started",
+          symbol: position.symbol,
+          details: {
+            positionId: position._id.toString(),
+            currentTime: new Date().toISOString(),
+            tpCount: position.takeProfitTargets?.length || 0,
+            hasStopLoss: Boolean(position.stopLossPrice),
+          },
+          result: "processing",
+        });
+
         const exchange = await getExchangeForPosition(position);
-        await placeTpslForPosition(exchange, position);
+        await placeTpslForPosition(exchange, position, processId);
         result.tpslPlaced++;
       } catch (tpslErr) {
         const errMsg =
           tpslErr instanceof Error ? tpslErr.message : String(tpslErr);
         result.errors.push(`TP/SL ${position.symbol}: ${errMsg}`);
-        console.error(
-          `[TP/SL Monitor] Error placing TP/SL for ${position.symbol}: ${errMsg}`,
-        );
 
         // Release the claim so it can be retried next run
         position.tpSlPlaced = false;
         await position.save();
 
-        await createTradeLog({
-          type: "tpsl-monitor",
-          action: "tpsl_error",
-          symbol: position.symbol,
-          error: errMsg,
-        });
+        await logExecutorError(
+          `[TP/SL Monitor] Error placing TP/SL for ${position.symbol}: ${errMsg}`,
+          {
+            accountId: position.accountId,
+            processId,
+            symbol: position.symbol,
+            type: "tpsl-monitor",
+            action: "tpsl_error",
+          },
+        );
       }
     }
 
@@ -188,13 +266,20 @@ export async function runTpslMonitor(): Promise<{
       tpSlPlaced: true,
     });
 
-    console.log(
+    await logExecutorInfo(
       `✅ [TP/SL Monitor] Complete: ${result.checked} checked, ${result.promoted} promoted, ${result.tpslPlaced} TP/SL placed, ${openWithTpsl} already OK`,
+      {
+        type: "tpsl-monitor",
+        action: "tpsl_monitor_completed",
+      },
     );
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : "Unknown error";
     result.errors.push(`General: ${errMsg}`);
-    console.error("[TP/SL Monitor] Error:", errMsg);
+    await logExecutorError(`[TP/SL Monitor] Error: ${errMsg}`, {
+      type: "tpsl-monitor",
+      action: "tpsl_monitor_error",
+    });
   }
 
   return result;
@@ -207,6 +292,7 @@ export async function runTpslMonitor(): Promise<{
 async function placeTpslForPosition(
   exchange: ExchangeClient,
   position: IPosition & { save: () => Promise<unknown> },
+  processId?: string,
 ): Promise<void> {
   const tpTargets = position.takeProfitTargets || [];
   const sl = position.stopLossPrice;
@@ -217,8 +303,15 @@ async function placeTpslForPosition(
     // No TP/SL to place — mark as done
     position.tpSlPlaced = true;
     await position.save();
-    console.log(
+    await logExecutorInfo(
       `ℹ️ [TP/SL Monitor] No TP/SL targets for ${position.symbol} — marking as placed`,
+      {
+        accountId: position.accountId,
+        processId,
+        symbol: position.symbol,
+        type: "tpsl-monitor",
+        action: "no_tpsl_targets",
+      },
     );
     return;
   }
@@ -245,12 +338,31 @@ async function placeTpslForPosition(
           closeSide,
           tpQty,
         );
-        console.log(
-          `🎯 [TP/SL Monitor] TP ${i + 1}/${tpPrices.length} placed at ${tp} (qty: ${tpQty}, order: ${tpId}) for ${position.symbol}`,
-        );
+        await logProcessStep({
+          accountId: position.accountId,
+          processId,
+          type: "tpsl-monitor",
+          action: "take_profit_set",
+          symbol: position.symbol,
+          details: {
+            targetIndex: i + 1,
+            targetCount: tpPrices.length,
+            triggerPrice: tp,
+            quantity: tpQty,
+            orderId: tpId,
+          },
+          result: "success",
+        });
       } catch (tpErr) {
-        console.warn(
+        await logExecutorWarn(
           `⚠️ [TP/SL Monitor] Failed to place TP at ${tp} for ${position.symbol}: ${tpErr instanceof Error ? tpErr.message : String(tpErr)}`,
+          {
+            accountId: position.accountId,
+            processId,
+            symbol: position.symbol,
+            type: "tpsl-monitor",
+            action: "take_profit_failed",
+          },
         );
       }
     }
@@ -266,12 +378,29 @@ async function placeTpslForPosition(
         closeSide,
         quantity,
       );
-      console.log(
-        `🛑 [TP/SL Monitor] SL placed at ${sl} (order: ${slId}) for ${position.symbol}`,
-      );
+      await logProcessStep({
+        accountId: position.accountId,
+        processId,
+        type: "tpsl-monitor",
+        action: "stop_loss_set",
+        symbol: position.symbol,
+        details: {
+          triggerPrice: sl,
+          quantity,
+          orderId: slId,
+        },
+        result: "success",
+      });
     } catch (slErr) {
-      console.warn(
+      await logExecutorWarn(
         `⚠️ [TP/SL Monitor] Failed to place SL for ${position.symbol}: ${slErr instanceof Error ? slErr.message : String(slErr)}`,
+        {
+          accountId: position.accountId,
+          processId,
+          symbol: position.symbol,
+          type: "tpsl-monitor",
+          action: "stop_loss_failed",
+        },
       );
     }
   }
@@ -282,7 +411,9 @@ async function placeTpslForPosition(
   position.tpSlPlaced = true;
   await position.save();
 
-  await createTradeLog({
+  await logProcessStep({
+    accountId: position.accountId,
+    processId,
     type: "tpsl-monitor",
     action: "tpsl_placed",
     symbol: position.symbol,

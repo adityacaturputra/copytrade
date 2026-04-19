@@ -1123,6 +1123,7 @@ export async function executeTrade(
 
   const position = await Position.create({
     accountId: accountId || undefined,
+    processId: processId || undefined,
     symbol,
     side,
     entryPrice: entryPrice || orderResult.price || 0,

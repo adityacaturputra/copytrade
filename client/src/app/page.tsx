@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { calculateRisk } from "@copytrade/shared/lib/risk-calc";
+import { autoCalculateTPFromRR } from "@copytrade/shared/lib/executor-signal-utils";
 import { buildBackendApiUrl } from "../lib/backend-url";
 
 // ==================== Types ====================
@@ -1163,7 +1164,7 @@ function ProcessLogsAccordion({
         page: "1",
         limit: "200",
         hideCronNoise: "false",
-        order: "asc",
+        order: "desc",
       });
 
       const res = await fetch(`/api/logs?${params}`);
@@ -1221,8 +1222,8 @@ function ProcessLogsAccordion({
             <>
               <div className="mb-3 flex items-center justify-between">
                 <p className="text-xs text-slate-500">
-                  Timeline proses dari fetch/analyze sampai draft dieksekusi atau
-                  direview.
+                  Timeline proses terbaru dulu, dari fetch/analyze sampai draft
+                  dieksekusi atau direview.
                 </p>
                 <button
                   onClick={() => fetchProcessLogs()}
@@ -1253,7 +1254,7 @@ function ProcessLogsAccordion({
               )}
 
               {!loading && !error && logs.length > 0 && (
-                <div className="space-y-3">
+                <div className="max-h-[28rem] space-y-3 overflow-y-auto pr-1">
                   {logs.map((log, index) => (
                     <div
                       key={log._id || `${log.processId}-${index}`}
@@ -1483,11 +1484,11 @@ function DraftCard({
   // Compute auto-calculated TP preview from RR
   const autoTPs = canCalcTPFromRR
     ? (() => {
-        const riskDist = Math.abs(draft.entryPrice! - draft.stopLoss!);
-        const dir = draft.side === "LONG" ? 1 : -1;
-        return Array.from(
-          { length: customRR },
-          (_, i) => draft.entryPrice! + dir * riskDist * (i + 1),
+        return autoCalculateTPFromRR(
+          draft.entryPrice!,
+          draft.stopLoss!,
+          customRR,
+          draft.side,
         );
       })()
     : [];
@@ -1709,6 +1710,16 @@ function DraftCard({
                         {rr}
                       </button>
                     ))}
+                    <input
+                      type="number"
+                      step="0.1"
+                      min="0.5"
+                      value={customRR}
+                      onChange={(e) =>
+                        setCustomRR(Math.max(0.5, parseFloat(e.target.value) || 0.5))
+                      }
+                      className="h-7 w-20 rounded border border-slate-600 bg-slate-800 px-2 text-xs text-white focus:border-blue-500 focus:outline-none"
+                    />
                   </div>
                 </div>
                 {/* Preview auto-calculated TPs */}

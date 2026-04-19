@@ -1,3 +1,29 @@
+function roundRrValue(value: number): number {
+  return Math.round(value * 10000) / 10000;
+}
+
+export function buildRRTargetMultipliers(rr: number): number[] {
+  if (!Number.isFinite(rr) || rr <= 0) return [];
+
+  const normalizedRr = roundRrValue(rr);
+  const wholeTargets = Math.floor(normalizedRr);
+  const multipliers: number[] = [];
+
+  for (let index = 1; index <= wholeTargets; index++) {
+    multipliers.push(index);
+  }
+
+  const hasFractionalTarget =
+    multipliers.length === 0 ||
+    Math.abs(multipliers[multipliers.length - 1] - normalizedRr) > 1e-9;
+
+  if (hasFractionalTarget) {
+    multipliers.push(normalizedRr);
+  }
+
+  return multipliers;
+}
+
 /**
  * Auto-calculate Take Profit targets based on RR (Risk-Reward) ratio.
  * If a signal has entryPrice + stopLoss but no TP, generate TP levels using RR.
@@ -10,14 +36,9 @@ export function autoCalculateTPFromRR(
 ): number[] {
   const riskDistance = Math.abs(entryPrice - stopLoss);
   const direction = side === "LONG" ? 1 : -1;
-  const tps: number[] = [];
-
-  for (let i = 1; i <= rr; i++) {
-    const tp = entryPrice + direction * riskDistance * i;
-    tps.push(tp);
-  }
-
-  return tps;
+  return buildRRTargetMultipliers(rr).map(
+    (multiplier) => entryPrice + direction * riskDistance * multiplier,
+  );
 }
 
 /**

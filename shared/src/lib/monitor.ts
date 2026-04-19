@@ -8,12 +8,12 @@ import {
 import { ExchangeClient } from "./exchange/types";
 import { inspectPendingLimitOrder } from "./pending-order-sync";
 import {
-  createTradeProcessId,
   logExecutorError,
   logExecutorInfo,
   logExecutorWarn,
   logProcessStep,
 } from "./process-log";
+import { ensurePersistedProcessId } from "./process-id";
 
 /**
  * Resolve the exchange client for a position based on its accountId.
@@ -110,7 +110,7 @@ export async function runPositionMonitor(): Promise<{
         }
 
         for (const position of positions) {
-          const processId = createTradeProcessId("pendmon");
+          const processId = await ensurePersistedProcessId(position, "pendmon");
 
           try {
             await logProcessStep({
@@ -299,7 +299,7 @@ export async function runPositionMonitor(): Promise<{
       const syncKey = getAccountPositionKey(position.accountId, position.symbol);
 
       if (!exchangePositions.has(syncKey)) {
-        const processId = createTradeProcessId("syncmon");
+        const processId = await ensurePersistedProcessId(position, "syncmon");
 
         await logExecutorInfo(
           `🔄 Sync: ${position.symbol} ${position.side} not found on exchange — marking as closed`,
@@ -334,7 +334,7 @@ export async function runPositionMonitor(): Promise<{
     const activePositions = await Position.find({ status: "open" });
 
     for (const position of activePositions) {
-      const processId = createTradeProcessId("posmon");
+      const processId = await ensurePersistedProcessId(position, "posmon");
 
       try {
         await logProcessStep({

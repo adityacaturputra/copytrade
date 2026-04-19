@@ -41,6 +41,7 @@ export type AccountRecord = {
 export type PositionRecord = {
   _id: { toString(): string };
   accountId?: string;
+  processId?: string;
   symbol: string;
   side: "LONG" | "SHORT";
   entryPrice: number;

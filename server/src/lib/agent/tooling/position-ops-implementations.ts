@@ -6,7 +6,11 @@ import {
 } from "@copytrade/shared/lib/database";
 import { AIFactory } from "@copytrade/shared/lib/ai/AIFactory";
 import { buildPositionAnalysisInput } from "@copytrade/shared/lib/ai/PositionMonitorContext";
-import { createTradeProcessId, logProcessStep } from "@copytrade/shared/lib/process-log";
+import { logProcessStep } from "@copytrade/shared/lib/process-log";
+import {
+  ensurePersistedProcessId,
+  getResolvedProcessId,
+} from "@copytrade/shared/lib/process-id";
 import { DiscordSourceProvider } from "@copytrade/shared/lib/source/DiscordSourceProvider";
 import { SourceType } from "@copytrade/shared/lib/enums";
 import { getProcessTradeLogs } from "@copytrade/shared/lib/trade-log-store";
@@ -31,7 +35,10 @@ import {
 export const positionOpsToolImplementations: Record<string, ToolExecutor> = {
   analyze_position_context: async (args) => {
     const position = await findPositionRecord(args);
-    const processId = createTradeProcessId("agentpos");
+    const positionDoc = await Position.findById(String(position._id)).exec();
+    const processId = positionDoc
+      ? await ensurePersistedProcessId(positionDoc, "agentpos")
+      : getResolvedProcessId(position.processId, "agentpos");
     const { currentPrice, pnlPercent, exchangePosition } =
       await getLivePositionSnapshot(position);
     const aiInput = await buildPositionAnalysisInput(
@@ -86,7 +93,7 @@ export const positionOpsToolImplementations: Record<string, ToolExecutor> = {
       throw new Error("manage_position requires an action");
     }
 
-    const processId = createTradeProcessId("agentmgr");
+    const processId = await ensurePersistedProcessId(positionDoc, "agentmgr");
     const { exchange, currentPrice, exchangePosition } =
       await getLivePositionSnapshot(position);
     const exchangePositionId = exchangePosition?.positionId;
@@ -376,6 +383,7 @@ export const positionOpsToolImplementations: Record<string, ToolExecutor> = {
 
     const inferredProcessId =
       processIdArg ||
+      position?.processId ||
       (processedMessages.find((item) => item.processId)?.processId as
         | string
         | undefined) ||
@@ -463,7 +471,7 @@ export const positionOpsToolImplementations: Record<string, ToolExecutor> = {
       throw new Error(`Position document not found: ${String(position._id)}`);
     }
 
-    const processId = createTradeProcessId("agentsync");
+    const processId = await ensurePersistedProcessId(positionDoc, "agentsync");
     const { exchange, currentPrice, pnlPercent, exchangePosition } =
       await getLivePositionSnapshot(position);
     const openOrders = await exchange.getOpenOrders(position.symbol);
