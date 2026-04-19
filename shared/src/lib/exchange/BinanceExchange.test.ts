@@ -120,9 +120,9 @@ test("conditional algo orders use MARKET_LOT_SIZE and price tick precision", asy
     path: string,
     params: RequestParams = {},
   ) => {
-    if (path === "/fapi/v1/order") {
+    if (path === "/fapi/v1/algoOrder") {
       payload = params;
-      return { orderId: "algo-1" };
+      return { algoId: "algo-1" };
     }
     return {};
   };
@@ -136,7 +136,122 @@ test("conditional algo orders use MARKET_LOT_SIZE and price tick precision", asy
   );
 
   assert.equal(payload?.quantity, "2");
-  assert.equal(payload?.stopPrice, "65234.5");
+  assert.equal(payload?.triggerPrice, "65234.5");
+  assert.equal(payload?.algoType, "CONDITIONAL");
+});
+
+test("getAlgoOrders prefers Binance algo endpoint and normalizes rows", async () => {
+  const exchange = createExchange({
+    ctVal: 1,
+    lotSz: 0.001,
+    minSz: 0.001,
+    ctValCcy: "BTC",
+    tickSz: 0.1,
+    qtyDecimals: 3,
+    priceDecimals: 1,
+    marketLotSz: 1,
+    marketMinSz: 1,
+    marketQtyDecimals: 0,
+  });
+
+  (exchange as any).signedRequest = async (
+    _method: string,
+    path: string,
+    params: RequestParams = {},
+  ) => {
+    if (path === "/fapi/v1/openAlgoOrders") {
+      assert.equal(params.symbol, "BTCUSDT");
+      assert.equal(params.algoType, "CONDITIONAL");
+      return [
+        {
+          algoId: 123,
+          symbol: "BTCUSDT",
+          side: "SELL",
+          type: "TAKE_PROFIT_MARKET",
+          triggerPrice: "65234.5",
+          quantity: "2",
+          algoStatus: "NEW",
+          updateTime: 1234567890,
+        },
+      ];
+    }
+    return [];
+  };
+
+  const orders = await exchange.getAlgoOrders("BTCUSDT");
+
+  assert.deepEqual(orders, [
+    {
+      orderId: "123",
+      symbol: "BTCUSDT",
+      side: "SELL",
+      type: "tp",
+      triggerPrice: 65234.5,
+      executePrice: undefined,
+      quantity: 2,
+      status: "NEW",
+      createdAt: 1234567890,
+      raw: {
+        algoId: 123,
+        symbol: "BTCUSDT",
+        side: "SELL",
+        type: "TAKE_PROFIT_MARKET",
+        triggerPrice: "65234.5",
+        quantity: "2",
+        algoStatus: "NEW",
+        updateTime: 1234567890,
+      },
+    },
+  ]);
+});
+
+test("cancelAlgoOrders uses Binance bulk algo cancel endpoint", async () => {
+  const exchange = createExchange({
+    ctVal: 1,
+    lotSz: 0.001,
+    minSz: 0.001,
+    ctValCcy: "BTC",
+    tickSz: 0.1,
+    qtyDecimals: 3,
+    priceDecimals: 1,
+    marketLotSz: 1,
+    marketMinSz: 1,
+    marketQtyDecimals: 0,
+  });
+
+  const calls: Array<{ path: string; params: RequestParams }> = [];
+  (exchange as any).signedRequest = async (
+    _method: string,
+    path: string,
+    params: RequestParams = {},
+  ) => {
+    calls.push({ path, params });
+    if (path === "/fapi/v1/openAlgoOrders") {
+      return [
+        {
+          algoId: 123,
+          symbol: "BTCUSDT",
+          side: "SELL",
+          type: "STOP_MARKET",
+          triggerPrice: "61234.5",
+          quantity: "2",
+          algoStatus: "NEW",
+        },
+      ];
+    }
+    if (path === "/fapi/v1/algoOpenOrders") {
+      return { success: true };
+    }
+    return {};
+  };
+
+  const result = await exchange.cancelAlgoOrders("BTCUSDT");
+
+  assert.deepEqual(result, { cancelled: ["123"], errors: [] });
+  assert.deepEqual(
+    calls.map((call) => call.path),
+    ["/fapi/v1/openAlgoOrders", "/fapi/v1/algoOpenOrders"],
+  );
 });
 
 test("signed requests include payload in the Binance error message for DB logs", async () => {

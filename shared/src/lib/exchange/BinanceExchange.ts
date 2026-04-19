@@ -61,13 +61,21 @@ interface BinanceOrder {
 
 interface BinanceAlgoOrder {
   algoId?: number | string;
+  clientAlgoId?: string;
   symbol?: string;
   side?: "BUY" | "SELL";
   type?: string;
+  orderType?: string;
   stopPrice?: string;
+  triggerPrice?: string;
   price?: string;
+  executePrice?: string;
   quantity?: string;
+  origQty?: string;
+  executedQty?: string;
   algoStatus?: string;
+  status?: string;
+  time?: number;
   updateTime?: number;
   [key: string]: unknown;
 }
@@ -392,6 +400,14 @@ export class BinanceExchange implements ExchangeClient {
     return "conditional";
   }
 
+  private parseAlgoOrderId(order: BinanceAlgoOrder): string | null {
+    const value = order.algoId ?? order.clientAlgoId;
+    if (value === undefined || value === null || value === "") {
+      return null;
+    }
+    return String(value);
+  }
+
   private getQuantityRule(
     specs: BinanceInstrumentSpecs,
     orderType: "MARKET" | "LIMIT" | "STOP_MARKET" | "TAKE_PROFIT_MARKET",
@@ -441,14 +457,15 @@ export class BinanceExchange implements ExchangeClient {
       specs.priceDecimals,
     );
 
-    const response = await this.signedRequest<BinanceOrder>(
+    const response = await this.signedRequest<BinanceAlgoOrder>(
       "POST",
-      "/fapi/v1/order",
+      "/fapi/v1/algoOrder",
       {
+        algoType: "CONDITIONAL",
         symbol,
         side,
         type,
-        stopPrice: this.formatNum(trigger, specs.priceDecimals),
+        triggerPrice: this.formatNum(trigger, specs.priceDecimals),
         quantity: this.formatNum(qty, qtyRule.decimals),
         reduceOnly: true,
         workingType: "MARK_PRICE",
@@ -456,10 +473,11 @@ export class BinanceExchange implements ExchangeClient {
       },
     );
 
-    if (response.orderId === undefined || response.orderId === null) {
-      throw new Error("[Binance] Conditional order accepted but no orderId returned");
+    const algoId = this.parseAlgoOrderId(response);
+    if (!algoId) {
+      throw new Error("[Binance] Conditional order accepted but no algoId returned");
     }
-    return String(response.orderId);
+    return algoId;
   }
 
   private async getLegacyAlgoOrders(symbol?: string): Promise<AlgoOrderInfo[]> {
@@ -875,7 +893,53 @@ export class BinanceExchange implements ExchangeClient {
   }
 
   async getAlgoOrders(symbol?: string): Promise<AlgoOrderInfo[]> {
-    return this.getLegacyAlgoOrders(symbol);
+    const normalized = symbol ? this.toSymbol(symbol) : undefined;
+
+    try {
+      const rows = await this.signedRequest<BinanceAlgoOrder[]>(
+        "GET",
+        "/fapi/v1/openAlgoOrders",
+        normalized
+          ? { symbol: normalized, algoType: "CONDITIONAL" }
+          : { algoType: "CONDITIONAL" },
+      );
+
+      return rows
+        .map((row) => {
+          const orderId = this.parseAlgoOrderId(row);
+          if (!orderId || !row.symbol || !row.side) {
+            return null;
+          }
+
+          const rawType = String(row.type || row.orderType || "");
+          const triggerPrice = parseFloat(
+            row.triggerPrice || row.stopPrice || "0",
+          );
+          const executePrice = parseFloat(
+            row.executePrice || row.price || "0",
+          );
+          const quantity = parseFloat(row.quantity || row.origQty || "0");
+
+          return {
+            orderId,
+            symbol: row.symbol,
+            side: row.side,
+            type: this.parseAlgoType(rawType),
+            triggerPrice,
+            executePrice: executePrice || undefined,
+            quantity,
+            status: String(row.algoStatus || row.status || "NEW"),
+            createdAt: row.updateTime || row.time,
+            raw: row,
+          } satisfies AlgoOrderInfo;
+        })
+        .filter((row): row is AlgoOrderInfo => row !== null);
+    } catch (error) {
+      console.warn(
+        `[Binance] Falling back to legacy algo-order discovery for ${normalized || "all symbols"}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return this.getLegacyAlgoOrders(normalized);
+    }
   }
 
   async cancelAlgoOrders(
@@ -886,17 +950,39 @@ export class BinanceExchange implements ExchangeClient {
     const normalized = this.toSymbol(symbol);
     const algoOrders = await this.getAlgoOrders(normalized);
 
+    if (algoOrders.length === 0) {
+      return { cancelled, errors };
+    }
+
     for (const order of algoOrders) {
-      try {
-        const ok = await this.cancelOrder(order.orderId, normalized);
-        if (ok) {
+      cancelled.push(order.orderId);
+    }
+
+    try {
+      await this.signedRequest("DELETE", "/fapi/v1/algoOpenOrders", {
+        symbol: normalized,
+      });
+      return { cancelled, errors };
+    } catch (bulkError) {
+      cancelled.length = 0;
+
+      for (const order of algoOrders) {
+        try {
+          await this.signedRequest("DELETE", "/fapi/v1/algoOrder", {
+            symbol: normalized,
+            algoId: order.orderId,
+          });
           cancelled.push(order.orderId);
-          continue;
+        } catch (error) {
+          errors.push(
+            `${order.orderId}: ${error instanceof Error ? error.message : "Unknown error"}`,
+          );
         }
-        errors.push(`${order.orderId}: Unknown order`);
-      } catch (error) {
+      }
+
+      if (cancelled.length === 0 && errors.length === 0) {
         errors.push(
-          `${order.orderId}: ${error instanceof Error ? error.message : "Unknown error"}`,
+          bulkError instanceof Error ? bulkError.message : "Unknown error",
         );
       }
     }
