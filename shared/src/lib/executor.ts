@@ -18,7 +18,11 @@ import {
   ExchangeCredentials,
   buildExchangeCredentials,
 } from "./exchange/ExchangeFactory";
-import { calculateRiskBasedPosition, getRiskConfig } from "./risk";
+import {
+  calculateRiskBasedPosition,
+  getRiskConfig,
+  resolveEffectiveRiskConfig,
+} from "./risk";
 import { getSignalConfig } from "./signal-config";
 import {
   createTradeProcessId,
@@ -923,6 +927,10 @@ export async function executeTrade(
       quantity,
       leverage,
       riskAccountBalance,
+      {
+        accountId,
+        channelId,
+      },
     );
 
     if (riskCalc.applied) {
@@ -1160,7 +1168,10 @@ export async function executeSignal(
   accountId?: string,
   processId?: string,
 ): Promise<SignalExecutionResult> {
-  const riskCfg = await getRiskConfig();
+  const riskCfg = await resolveEffectiveRiskConfig({
+    accountId,
+    channelId,
+  });
   const side = signal.action === "SELL" ? "SHORT" : "LONG";
   const leverage = sanitizeLeverage(signal.leverage) || riskCfg.defaultLeverage;
   const quantity = signal.positionSize || riskCfg.defaultPositionSize;

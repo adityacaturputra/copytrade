@@ -41,6 +41,20 @@ interface AccountData {
   channelIds: string[];
   channelNames?: Record<string, string>;
   disabledChannelIds?: string[];
+  riskOverrides?: {
+    riskPerTradePercent?: number;
+    [key: string]: unknown;
+  } | null;
+  channelConfigs?: Record<
+    string,
+    {
+      riskOverrides?: {
+        riskPerTradePercent?: number;
+        [key: string]: unknown;
+      };
+      [key: string]: unknown;
+    }
+  >;
   tradingPlatform: string;
   exchangeData?: AccountExchangeData;
   isActive: boolean;
@@ -59,6 +73,7 @@ interface HealthStatus {
 interface ChannelEntry {
   id: string;
   name: string;
+  riskPerTradePercent: string;
 }
 
 interface AccountFormData {
@@ -74,6 +89,7 @@ interface AccountFormData {
   botToken: string;
   // Channels
   channels: ChannelEntry[];
+  accountRiskPerTradePercent: string;
   // Exchange
   tradingPlatform: string;
   exchangeValues: ExchangeFormValues;
@@ -89,7 +105,8 @@ const emptyForm: AccountFormData = {
   refreshToken: "",
   autoRefresh: true,
   botToken: "",
-  channels: [{ id: "", name: "" }],
+  channels: [{ id: "", name: "", riskPerTradePercent: "" }],
+  accountRiskPerTradePercent: "",
   tradingPlatform: DEFAULT_ACCOUNT_EXCHANGE_PROVIDER,
   exchangeValues: createEmptyExchangeFormValues(),
   exchangeIsDemo: false,
@@ -98,7 +115,7 @@ const emptyForm: AccountFormData = {
 function createEmptyAccountForm(): AccountFormData {
   return {
     ...emptyForm,
-    channels: [{ id: "", name: "" }],
+    channels: [{ id: "", name: "", riskPerTradePercent: "" }],
     exchangeValues: createEmptyExchangeFormValues(),
   };
 }
@@ -161,6 +178,18 @@ function getTradingPlatformConfig(provider: string) {
     getExchangeProviderConfig(provider) ||
     getExchangeProviderConfig(DEFAULT_EXCHANGE_PROVIDER)
   );
+}
+
+function parseOptionalPositiveNumber(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function formatOptionalNumber(value: unknown): string {
+  return typeof value === "number" && Number.isFinite(value) ? String(value) : "";
 }
 
 // ─── Component ──────────────────────────────────────────────
@@ -419,15 +448,54 @@ export default function SettingsPage() {
     const validChannels = form.channels.filter((c) => c.id.trim() !== "");
     const channelIdsArray = validChannels.map((c) => c.id.trim());
     const channelNamesMap: Record<string, string> = {};
+    const channelConfigs: Record<
+      string,
+      { riskOverrides?: { riskPerTradePercent?: number } }
+    > = {};
     validChannels.forEach((c) => {
       if (c.name.trim()) {
         channelNamesMap[c.id.trim()] = c.name.trim();
       }
+      const channelRiskPerTradePercent = parseOptionalPositiveNumber(
+        c.riskPerTradePercent,
+      );
+      if (channelRiskPerTradePercent !== null) {
+        channelConfigs[c.id.trim()] = {
+          riskOverrides: {
+            riskPerTradePercent: channelRiskPerTradePercent,
+          },
+        };
+      }
     });
+    const accountRiskPerTradePercent = parseOptionalPositiveNumber(
+      form.accountRiskPerTradePercent,
+    );
 
     // Validation
     if (!form.name || channelIdsArray.length === 0) {
       setFormError("Name and at least one channel ID are required.");
+      setSaving(false);
+      return;
+    }
+
+    if (
+      form.accountRiskPerTradePercent.trim() &&
+      accountRiskPerTradePercent === null
+    ) {
+      setFormError("Account Risk Per Trade override must be a positive number.");
+      setSaving(false);
+      return;
+    }
+
+    const invalidChannelRisk = validChannels.find(
+      (channel) =>
+        channel.riskPerTradePercent.trim() &&
+        parseOptionalPositiveNumber(channel.riskPerTradePercent) === null,
+    );
+    if (invalidChannelRisk) {
+      setFormError(
+        `Channel Risk Per Trade override for ${invalidChannelRisk.id || "selected chat"} must be a positive number.`,
+      );
       setSaving(false);
       return;
     }
@@ -501,6 +569,11 @@ export default function SettingsPage() {
       sourceData,
         channelIds: channelIdsArray,
         channelNames: channelNamesMap,
+        riskOverrides:
+          accountRiskPerTradePercent !== null
+            ? { riskPerTradePercent: accountRiskPerTradePercent }
+            : null,
+        channelConfigs,
         tradingPlatform: form.tradingPlatform,
         exchangeData,
       };
@@ -545,7 +618,13 @@ export default function SettingsPage() {
       channels: account.channelIds.map((cid: string) => ({
         id: cid,
         name: sourceChannelNames[cid] || "",
+        riskPerTradePercent: formatOptionalNumber(
+          account.channelConfigs?.[cid]?.riskOverrides?.riskPerTradePercent,
+        ),
       })),
+      accountRiskPerTradePercent: formatOptionalNumber(
+        account.riskOverrides?.riskPerTradePercent,
+      ),
       // Exchange
       tradingPlatform: resolveAccountFormTradingPlatform(
         account.tradingPlatform,
@@ -572,7 +651,13 @@ export default function SettingsPage() {
       channels: account.channelIds.map((cid: string) => ({
         id: cid,
         name: sourceChannelNames[cid] || "",
+        riskPerTradePercent: formatOptionalNumber(
+          account.channelConfigs?.[cid]?.riskOverrides?.riskPerTradePercent,
+        ),
       })),
+      accountRiskPerTradePercent: formatOptionalNumber(
+        account.riskOverrides?.riskPerTradePercent,
+      ),
       tradingPlatform: resolveAccountFormTradingPlatform(
         account.tradingPlatform,
       ),
@@ -1146,9 +1231,31 @@ export default function SettingsPage() {
                     <label className="block text-sm text-slate-400">
                       Channels *
                     </label>
+                    <div className="rounded-lg border border-slate-700 p-4 bg-slate-900/30">
+                      <label className="block text-sm text-slate-400 mb-1">
+                        Account Risk Per Trade Override (%)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.1"
+                        min="0.1"
+                        value={form.accountRiskPerTradePercent}
+                        onChange={(e) =>
+                          setForm({
+                            ...form,
+                            accountRiskPerTradePercent: e.target.value,
+                          })
+                        }
+                        placeholder="Leave empty to use global setting"
+                        className="w-full md:w-72 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none"
+                      />
+                      <p className="text-xs text-slate-500 mt-2">
+                        Ini override level account. Kalau channel tertentu punya override sendiri, channel itu akan lebih prioritas.
+                      </p>
+                    </div>
                     <div className="space-y-2">
                       {form.channels.map((ch, idx) => (
-                        <div key={idx} className="flex gap-2">
+                        <div key={idx} className="grid grid-cols-1 md:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_220px_auto] gap-2">
                           <input
                             type="text"
                             value={ch.id}
@@ -1181,6 +1288,22 @@ export default function SettingsPage() {
                             placeholder="Display name (optional)"
                             className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none"
                           />
+                          <input
+                            type="number"
+                            step="0.1"
+                            min="0.1"
+                            value={ch.riskPerTradePercent}
+                            onChange={(e) => {
+                              const updated = [...form.channels];
+                              updated[idx] = {
+                                ...updated[idx],
+                                riskPerTradePercent: e.target.value,
+                              };
+                              setForm({ ...form, channels: updated });
+                            }}
+                            placeholder="Channel RPT override %"
+                            className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none"
+                          />
                           {form.channels.length > 1 && (
                             <button
                               type="button"
@@ -1202,7 +1325,10 @@ export default function SettingsPage() {
                         onClick={() =>
                           setForm({
                             ...form,
-                            channels: [...form.channels, { id: "", name: "" }],
+                            channels: [
+                              ...form.channels,
+                              { id: "", name: "", riskPerTradePercent: "" },
+                            ],
                           })
                         }
                         className="text-xs text-primary-400 hover:text-primary-300 transition flex items-center gap-1"
@@ -1454,11 +1580,19 @@ export default function SettingsPage() {
 
                           {/* Channels */}
                           <div className="flex flex-wrap gap-1.5">
+                            {account.riskOverrides?.riskPerTradePercent ? (
+                              <span className="text-xs px-2 py-1 rounded border border-cyan-700/40 bg-cyan-900/20 text-cyan-300">
+                                Account RPT: {account.riskOverrides.riskPerTradePercent}%
+                              </span>
+                            ) : null}
                             {(account.channelIds || []).map((cid: string) => {
                               const isDisabled = (
                                 account.disabledChannelIds || []
                               ).includes(cid);
                               const cname = account.channelNames?.[cid] || cid;
+                              const channelRPT =
+                                account.channelConfigs?.[cid]?.riskOverrides
+                                  ?.riskPerTradePercent;
                               return (
                                 <button
                                   key={cid}
@@ -1477,6 +1611,7 @@ export default function SettingsPage() {
                                   }
                                 >
                                   {cname}
+                                  {channelRPT ? ` • ${channelRPT}%` : ""}
                                 </button>
                               );
                             })}

@@ -1,4 +1,8 @@
-import { connectDB, RiskSettings as RiskSettingsModel } from "./database";
+import {
+  Account,
+  connectDB,
+  RiskSettings as RiskSettingsModel,
+} from "./database";
 import { calculateRisk } from "./risk-calc";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -33,6 +37,21 @@ export interface RiskCalculation {
   skipReason?: string;
 }
 
+export type RiskOverrideConfig = Partial<RiskConfig>;
+
+export interface EffectiveRiskConfig extends RiskConfig {
+  sources: {
+    riskPerTradePercent: "global" | "account" | "source_chat";
+    maxLeverage: "global" | "account" | "source_chat";
+    minLeverage: "global" | "account" | "source_chat";
+    skipNoSL: "global" | "account" | "source_chat";
+    defaultRR: "global" | "account" | "source_chat";
+    defaultPositionSize: "global" | "account" | "source_chat";
+    defaultLeverage: "global" | "account" | "source_chat";
+    maxPositions: "global" | "account" | "source_chat";
+  };
+}
+
 // ─── Defaults ─────────────────────────────────────────────────────────────────
 
 const DEFAULT_RISK_CONFIG: RiskConfig = {
@@ -45,6 +64,103 @@ const DEFAULT_RISK_CONFIG: RiskConfig = {
   defaultLeverage: 10,
   maxPositions: 5,
 };
+
+type RiskConfigField = keyof RiskConfig;
+
+const RISK_CONFIG_FIELDS: RiskConfigField[] = [
+  "riskPerTradePercent",
+  "maxLeverage",
+  "minLeverage",
+  "skipNoSL",
+  "defaultRR",
+  "defaultPositionSize",
+  "defaultLeverage",
+  "maxPositions",
+];
+
+function toRiskOverrideConfig(value: unknown): RiskOverrideConfig {
+  if (!value || typeof value !== "object") return {};
+
+  const record = value as Record<string, unknown>;
+  const overrides: RiskOverrideConfig = {};
+
+  for (const field of RISK_CONFIG_FIELDS) {
+    const fieldValue = record[field];
+    if (
+      typeof fieldValue === "number" &&
+      Number.isFinite(fieldValue)
+    ) {
+      overrides[field] = fieldValue as never;
+      continue;
+    }
+
+    if (typeof fieldValue === "boolean" && field === "skipNoSL") {
+      overrides.skipNoSL = fieldValue;
+    }
+  }
+
+  return overrides;
+}
+
+function readChannelRiskOverrides(
+  channelConfigs: unknown,
+  channelId?: string | null,
+): RiskOverrideConfig {
+  if (!channelId || !channelConfigs || typeof channelConfigs !== "object") {
+    return {};
+  }
+
+  const normalizedChannelId = channelId.trim();
+  if (!normalizedChannelId) return {};
+
+  const rawEntry =
+    channelConfigs instanceof Map
+      ? channelConfigs.get(normalizedChannelId)
+      : (channelConfigs as Record<string, unknown>)[normalizedChannelId];
+
+  if (!rawEntry || typeof rawEntry !== "object") return {};
+
+  return toRiskOverrideConfig(
+    (rawEntry as Record<string, unknown>).riskOverrides,
+  );
+}
+
+export function mergeRiskConfigOverrides(
+  baseConfig: RiskConfig,
+  accountOverrides?: RiskOverrideConfig | null,
+  sourceChatOverrides?: RiskOverrideConfig | null,
+): EffectiveRiskConfig {
+  const merged: RiskConfig = {
+    ...baseConfig,
+    ...accountOverrides,
+    ...sourceChatOverrides,
+  };
+
+  const sources: EffectiveRiskConfig["sources"] = {
+    riskPerTradePercent: "global",
+    maxLeverage: "global",
+    minLeverage: "global",
+    skipNoSL: "global",
+    defaultRR: "global",
+    defaultPositionSize: "global",
+    defaultLeverage: "global",
+    maxPositions: "global",
+  };
+
+  for (const field of RISK_CONFIG_FIELDS) {
+    if (accountOverrides?.[field] !== undefined) {
+      sources[field] = "account";
+    }
+    if (sourceChatOverrides?.[field] !== undefined) {
+      sources[field] = "source_chat";
+    }
+  }
+
+  return {
+    ...merged,
+    sources,
+  };
+}
 
 // ─── DB Helpers ───────────────────────────────────────────────────────────────
 
@@ -120,6 +236,35 @@ export async function setRiskConfig(
   };
 }
 
+export async function resolveEffectiveRiskConfig(options?: {
+  accountId?: string | null;
+  channelId?: string | null;
+}): Promise<EffectiveRiskConfig> {
+  const globalConfig = await getRiskConfig();
+
+  if (!options?.accountId) {
+    return mergeRiskConfigOverrides(globalConfig);
+  }
+
+  await connectDB();
+  const account = await Account.findById(options.accountId)
+    .select({ riskOverrides: 1, channelConfigs: 1 })
+    .lean()
+    .exec();
+
+  const accountOverrides = toRiskOverrideConfig(account?.riskOverrides);
+  const sourceChatOverrides = readChannelRiskOverrides(
+    account?.channelConfigs,
+    options.channelId,
+  );
+
+  return mergeRiskConfigOverrides(
+    globalConfig,
+    accountOverrides,
+    sourceChatOverrides,
+  );
+}
+
 // ─── Core Calculation ─────────────────────────────────────────────────────────
 
 /**
@@ -148,8 +293,12 @@ export async function calculateRiskBasedPosition(
   originalQuantity: number,
   originalLeverage: number,
   accountBalance: number | null | undefined,
+  options?: {
+    accountId?: string | null;
+    channelId?: string | null;
+  },
 ): Promise<RiskCalculation> {
-  const config = await getRiskConfig();
+  const config = await resolveEffectiveRiskConfig(options);
 
   // Caller must provide the balance from the target trading account.
   if (

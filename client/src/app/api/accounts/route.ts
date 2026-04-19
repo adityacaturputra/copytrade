@@ -18,6 +18,8 @@ type AccountUpdateInput = {
   channelIds?: string[];
   channelNames?: Record<string, string>;
   disabledChannelIds?: string[];
+  riskOverrides?: Record<string, unknown> | null;
+  channelConfigs?: Record<string, { riskOverrides?: Record<string, unknown> }>;
   duplicateFromId?: string;
   tradingPlatform?: unknown;
   sourceData?: Record<string, unknown>;
@@ -31,7 +33,51 @@ type DuplicateSourceAccount = {
   sourceData?: Record<string, unknown> | null;
   tradingPlatform?: string | null;
   exchangeData?: Record<string, unknown> | null;
+  riskOverrides?: Record<string, unknown> | null;
+  channelConfigs?: Record<string, { riskOverrides?: Record<string, unknown> }>;
   disabledChannelIds?: string[];
+};
+
+const RISK_OVERRIDE_VALIDATORS: Record<
+  string,
+  (value: unknown) => boolean
+> = {
+  riskPerTradePercent: (value) =>
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= 0.1 &&
+    value <= 100,
+  maxLeverage: (value) =>
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= 1 &&
+    value <= 125,
+  minLeverage: (value) =>
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= 1 &&
+    value <= 125,
+  skipNoSL: (value) => typeof value === "boolean",
+  defaultRR: (value) =>
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= 0.5 &&
+    value <= 20,
+  defaultPositionSize: (value) =>
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= 1 &&
+    value <= 1_000_000,
+  defaultLeverage: (value) =>
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= 1 &&
+    value <= 125,
+  maxPositions: (value) =>
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= 0 &&
+    value <= 100,
 };
 
 function isMaskedValue(value: unknown): boolean {
@@ -118,6 +164,8 @@ function applyAccountUpdates(
     channelIds?: string[];
     channelNames?: Record<string, string> | Map<string, string>;
     disabledChannelIds?: string[];
+    riskOverrides?: Record<string, unknown> | null;
+    channelConfigs?: Record<string, unknown> | null;
     tradingPlatform?: unknown;
     sourceData?: unknown;
     exchangeData?: unknown;
@@ -131,6 +179,19 @@ function applyAccountUpdates(
     account.channelNames = updates.channelNames;
   if (updates.disabledChannelIds !== undefined)
     account.disabledChannelIds = updates.disabledChannelIds;
+  if (updates.riskOverrides !== undefined) {
+    account.riskOverrides = updates.riskOverrides;
+  }
+  if (updates.channelConfigs !== undefined) {
+    const activeChannelIds = new Set(
+      updates.channelIds || account.channelIds || [],
+    );
+    account.channelConfigs = Object.fromEntries(
+      Object.entries(updates.channelConfigs).filter(([channelId]) =>
+        activeChannelIds.has(channelId),
+      ),
+    );
+  }
   if (updates.tradingPlatform !== undefined)
     account.tradingPlatform = updates.tradingPlatform;
   if (updates.sourceData !== undefined) {
@@ -237,6 +298,78 @@ function buildDisabledChannelIdsForCreate(
   );
 }
 
+function validateRiskOverrides(
+  riskOverrides: unknown,
+  scope: string,
+): string | null {
+  if (riskOverrides === undefined || riskOverrides === null) return null;
+  if (!riskOverrides || typeof riskOverrides !== "object") {
+    return `${scope} risk overrides must be an object`;
+  }
+
+  for (const [field, value] of Object.entries(
+    riskOverrides as Record<string, unknown>,
+  )) {
+    const validator = RISK_OVERRIDE_VALIDATORS[field];
+    if (!validator) {
+      return `${scope} risk override field is not supported: ${field}`;
+    }
+    if (!validator(value)) {
+      return `${scope} risk override is invalid for ${field}`;
+    }
+  }
+
+  return null;
+}
+
+function validateChannelConfigs(
+  channelConfigs: unknown,
+): string | null {
+  if (channelConfigs === undefined || channelConfigs === null) return null;
+  if (!channelConfigs || typeof channelConfigs !== "object") {
+    return "Channel configs must be an object";
+  }
+
+  for (const [channelId, config] of Object.entries(
+    channelConfigs as Record<string, unknown>,
+  )) {
+    if (!config || typeof config !== "object") {
+      return `Channel config must be an object for ${channelId}`;
+    }
+    const error = validateRiskOverrides(
+      (config as Record<string, unknown>).riskOverrides,
+      `Channel ${channelId}`,
+    );
+    if (error) return error;
+  }
+
+  return null;
+}
+
+function buildChannelConfigsForCreate(
+  sourceAccount: DuplicateSourceAccount | null,
+  channelIds: string[],
+  channelConfigs: unknown,
+) {
+  const activeChannelIds = new Set(channelIds);
+  const inherited =
+    sourceAccount?.channelConfigs &&
+    typeof sourceAccount.channelConfigs === "object"
+      ? sourceAccount.channelConfigs
+      : {};
+  const incoming =
+    channelConfigs && typeof channelConfigs === "object"
+      ? (channelConfigs as Record<string, unknown>)
+      : {};
+
+  return Object.fromEntries(
+    Object.entries({
+      ...inherited,
+      ...incoming,
+    }).filter(([channelId]) => activeChannelIds.has(channelId)),
+  );
+}
+
 // ─── GET /api/accounts ─────────────────────────────────────────────────────
 export async function GET() {
   try {
@@ -292,6 +425,8 @@ export async function POST(req: NextRequest) {
       duplicateFromId,
       tradingPlatform,
       exchangeData,
+      riskOverrides,
+      channelConfigs,
     } = body;
 
     if (!name || !sourceType) {
@@ -367,6 +502,22 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const riskOverrideError = validateRiskOverrides(riskOverrides, "Account");
+    if (riskOverrideError) {
+      return NextResponse.json(
+        { success: false, error: riskOverrideError },
+        { status: 400 },
+      );
+    }
+
+    const channelConfigError = validateChannelConfigs(channelConfigs);
+    if (channelConfigError) {
+      return NextResponse.json(
+        { success: false, error: channelConfigError },
+        { status: 400 },
+      );
+    }
+
     const account = await Account.create({
       name,
       isActive: true,
@@ -382,6 +533,15 @@ export async function POST(req: NextRequest) {
       exchangeData: Object.keys(mergedExchangeData).length
         ? mergedExchangeData
         : null,
+      riskOverrides:
+        riskOverrides && typeof riskOverrides === "object"
+          ? riskOverrides
+          : duplicateSourceAccount?.riskOverrides || null,
+      channelConfigs: buildChannelConfigsForCreate(
+        duplicateSourceAccount,
+        channelIds,
+        channelConfigs,
+      ),
     });
 
     console.log(
@@ -440,6 +600,25 @@ export async function PUT(req: NextRequest) {
     if (exchangeConfigError) {
       return NextResponse.json(
         { success: false, error: exchangeConfigError },
+        { status: 400 },
+      );
+    }
+
+    const riskOverrideError = validateRiskOverrides(
+      updates.riskOverrides,
+      "Account",
+    );
+    if (riskOverrideError) {
+      return NextResponse.json(
+        { success: false, error: riskOverrideError },
+        { status: 400 },
+      );
+    }
+
+    const channelConfigError = validateChannelConfigs(updates.channelConfigs);
+    if (channelConfigError) {
+      return NextResponse.json(
+        { success: false, error: channelConfigError },
         { status: 400 },
       );
     }

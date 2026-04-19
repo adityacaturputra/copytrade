@@ -12,7 +12,7 @@ import type {
   SignalExecutionResult,
 } from "./executor-types";
 import { logExecutorInfo, logProcessStep } from "./process-log";
-import { getRiskConfig } from "./risk";
+import { resolveEffectiveRiskConfig } from "./risk";
 
 async function buildDraftPayload(
   signal: TradingSignal,
@@ -40,7 +40,10 @@ async function buildDraftPayload(
   reasoning: string;
   sourceTimestamp: Date | null;
 }> {
-  const riskCfg = await getRiskConfig();
+  const riskCfg = await resolveEffectiveRiskConfig({
+    accountId,
+    channelId: msg.channelId,
+  });
   const side = signal.action === "SELL" ? "SHORT" : "LONG";
   const quantity = signal.positionSize || riskCfg.defaultPositionSize;
 

@@ -216,6 +216,36 @@ export interface IAccount extends Document {
   tradingPlatform?: string;
   /** Exchange-specific credentials (API key, secret, etc.) */
   exchangeData?: ExchangeCredentialValues;
+  /** Account-level risk management overrides */
+  riskOverrides?: {
+    riskPerTradePercent?: number;
+    maxLeverage?: number;
+    minLeverage?: number;
+    skipNoSL?: boolean;
+    defaultRR?: number;
+    defaultPositionSize?: number;
+    defaultLeverage?: number;
+    maxPositions?: number;
+    [key: string]: unknown;
+  };
+  /** Per-channel risk overrides keyed by channelId */
+  channelConfigs?: Record<
+    string,
+    {
+      riskOverrides?: {
+        riskPerTradePercent?: number;
+        maxLeverage?: number;
+        minLeverage?: number;
+        skipNoSL?: boolean;
+        defaultRR?: number;
+        defaultPositionSize?: number;
+        defaultLeverage?: number;
+        maxPositions?: number;
+        [key: string]: unknown;
+      };
+      [key: string]: unknown;
+    }
+  >;
 
   // ─── Health Status ─────────────────────────────────────────────
   lastFetchedAt?: Date;
@@ -476,6 +506,8 @@ const AccountSchema = new Schema<IAccount>(
     disabledChannelIds: [{ type: String, default: [] }],
     tradingPlatform: { type: String, default: null },
     exchangeData: { type: Schema.Types.Mixed, default: null },
+    riskOverrides: { type: Schema.Types.Mixed, default: null },
+    channelConfigs: { type: Schema.Types.Mixed, default: {} },
     lastFetchedAt: { type: Date, default: null },
     lastError: { type: String, default: null },
   },
