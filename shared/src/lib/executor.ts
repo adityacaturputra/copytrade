@@ -926,10 +926,12 @@ export async function executeTrade(
     );
 
     if (riskCalc.applied) {
+      const originalOrderQuantity = orderQuantity;
+      const originalOrderLeverage = orderLeverage;
       orderQuantity = riskCalc.quantity;
       orderLeverage = riskCalc.leverage;
       await logExecutorInfo(
-        `${lp}🛡️ Risk management applied: qty=${orderQuantity.toFixed(6)} → ${orderQuantity}, leverage=${leverage} → ${orderLeverage}`,
+        `${lp}🛡️ Risk management applied: qty=${originalOrderQuantity.toFixed(6)} → ${orderQuantity.toFixed(6)}, leverage=${originalOrderLeverage} → ${orderLeverage}`,
         {
           accountId,
           processId,

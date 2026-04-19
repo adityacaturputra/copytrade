@@ -36,6 +36,11 @@ export interface RiskCalcOutput {
   leverage: number;
 }
 
+function preserveFloatPrecision(value: number, significantDigits: number = 12): number {
+  if (!Number.isFinite(value) || value === 0) return 0;
+  return Number.parseFloat(value.toPrecision(significantDigits));
+}
+
 /**
  * Calculate the maximum safe leverage so that the liquidation price
  * stays BELOW (LONG) or ABOVE (SHORT) the stop loss price.
@@ -149,7 +154,7 @@ export function calculateRisk(params: RiskCalcInput): RiskCalcOutput {
     marginUsdt: Math.round(marginUsdt * 100) / 100,
     slDistancePercent: Math.round(slDistancePercent * 10000) / 10000,
     notionalSize: Math.round(notionalSize * 100) / 100,
-    quantity: Math.round(quantity * 100) / 100,
+    quantity: preserveFloatPrecision(quantity),
     leverage,
   };
 }

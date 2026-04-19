@@ -663,7 +663,7 @@ export class BybitExchange implements ExchangeClient {
 
     if (qty < specs.minSz) {
       throw new Error(
-        `Order quantity too small for ${symbol}: ${qty} < ${specs.minSz}`,
+        `Order quantity too small for ${symbol}: requested=${orderParams.quantity} -> rounded=${qty} < min=${specs.minSz}`,
       );
     }
 
