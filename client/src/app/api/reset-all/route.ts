@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB, Account } from "@copytrade/shared/lib/database";
 import mongoose from "mongoose";
-import { ExchangeFactory } from "@copytrade/shared/lib/exchange/ExchangeFactory";
+import {
+  ExchangeFactory,
+  buildExchangeCredentials,
+} from "@copytrade/shared/lib/exchange/ExchangeFactory";
 
 export const dynamic = "force-dynamic";
 
@@ -113,10 +116,13 @@ export async function POST(request: NextRequest) {
             }
 
             try {
-              const exchange = ExchangeFactory.getClientForAccount({
-                provider: (account.tradingPlatform as any) || "paper",
-                ...account.exchangeData,
-              });
+              const creds = buildExchangeCredentials(
+                account.tradingPlatform,
+                (account.exchangeData as Record<string, unknown>) || {},
+              );
+              const exchange = creds
+                ? ExchangeFactory.getClientForAccount(creds)
+                : ExchangeFactory.getPaperClient();
               const positions = await exchange.getOpenPositions();
               allDetails.push(
                 `Account "${account.name}" (${account.tradingPlatform}): ${positions.length} open positions`,

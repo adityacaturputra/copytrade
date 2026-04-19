@@ -1,7 +1,139 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB, Account, DiscordSource } from "@copytrade/shared/lib/database";
 import { SourceType } from "@copytrade/shared/lib/enums";
-import { normalizeExchangeProvider } from "@copytrade/shared/lib/exchange/ExchangeFactory";
+import type { ExchangeCredentialValues } from "@copytrade/shared/lib/exchange/exchange-credentials";
+import {
+  DEFAULT_EXCHANGE_PROVIDER,
+  maskExchangeDataForDisplay,
+  normalizeExchangeProvider,
+  validateExchangeCredentials,
+} from "@copytrade/shared/lib/exchange/provider-config";
+
+const MASKED_VALUE_PREFIX = "••••••••";
+
+type AccountUpdateInput = {
+  name?: string;
+  isActive?: boolean;
+  channelIds?: string[];
+  channelNames?: Record<string, string>;
+  disabledChannelIds?: string[];
+  tradingPlatform?: unknown;
+  sourceData?: Record<string, unknown>;
+  exchangeData?: ExchangeCredentialValues;
+};
+
+function isMaskedValue(value: unknown): boolean {
+  return typeof value === "string" && value.startsWith(MASKED_VALUE_PREFIX);
+}
+
+function shouldSkipPersistedValue(value: unknown): boolean {
+  return isMaskedValue(value) || value === "";
+}
+
+function toRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function mergePersistedConfig(
+  currentValue: unknown,
+  incomingValue: unknown,
+): Record<string, unknown> {
+  const merged = { ...toRecord(currentValue) };
+
+  for (const [key, value] of Object.entries(toRecord(incomingValue))) {
+    if (shouldSkipPersistedValue(value)) continue;
+    merged[key] = value;
+  }
+
+  return merged;
+}
+
+function resolveAccountTradingPlatform(
+  currentValue: unknown,
+  nextValue: unknown,
+) {
+  return (
+    normalizeExchangeProvider(
+      nextValue !== undefined ? nextValue : currentValue,
+    ) || DEFAULT_EXCHANGE_PROVIDER
+  );
+}
+
+function getTradingPlatformError(tradingPlatform: unknown): string | null {
+  if (
+    tradingPlatform !== undefined &&
+    !normalizeExchangeProvider(tradingPlatform)
+  ) {
+    return `Invalid trading platform: ${String(tradingPlatform)}`;
+  }
+
+  return null;
+}
+
+function validateUpdatedExchangeConfiguration(
+  account: {
+    tradingPlatform?: unknown;
+    exchangeData?: unknown;
+  },
+  updates: AccountUpdateInput,
+): string | null {
+  if (!updates.exchangeData) return null;
+
+  const tradingPlatform = resolveAccountTradingPlatform(
+    account.tradingPlatform,
+    updates.tradingPlatform,
+  );
+  const mergedExchangeData = mergePersistedConfig(
+    account.exchangeData,
+    updates.exchangeData,
+  );
+  const validation = validateExchangeCredentials(
+    tradingPlatform,
+    mergedExchangeData,
+  );
+
+  return validation.valid
+    ? null
+    : validation.error || "Invalid exchange configuration";
+}
+
+function applyAccountUpdates(
+  account: {
+    name?: string;
+    isActive?: boolean;
+    channelIds?: string[];
+    channelNames?: Record<string, string> | Map<string, string>;
+    disabledChannelIds?: string[];
+    tradingPlatform?: unknown;
+    sourceData?: unknown;
+    exchangeData?: unknown;
+  },
+  updates: AccountUpdateInput,
+) {
+  if (updates.name !== undefined) account.name = updates.name;
+  if (updates.isActive !== undefined) account.isActive = updates.isActive;
+  if (updates.channelIds !== undefined) account.channelIds = updates.channelIds;
+  if (updates.channelNames !== undefined)
+    account.channelNames = updates.channelNames;
+  if (updates.disabledChannelIds !== undefined)
+    account.disabledChannelIds = updates.disabledChannelIds;
+  if (updates.tradingPlatform !== undefined)
+    account.tradingPlatform = updates.tradingPlatform;
+  if (updates.sourceData !== undefined) {
+    account.sourceData = mergePersistedConfig(
+      account.sourceData,
+      updates.sourceData,
+    );
+  }
+  if (updates.exchangeData !== undefined) {
+    account.exchangeData = mergePersistedConfig(
+      account.exchangeData,
+      updates.exchangeData,
+    );
+  }
+}
 
 // ─── GET /api/accounts ─────────────────────────────────────────────────────
 export async function GET() {
@@ -23,12 +155,10 @@ export async function GET() {
           : undefined,
       },
       exchangeData: {
-        ...acc.exchangeData,
-        apiKey: acc.exchangeData?.apiKey
-          ? "••••••••" + String(acc.exchangeData.apiKey).slice(-4)
-          : undefined,
-        secretKey: acc.exchangeData?.secretKey ? "••••••••" : undefined,
-        passphrase: acc.exchangeData?.passphrase ? "••••••••" : undefined,
+        ...maskExchangeDataForDisplay(
+          acc.tradingPlatform,
+          acc.exchangeData as Record<string, unknown> | null | undefined,
+        ),
       },
     }));
 
@@ -79,13 +209,17 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const provider = normalizeExchangeProvider(tradingPlatform || "paper");
-    if (!provider) {
+    const tradingPlatformError = getTradingPlatformError(tradingPlatform);
+    if (tradingPlatformError) {
       return NextResponse.json(
-        { success: false, error: `Invalid trading platform: ${tradingPlatform}` },
+        { success: false, error: tradingPlatformError },
         { status: 400 },
       );
     }
+    const provider = resolveAccountTradingPlatform(
+      DEFAULT_EXCHANGE_PROVIDER,
+      tradingPlatform,
+    );
 
     // Validate source credentials based on type
     if (sourceType === "discord") {
@@ -103,24 +237,15 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Validate exchange credentials if trading platform specified
-    if (provider !== "paper") {
-      if (!exchangeData?.apiKey || !exchangeData?.secretKey) {
-        return NextResponse.json(
-          {
-            success: false,
-            error: `Exchange API credentials are required for ${provider}`,
-          },
-          { status: 400 },
-        );
-      }
-
-      if (provider === "okx" && !exchangeData?.passphrase) {
-        return NextResponse.json(
-          { success: false, error: "OKX passphrase is required" },
-          { status: 400 },
-        );
-      }
+    const exchangeValidation = validateExchangeCredentials(
+      provider,
+      (exchangeData as Record<string, unknown>) || {},
+    );
+    if (!exchangeValidation.valid) {
+      return NextResponse.json(
+        { success: false, error: exchangeValidation.error || "Invalid exchange configuration" },
+        { status: 400 },
+      );
     }
 
     const account = await Account.create({
@@ -158,7 +283,8 @@ export async function PUT(req: NextRequest) {
   try {
     await connectDB();
     const body = await req.json();
-    const { id, ...updates } = body;
+    const { id, ...rawUpdates } = body;
+    const updates = rawUpdates as AccountUpdateInput;
 
     if (!id) {
       return NextResponse.json(
@@ -175,56 +301,26 @@ export async function PUT(req: NextRequest) {
       );
     }
 
-    if (
-      updates.tradingPlatform !== undefined &&
-      !normalizeExchangeProvider(updates.tradingPlatform)
-    ) {
+    const tradingPlatformError = getTradingPlatformError(updates.tradingPlatform);
+    if (tradingPlatformError) {
       return NextResponse.json(
-        {
-          success: false,
-          error: `Invalid trading platform: ${updates.tradingPlatform}`,
-        },
+        { success: false, error: tradingPlatformError },
         { status: 400 },
       );
     }
 
-    // Update fields selectively
-    if (updates.name !== undefined) account.name = updates.name;
-    if (updates.isActive !== undefined) account.isActive = updates.isActive;
-    if (updates.channelIds !== undefined)
-      account.channelIds = updates.channelIds;
-    if (updates.channelNames !== undefined)
-      account.channelNames = updates.channelNames;
-    if (updates.disabledChannelIds !== undefined)
-      account.disabledChannelIds = updates.disabledChannelIds;
-    if (updates.tradingPlatform !== undefined)
-      account.tradingPlatform = updates.tradingPlatform;
-
-    // Merge sourceData — keep existing values if new ones are masked/empty
-    if (updates.sourceData) {
-      const merged = { ...(account.sourceData as Record<string, unknown>) };
-      for (const [key, value] of Object.entries(updates.sourceData)) {
-        // Skip masked values (••••••••)
-        if (typeof value === "string" && value.startsWith("••••••••")) continue;
-        // Skip empty strings — means "keep existing"
-        if (value === "") continue;
-        merged[key] = value;
-      }
-      account.sourceData = merged;
+    const exchangeConfigError = validateUpdatedExchangeConfiguration(
+      account,
+      updates,
+    );
+    if (exchangeConfigError) {
+      return NextResponse.json(
+        { success: false, error: exchangeConfigError },
+        { status: 400 },
+      );
     }
 
-    // Merge exchangeData similarly
-    if (updates.exchangeData) {
-      const merged = {
-        ...((account.exchangeData as Record<string, unknown>) || {}),
-      };
-      for (const [key, value] of Object.entries(updates.exchangeData)) {
-        if (typeof value === "string" && value.startsWith("••••••••")) continue;
-        if (value === "") continue;
-        merged[key] = value;
-      }
-      account.exchangeData = merged;
-    }
+    applyAccountUpdates(account, updates);
 
     await account.save();
 

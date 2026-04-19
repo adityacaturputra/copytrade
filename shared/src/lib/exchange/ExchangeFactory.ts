@@ -1,44 +1,28 @@
 import { ExchangeClient } from "./types";
-import { MexcExchange } from "./MexcExchange";
-import { OkxExchange } from "./OkxExchange";
 import { PaperExchange } from "./PaperExchange";
-import { BinanceExchange } from "./BinanceExchange";
-import { BybitExchange } from "./BybitExchange";
+import { type ExchangeProvider } from "./provider-config";
+import {
+  buildExchangeCredentials,
+  type ExchangeCredentials,
+} from "./exchange-credentials";
+import { getExchangeProviderRuntime } from "./provider-runtime";
 
-export const SUPPORTED_EXCHANGE_PROVIDERS = [
-  "mexc",
-  "okx",
-  "binance",
-  "bybit",
-  "paper",
-] as const;
-
-export type ExchangeProvider =
-  (typeof SUPPORTED_EXCHANGE_PROVIDERS)[number];
-
-export function normalizeExchangeProvider(
-  value: unknown,
-): ExchangeProvider | null {
-  if (typeof value !== "string") return null;
-  const normalized = value.trim().toLowerCase();
-  return (SUPPORTED_EXCHANGE_PROVIDERS as readonly string[]).includes(
-    normalized,
-  )
-    ? (normalized as ExchangeProvider)
-    : null;
-}
-
-/**
- * ExchangeCredentials — per-account exchange configuration stored in DB.
- */
-export interface ExchangeCredentials {
-  provider: ExchangeProvider;
-  apiKey?: string;
-  secretKey?: string;
-  passphrase?: string;
-  simulated?: boolean;
-  [key: string]: unknown;
-}
+export {
+  SUPPORTED_EXCHANGE_PROVIDERS,
+  exchangeProviderRequiresCredentials,
+  getExchangeProviderConfig,
+  getExchangeProviderOptions,
+  isPaperExchangeProvider,
+  normalizeExchangeProvider,
+  validateExchangeCredentials,
+} from "./provider-config";
+export { buildExchangeCredentials } from "./exchange-credentials";
+export {
+  exchangeSupportsDirectAlgoCancel,
+  getExchangeProviderRuntime,
+} from "./provider-runtime";
+export type { ExchangeProvider, ExchangeProviderConfig } from "./provider-config";
+export type { ExchangeCredentials } from "./exchange-credentials";
 
 /**
  * ExchangeFactory — dynamic factory for exchange clients.
@@ -48,8 +32,8 @@ export interface ExchangeCredentials {
  *
  * To add a new exchange:
  *   1. Create src/lib/exchange/<Name>Exchange.ts implementing ExchangeClient
- *   2. Add the provider type above
- *   3. Add a case in createClient()
+ *   2. Register provider metadata in provider-config.ts
+ *   3. Register runtime creation in provider-runtime.ts
  */
 export class ExchangeFactory {
   /**
@@ -71,60 +55,11 @@ export class ExchangeFactory {
     provider: ExchangeProvider,
     creds?: ExchangeCredentials,
   ): ExchangeClient {
-    switch (provider) {
-      case "okx": {
-        const apiKey = creds?.apiKey;
-        const secretKey = creds?.secretKey;
-        const passphrase = creds?.passphrase;
-        if (!apiKey || !secretKey || !passphrase) {
-          throw new Error(
-            "OKX apiKey, secretKey, and passphrase must be configured in account settings",
-          );
-        }
-        const simulated = creds?.simulated ?? false;
-        return new OkxExchange(apiKey, secretKey, passphrase, simulated);
-      }
-
-      case "mexc":
-      {
-        const apiKey = creds?.apiKey;
-        const secretKey = creds?.secretKey;
-        if (!apiKey || !secretKey) {
-          throw new Error(
-            "MEXC apiKey and secretKey must be configured in account settings",
-          );
-        }
-        return new MexcExchange(apiKey, secretKey);
-      }
-
-      case "binance": {
-        const apiKey = creds?.apiKey;
-        const secretKey = creds?.secretKey;
-        if (!apiKey || !secretKey) {
-          throw new Error(
-            "Binance apiKey and secretKey must be configured in account settings",
-          );
-        }
-        const simulated = creds?.simulated ?? false;
-        return new BinanceExchange(apiKey, secretKey, simulated);
-      }
-
-      case "bybit": {
-        const apiKey = creds?.apiKey;
-        const secretKey = creds?.secretKey;
-        if (!apiKey || !secretKey) {
-          throw new Error(
-            "Bybit apiKey and secretKey must be configured in account settings",
-          );
-        }
-        const simulated = creds?.simulated ?? false;
-        return new BybitExchange(apiKey, secretKey, simulated);
-      }
-
-      default: {
-        return new PaperExchange();
-      }
+    const runtime = getExchangeProviderRuntime(provider);
+    if (!runtime) {
+      throw new Error(`Unsupported exchange provider: ${provider}`);
     }
+    return runtime.createClient(creds);
   }
 
   /**

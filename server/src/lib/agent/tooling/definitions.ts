@@ -17,7 +17,7 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "get_account_info",
       description:
-        "Get exchange account info for a trading account. The exchange provider is chosen from the selected account's tradingPlatform via ExchangeFactory. Returns JSON: { provider: string ('okx'|'binance'|'bybit'|'mexc'|'paper'), totalBalance: number, availableBalance: number, unrealizedPnl: number, accountId: string, accountName: string }. If multiple trading accounts exist, pass accountId.",
+        "Get exchange account info for a trading account. The exchange provider is chosen from the selected account's tradingPlatform via ExchangeFactory. Returns JSON: { provider: string ('okx'|'binance'|'bybit'|'mexc'|'metatrader'|'paper'), totalBalance: number, availableBalance: number, unrealizedPnl: number, accountId: string, accountName: string }. If multiple trading accounts exist, pass accountId.",
       parameters: {
         type: "object",
         properties: {
@@ -36,7 +36,7 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "get_ticker_price",
       description:
-        "Get the current mark price of a trading pair from the exchange selected by the account's tradingPlatform via ExchangeFactory. Symbol MUST match that exchange format: for OKX use 'BTC-USDT-SWAP' (instrument ID with dashes); for Binance/Bybit/MEXC use 'BTCUSDT' (no dashes).",
+        "Get the current mark price of a trading pair from the exchange selected by the account's tradingPlatform via ExchangeFactory. Symbol MUST match that exchange format: for OKX use 'BTC-USDT-SWAP' (instrument ID with dashes); for Binance/Bybit/MEXC use 'BTCUSDT' (no dashes); for MetaTrader use the broker symbol like 'XAUUSD', 'EURUSD', 'GBPUSD', or broker-specific suffix variants.",
       parameters: {
         type: "object",
         properties: {
@@ -48,7 +48,7 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
           symbol: {
             type: "string",
             description:
-              "Trading pair in exchange format. OKX examples: 'BTC-USDT-SWAP', 'ETH-USDT-SWAP'. Binance/Bybit/MEXC examples: 'BTCUSDT', 'RENDERUSDT'.",
+              "Trading pair in exchange format. OKX examples: 'BTC-USDT-SWAP', 'ETH-USDT-SWAP'. Binance/Bybit/MEXC examples: 'BTCUSDT', 'RENDERUSDT'. MetaTrader examples: 'XAUUSD', 'EURUSD', 'GBPUSD', or broker-specific suffix variants.",
           },
         },
         required: ["symbol"],
@@ -102,7 +102,7 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
           symbol: {
             type: "string",
             description:
-              "Trading pair in exchange format. OKX: 'BTC-USDT-SWAP'. Binance/Bybit/MEXC: 'BTCUSDT'",
+              "Trading pair in exchange format. OKX: 'BTC-USDT-SWAP'. Binance/Bybit/MEXC: 'BTCUSDT'. MetaTrader: 'XAUUSD', 'EURUSD', 'GBPUSD', or broker-specific suffix variants.",
           },
           side: {
             type: "string",

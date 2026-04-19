@@ -3,8 +3,7 @@ import { AIFactory } from "./ai/AIFactory";
 import { buildPositionAnalysisInput } from "./ai/PositionMonitorContext";
 import {
   ExchangeFactory,
-  ExchangeCredentials,
-  normalizeExchangeProvider,
+  buildExchangeCredentials,
 } from "./exchange/ExchangeFactory";
 import { ExchangeClient } from "./exchange/types";
 import { inspectPendingLimitOrder } from "./pending-order-sync";
@@ -27,15 +26,11 @@ async function getExchangeForPosition(position: {
   if (position.accountId) {
     const account = await Account.findById(position.accountId).lean();
     if (account?.exchangeData) {
-      const provider = normalizeExchangeProvider(account.tradingPlatform);
-      const creds: ExchangeCredentials = {
-        provider: provider || "paper",
-        apiKey: account.exchangeData.apiKey,
-        secretKey: account.exchangeData.secretKey,
-        passphrase: account.exchangeData.passphrase,
-        simulated: account.exchangeData.simulated,
-      };
-      return ExchangeFactory.getClientForAccount(creds);
+      const creds = buildExchangeCredentials(
+        account.tradingPlatform,
+        account.exchangeData as Record<string, unknown>,
+      );
+      if (creds) return ExchangeFactory.getClientForAccount(creds);
     }
   }
   return ExchangeFactory.getPaperClient();
@@ -97,15 +92,13 @@ export async function runPositionMonitor(): Promise<{
           if (accountId !== "__global__") {
             const account = await Account.findById(accountId).lean();
             if (account?.exchangeData) {
-              const provider = normalizeExchangeProvider(account.tradingPlatform);
-              const creds: ExchangeCredentials = {
-                provider: provider || "paper",
-                apiKey: account.exchangeData.apiKey,
-                secretKey: account.exchangeData.secretKey,
-                passphrase: account.exchangeData.passphrase,
-                simulated: account.exchangeData.simulated,
-              };
-              exchange = ExchangeFactory.getClientForAccount(creds);
+              const creds = buildExchangeCredentials(
+                account.tradingPlatform,
+                account.exchangeData as Record<string, unknown>,
+              );
+              exchange = creds
+                ? ExchangeFactory.getClientForAccount(creds)
+                : ExchangeFactory.getPaperClient();
             } else {
               exchange = ExchangeFactory.getPaperClient();
             }
@@ -257,15 +250,13 @@ export async function runPositionMonitor(): Promise<{
         if (accountId !== "__global__") {
           const account = await Account.findById(accountId).lean();
           if (account?.exchangeData) {
-            const provider = normalizeExchangeProvider(account.tradingPlatform);
-            const creds: ExchangeCredentials = {
-              provider: provider || "paper",
-              apiKey: account.exchangeData.apiKey,
-              secretKey: account.exchangeData.secretKey,
-              passphrase: account.exchangeData.passphrase,
-              simulated: account.exchangeData.simulated,
-            };
-            exchange = ExchangeFactory.getClientForAccount(creds);
+            const creds = buildExchangeCredentials(
+              account.tradingPlatform,
+              account.exchangeData as Record<string, unknown>,
+            );
+            exchange = creds
+              ? ExchangeFactory.getClientForAccount(creds)
+              : ExchangeFactory.getPaperClient();
           } else {
             exchange = ExchangeFactory.getPaperClient();
           }

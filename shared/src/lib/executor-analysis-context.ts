@@ -2,7 +2,7 @@ import { Account, DraftTrade, Position } from "./database";
 import {
   ExchangeFactory,
   ExchangeCredentials,
-  normalizeExchangeProvider,
+  buildExchangeCredentials,
 } from "./exchange/ExchangeFactory";
 import type {
   AccountInfo as ExchangeAccountInfo,
@@ -73,33 +73,18 @@ function roundContextNumber(value: number | null | undefined): number | null {
 function buildExchangeCredentialsFromAccount(
   account: AnalysisAccountRecord,
 ): ExchangeCredentials {
-  const tradingPlatform = normalizeExchangeProvider(account.tradingPlatform);
+  const credentials = buildExchangeCredentials(
+    account.tradingPlatform,
+    account.exchangeData || {},
+  );
 
-  if (!tradingPlatform) {
+  if (!credentials) {
     throw new Error(
       `Account "${account.name || "unknown"}" has invalid trading platform "${account.tradingPlatform || "unset"}"`,
     );
   }
 
-  const exchangeData = (account.exchangeData || {}) as Record<string, unknown>;
-
-  return {
-    provider: tradingPlatform,
-    apiKey:
-      typeof exchangeData.apiKey === "string" ? exchangeData.apiKey : undefined,
-    secretKey:
-      typeof exchangeData.secretKey === "string"
-        ? exchangeData.secretKey
-        : undefined,
-    passphrase:
-      typeof exchangeData.passphrase === "string"
-        ? exchangeData.passphrase
-        : undefined,
-    simulated:
-      typeof exchangeData.simulated === "boolean"
-        ? exchangeData.simulated
-        : undefined,
-  } as ExchangeCredentials;
+  return credentials;
 }
 
 function formatAnalysisContextBlock(snapshot: AnalysisContextSnapshot): string {

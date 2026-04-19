@@ -18,7 +18,11 @@
  */
 
 import mongoose from "mongoose";
-import { ExchangeFactory } from "@copytrade/shared/lib/exchange/ExchangeFactory";
+import {
+  ExchangeFactory,
+  normalizeExchangeProvider,
+  type ExchangeProvider,
+} from "@copytrade/shared/lib/exchange/ExchangeFactory";
 import { Account } from "@copytrade/shared/lib/database";
 import { loadClientEnv } from "./load-env";
 
@@ -70,6 +74,28 @@ const PRESERVED_COLLECTIONS = [
   "signalconfigs",
   "tradingmodes",
 ];
+
+type ProviderResetHooks = {
+  cancelAlgoOrders?: (
+    exchangeData?: Record<string, unknown>,
+  ) => Promise<void>;
+  resetDemoFunds?: () => Promise<void>;
+  getDemoResetBlocker?: (options: { simulated: boolean }) => string | null;
+};
+
+const PROVIDER_RESET_HOOKS: Partial<Record<ExchangeProvider, ProviderResetHooks>> =
+  {
+    okx: {
+      cancelAlgoOrders: async (exchangeData) => {
+        await cancelOkxAlgoOrders(exchangeData as OkxExchangeData | undefined);
+      },
+      resetDemoFunds: resetOkxDemoFunds,
+      getDemoResetBlocker: ({ simulated }) =>
+        simulated
+          ? null
+          : "Fund reset only works with OKX Simulated Trading (set OKX_SIMULATED=true)",
+    },
+  };
 
 // Main
 async function main() {
@@ -167,7 +193,9 @@ async function main() {
             log('  Account "' + acct.name + '": no exchangeData, skipped');
             continue;
           }
-          const provider = (acct.tradingPlatform as string) || "paper";
+          const provider =
+            normalizeExchangeProvider(acct.tradingPlatform) || "paper";
+          const providerHooks = PROVIDER_RESET_HOOKS[provider];
           log('  Account "' + acct.name + '" (' + provider + "):");
 
           try {
@@ -219,12 +247,14 @@ async function main() {
                 error("    Errors: " + result.errors.join(", "));
             }
 
-            if (provider === "okx") {
+            if (providerHooks?.cancelAlgoOrders) {
               log("    Cancelling algo orders (TP/SL)...");
               if (dryRun) {
                 warn("    [DRY] Would cancel all pending algo orders");
               } else {
-                await cancelOkxAlgoOrders(acct.exchangeData);
+                await providerHooks.cancelAlgoOrders(
+                  (acct.exchangeData || {}) as Record<string, unknown>,
+                );
               }
             }
           } catch (err) {
@@ -254,25 +284,28 @@ async function main() {
   // Step 3: Reset Demo Funds
   if (resetFunds || resetFundsOnly) {
     log(BOLD + "Step 3: Resetting Demo Account Funds..." + CRESET);
-    const provider = process.env.EXCHANGE_PROVIDER || "paper";
+    const provider =
+      normalizeExchangeProvider(process.env.EXCHANGE_PROVIDER) || "paper";
+    const providerHooks = PROVIDER_RESET_HOOKS[provider];
     const simulated = process.env.OKX_SIMULATED === "true";
 
-    if (provider !== "okx") {
-      warn(
-        "  Fund reset only works with OKX exchange (current: " + provider + ")",
-      );
-    } else if (!simulated) {
-      warn(
-        "  Fund reset only works with OKX Simulated Trading (set OKX_SIMULATED=true)",
-      );
-      warn(
-        "  Cannot reset funds on a real OKX account - that would be real money!",
-      );
+    if (!providerHooks?.resetDemoFunds) {
+      warn("  Fund reset is not supported for exchange: " + provider);
     } else {
-      if (dryRun) {
-        warn("  [DRY] Would reset demo account to initial balance via OKX API");
+      const blocker = providerHooks.getDemoResetBlocker?.({ simulated }) || null;
+      if (blocker) {
+        warn("  " + blocker);
+        warn(
+          "  Cannot reset funds on a real account - that would be real money!",
+        );
       } else {
-        await resetOkxDemoFunds();
+        if (dryRun) {
+          warn(
+            "  [DRY] Would reset demo account to initial balance via provider API",
+          );
+        } else {
+          await providerHooks.resetDemoFunds();
+        }
       }
     }
     console.log();
@@ -291,12 +324,14 @@ async function main() {
 }
 
 // OKX Algo Order Cancellation
-async function cancelOkxAlgoOrders(exchangeData?: {
+type OkxExchangeData = {
   apiKey?: string;
   secretKey?: string;
   passphrase?: string;
   simulated?: boolean;
-}) {
+};
+
+async function cancelOkxAlgoOrders(exchangeData?: OkxExchangeData) {
   try {
     const axios = (await import("axios")).default;
     const CryptoJS = (await import("crypto-js")).default;

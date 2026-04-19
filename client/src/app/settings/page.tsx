@@ -1,6 +1,27 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import {
+  DEFAULT_ACCOUNT_EXCHANGE_PROVIDER,
+  DEFAULT_EXCHANGE_PROVIDER,
+  getExchangeProviderConfig,
+  getExchangeProviderOptions,
+  validateExchangeCredentials,
+  type ExchangeProviderConfig,
+} from "@copytrade/shared/lib/exchange/provider-config";
+import {
+  buildExchangeDataPayload,
+  buildExchangeDataPreview,
+  buildExchangeFormValues,
+  createEmptyExchangeFormValues,
+  getExchangeFieldConfigs,
+  getExchangeFieldLabel,
+  getExchangeFieldPlaceholder,
+  getExchangeSimulationValue,
+  resolveAccountFormTradingPlatform,
+  type AccountExchangeData,
+  type ExchangeFormValues,
+} from "./exchange-form";
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -21,15 +42,7 @@ interface AccountData {
   channelNames?: Record<string, string>;
   disabledChannelIds?: string[];
   tradingPlatform: string;
-  exchangeData?: {
-    apiKey?: string;
-    apiSecret?: string;
-    secretKey?: string;
-    passphrase?: string;
-    isDemo?: boolean;
-    simulated?: boolean;
-    [key: string]: unknown;
-  };
+  exchangeData?: AccountExchangeData;
   isActive: boolean;
   lastFetchedAt?: string;
   lastError?: string;
@@ -62,9 +75,7 @@ interface AccountFormData {
   channels: ChannelEntry[];
   // Exchange
   tradingPlatform: string;
-  exchangeApiKey: string;
-  exchangeApiSecret: string;
-  exchangePassphrase: string;
+  exchangeValues: ExchangeFormValues;
   exchangeIsDemo: boolean;
 }
 
@@ -77,12 +88,18 @@ const emptyForm: AccountFormData = {
   autoRefresh: true,
   botToken: "",
   channels: [{ id: "", name: "" }],
-  tradingPlatform: "okx",
-  exchangeApiKey: "",
-  exchangeApiSecret: "",
-  exchangePassphrase: "",
+  tradingPlatform: DEFAULT_ACCOUNT_EXCHANGE_PROVIDER,
+  exchangeValues: createEmptyExchangeFormValues(),
   exchangeIsDemo: false,
 };
+
+function createEmptyAccountForm(): AccountFormData {
+  return {
+    ...emptyForm,
+    channels: [{ id: "", name: "" }],
+    exchangeValues: createEmptyExchangeFormValues(),
+  };
+}
 
 interface RiskConfig {
   riskPerTradePercent: number;
@@ -135,6 +152,15 @@ const RECOMMENDED_SCHEDULES: Record<
   },
 };
 
+const EXCHANGE_PROVIDER_OPTIONS = getExchangeProviderOptions();
+
+function getTradingPlatformConfig(provider: string) {
+  return (
+    getExchangeProviderConfig(provider) ||
+    getExchangeProviderConfig(DEFAULT_EXCHANGE_PROVIDER)
+  );
+}
+
 // ─── Component ──────────────────────────────────────────────
 
 export default function SettingsPage() {
@@ -146,7 +172,7 @@ export default function SettingsPage() {
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState<AccountFormData>(emptyForm);
+  const [form, setForm] = useState<AccountFormData>(createEmptyAccountForm());
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [healthResults, setHealthResults] = useState<
@@ -399,12 +425,22 @@ export default function SettingsPage() {
       return;
     }
 
-    if (
-      form.tradingPlatform !== "paper" &&
-      !editingId &&
-      (!form.exchangeApiKey || !form.exchangeApiSecret)
-    ) {
-      setFormError("Exchange API key and secret are required.");
+    const exchangeConfig = getTradingPlatformConfig(form.tradingPlatform);
+    const exchangeDataPreview = buildExchangeDataPreview(
+      form.tradingPlatform,
+      form.exchangeValues,
+    );
+
+    const exchangeValidation: {
+      valid: boolean;
+      error?: string;
+    } =
+      !editingId && exchangeConfig
+        ? validateExchangeCredentials(form.tradingPlatform, exchangeDataPreview)
+        : { valid: true };
+
+    if (!exchangeValidation.valid) {
+      setFormError(exchangeValidation.error || "Invalid exchange configuration.");
       setSaving(false);
       return;
     }
@@ -422,15 +458,11 @@ export default function SettingsPage() {
       }
 
       // Build exchangeData
-      const exchangeData: Record<string, unknown> = {};
-      if (form.tradingPlatform !== "paper") {
-        if (form.exchangeApiKey) exchangeData.apiKey = form.exchangeApiKey;
-        if (form.exchangeApiSecret)
-          exchangeData.secretKey = form.exchangeApiSecret;
-        if (form.exchangePassphrase)
-          exchangeData.passphrase = form.exchangePassphrase;
-        exchangeData.simulated = form.exchangeIsDemo;
-      }
+      const exchangeData = buildExchangeDataPayload(
+        form.tradingPlatform,
+        form.exchangeValues,
+        form.exchangeIsDemo,
+      );
 
       const body = {
         id: editingId || undefined,
@@ -453,7 +485,7 @@ export default function SettingsPage() {
       if (json.success) {
         setShowForm(false);
         setEditingId(null);
-        setForm(emptyForm);
+        setForm(createEmptyAccountForm());
         await fetchAccounts();
       } else {
         setFormError(json.error || "Failed to save");
@@ -484,14 +516,11 @@ export default function SettingsPage() {
         name: sourceChannelNames[cid] || "",
       })),
       // Exchange
-      tradingPlatform: account.tradingPlatform || "okx",
-      exchangeApiKey: "",
-      exchangeApiSecret: "",
-      exchangePassphrase: "",
-      exchangeIsDemo:
-        (account.exchangeData?.isDemo as boolean) ??
-        (account.exchangeData?.simulated as boolean) ??
-        false,
+      tradingPlatform: resolveAccountFormTradingPlatform(
+        account.tradingPlatform,
+      ),
+      exchangeValues: buildExchangeFormValues(account.exchangeData),
+      exchangeIsDemo: getExchangeSimulationValue(account.exchangeData),
     });
     setShowForm(true);
     setFormError(null);
@@ -769,6 +798,11 @@ export default function SettingsPage() {
     );
   }
 
+  const activeExchangeConfig = getTradingPlatformConfig(form.tradingPlatform);
+  const activeExchangeFieldConfigs = getExchangeFieldConfigs(
+    form.tradingPlatform,
+  );
+
   // ─── Render ───────────────────────────────────────────────
 
   return (
@@ -832,8 +866,9 @@ export default function SettingsPage() {
               </h2>
               <p className="text-xs text-slate-400">
                 Each account links a signal source (Discord/Telegram) with an
-                exchange (OKX/Binance/Bybit/MEXC/Paper). Signals from the
-                source channels are auto-executed on the linked exchange.
+                exchange (OKX/Binance/Bybit/MEXC/MetaTrader/Paper). Signals
+                from the source channels are auto-executed on the linked
+                exchange.
               </p>
             </div>
 
@@ -854,7 +889,7 @@ export default function SettingsPage() {
               <button
                 onClick={() => {
                   setEditingId(null);
-                  setForm(emptyForm);
+                  setForm(createEmptyAccountForm());
                   setShowForm(true);
                   setFormError(null);
                 }}
@@ -1125,13 +1160,11 @@ export default function SettingsPage() {
                           }
                           className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
                         >
-                          <option value="okx">OKX</option>
-                          <option value="binance">Binance Futures</option>
-                          <option value="bybit">Bybit</option>
-                          <option value="mexc">MEXC</option>
-                          <option value="paper">
-                            📝 Paper Trading (simulated)
-                          </option>
+                          {EXCHANGE_PROVIDER_OPTIONS.map((option: ExchangeProviderConfig) => (
+                            <option key={option.provider} value={option.provider}>
+                              {option.optionLabel || option.label}
+                            </option>
+                          ))}
                         </select>
                       </div>
                       <div className="flex items-center gap-2">
@@ -1156,73 +1189,66 @@ export default function SettingsPage() {
                       </div>
                     </div>
 
-                    {form.tradingPlatform !== "paper" && (
+                    {activeExchangeConfig?.authMode !== "none" && (
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <div>
-                          <label className="block text-sm text-slate-400 mb-1">
-                            {editingId
-                              ? "API Key (leave empty to keep)"
-                              : "API Key *"}
-                          </label>
-                          <input
-                            type="password"
-                            value={form.exchangeApiKey}
-                            onChange={(e) =>
-                              setForm({
-                                ...form,
-                                exchangeApiKey: e.target.value,
-                              })
-                            }
-                            placeholder={
-                              editingId ? "Leave empty to keep" : "API Key"
-                            }
-                            className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none font-mono"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-sm text-slate-400 mb-1">
-                            {editingId
-                              ? "Secret Key (leave empty to keep)"
-                              : "Secret Key *"}
-                          </label>
-                          <input
-                            type="password"
-                            value={form.exchangeApiSecret}
-                            onChange={(e) =>
-                              setForm({
-                                ...form,
-                                exchangeApiSecret: e.target.value,
-                              })
-                            }
-                            placeholder={
-                              editingId ? "Leave empty to keep" : "Secret Key"
-                            }
-                            className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none font-mono"
-                          />
-                        </div>
-                        {form.tradingPlatform === "okx" && (
-                          <div>
-                            <label className="block text-sm text-slate-400 mb-1">
-                              {editingId
-                                ? "Passphrase (leave empty to keep)"
-                                : "Passphrase *"}
-                            </label>
-                            <input
-                              type="password"
-                              value={form.exchangePassphrase}
-                              onChange={(e) =>
-                                setForm({
-                                  ...form,
-                                  exchangePassphrase: e.target.value,
-                                })
-                              }
-                              placeholder={
-                                editingId ? "Leave empty to keep" : "Passphrase"
-                              }
-                              className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none font-mono"
-                            />
-                          </div>
-                        )}
+                        {activeExchangeFieldConfigs.map((fieldConfig) => {
+                          const value = form.exchangeValues[fieldConfig.field] || "";
+                          const className = `w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white ${
+                            fieldConfig.monospace ? "font-mono " : ""
+                          }placeholder-slate-500 focus:border-primary-500 focus:outline-none`;
+
+                          return (
+                            <div key={fieldConfig.field}>
+                              <label className="block text-sm text-slate-400 mb-1">
+                                {getExchangeFieldLabel(
+                                  fieldConfig,
+                                  activeExchangeConfig?.requiredFields || [],
+                                  Boolean(editingId),
+                                )}
+                              </label>
+                              {fieldConfig.inputType === "select" ? (
+                                <select
+                                  value={value}
+                                  onChange={(e) =>
+                                    setForm({
+                                      ...form,
+                                      exchangeValues: {
+                                        ...form.exchangeValues,
+                                        [fieldConfig.field]: e.target.value,
+                                      },
+                                    })
+                                  }
+                                  className={className}
+                                >
+                                  {(fieldConfig.options || []).map((option) => (
+                                    <option key={option.value} value={option.value}>
+                                      {option.label}
+                                    </option>
+                                  ))}
+                                </select>
+                              ) : (
+                                <input
+                                  type={fieldConfig.inputType}
+                                  value={value}
+                                  onChange={(e) =>
+                                    setForm({
+                                      ...form,
+                                      exchangeValues: {
+                                        ...form.exchangeValues,
+                                        [fieldConfig.field]: e.target.value,
+                                      },
+                                    })
+                                  }
+                                  placeholder={getExchangeFieldPlaceholder(
+                                    fieldConfig,
+                                    Boolean(editingId),
+                                  )}
+                                  className={className}
+                                />
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -1254,7 +1280,7 @@ export default function SettingsPage() {
                       onClick={() => {
                         setShowForm(false);
                         setEditingId(null);
-                        setForm(emptyForm);
+                        setForm(createEmptyAccountForm());
                         setFormError(null);
                       }}
                       className="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded-lg text-sm transition"
@@ -1284,7 +1310,7 @@ export default function SettingsPage() {
                 <button
                   onClick={() => {
                     setEditingId(null);
-                    setForm(emptyForm);
+                    setForm(createEmptyAccountForm());
                     setShowForm(true);
                     setFormError(null);
                   }}
@@ -1313,9 +1339,10 @@ export default function SettingsPage() {
                             </span>
                             <span className="text-xs px-2 py-0.5 rounded-full bg-slate-700 text-slate-300">
                               💱{" "}
-                              {account.tradingPlatform?.toUpperCase() || "OKX"}
+                              {account.tradingPlatform?.toUpperCase() ||
+                                DEFAULT_ACCOUNT_EXCHANGE_PROVIDER.toUpperCase()}
                             </span>
-                            {account.exchangeData?.simulated && (
+                            {Boolean(account.exchangeData?.simulated) && (
                               <span className="text-xs px-2 py-0.5 rounded-full bg-amber-700/50 text-amber-300">
                                 DEMO
                               </span>

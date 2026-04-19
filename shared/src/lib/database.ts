@@ -1,5 +1,6 @@
 import mongoose, { Schema, Document, models, Model } from "mongoose";
 import { SourceType } from "./enums";
+import type { ExchangeCredentialValues } from "./exchange/exchange-credentials";
 import { countTradeLogs, getRecentTradeLogs } from "./trade-log-store";
 
 // ─── Connection ────────────────────────────────────────────────────────────────
@@ -213,13 +214,7 @@ export interface IAccount extends Document {
   /** Trading platform: okx, mexc, paper, etc. */
   tradingPlatform?: string;
   /** Exchange-specific credentials (API key, secret, etc.) */
-  exchangeData?: {
-    apiKey?: string;
-    secretKey?: string;
-    passphrase?: string;
-    simulated?: boolean;
-    [key: string]: unknown;
-  };
+  exchangeData?: ExchangeCredentialValues;
 
   // ─── Health Status ─────────────────────────────────────────────
   lastFetchedAt?: Date;

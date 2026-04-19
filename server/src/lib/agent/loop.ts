@@ -112,7 +112,7 @@ const BASE_SYSTEM_PROMPT = `You are an intelligent trading assistant for a crypt
 - Always show prices with appropriate decimal places (round to 2 decimals, e.g., 62333.34 not 62333.333333)
 - When calculating or suggesting SL/TP prices, ALWAYS round to 2 decimal places
 
-The exchange is determined by the selected account's tradingPlatform, not by a global env variable. Symbols must match that exchange format (e.g., BTC-USDT-SWAP for OKX, BTCUSDT for Binance/Bybit/MEXC).`;
+The exchange is determined by the selected account's tradingPlatform, not by a global env variable. Symbols must match that exchange format (e.g., BTC-USDT-SWAP for OKX, BTCUSDT for Binance/Bybit/MEXC, XAUUSD or EURUSD for MetaTrader/broker symbols).`;
 
 function cloneMessages(messages: AgentChatMessage[]): AgentChatMessage[] {
   return JSON.parse(JSON.stringify(messages)) as AgentChatMessage[];

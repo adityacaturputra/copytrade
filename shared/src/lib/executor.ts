@@ -16,6 +16,7 @@ import { TradingSignal } from "./ai/types";
 import {
   ExchangeFactory,
   ExchangeCredentials,
+  buildExchangeCredentials,
 } from "./exchange/ExchangeFactory";
 import { calculateRiskBasedPosition, getRiskConfig } from "./risk";
 import { getSignalConfig } from "./signal-config";
@@ -535,11 +536,14 @@ export async function runSignalCheck(): Promise<{
                             pos.accountId,
                           ).lean();
                           if (acct?.exchangeData) {
-                            return ExchangeFactory.getClientForAccount({
-                              provider:
-                                (acct.tradingPlatform as any) || "paper",
-                              ...acct.exchangeData,
-                            });
+                            const creds = buildExchangeCredentials(
+                              acct.tradingPlatform,
+                              (acct.exchangeData as Record<string, unknown>) ||
+                                {},
+                            );
+                            if (creds) {
+                              return ExchangeFactory.getClientForAccount(creds);
+                            }
                           }
                         }
                         return ExchangeFactory.getPaperClient();
@@ -852,13 +856,14 @@ export async function executeTrade(
   if (accountId) {
     const account = await Account.findById(accountId).lean();
     if (account?.exchangeData) {
-      const creds: ExchangeCredentials = {
-        provider: (account.tradingPlatform as any) || "paper",
-        apiKey: account.exchangeData.apiKey,
-        secretKey: account.exchangeData.secretKey,
-        passphrase: account.exchangeData.passphrase,
-        simulated: account.exchangeData.simulated,
-      };
+      const creds =
+        buildExchangeCredentials(
+          account.tradingPlatform,
+          (account.exchangeData as Record<string, unknown>) || {},
+        ) ||
+        ({
+          provider: "paper",
+        } as ExchangeCredentials);
       exchange = ExchangeFactory.getClientForAccount(creds);
     } else {
       await logExecutorWarn(
@@ -1471,10 +1476,11 @@ export async function executeSignal(
           if (pos.accountId) {
             const acct = await Account.findById(pos.accountId).lean();
             if (acct?.exchangeData) {
-              return ExchangeFactory.getClientForAccount({
-                provider: (acct.tradingPlatform as any) || "paper",
-                ...acct.exchangeData,
-              });
+              const creds = buildExchangeCredentials(
+                acct.tradingPlatform,
+                (acct.exchangeData as Record<string, unknown>) || {},
+              );
+              if (creds) return ExchangeFactory.getClientForAccount(creds);
             }
           }
           return ExchangeFactory.getPaperClient();
@@ -1622,19 +1628,21 @@ export async function executeSignal(
           if (position.accountId) {
             const acct = await Account.findById(position.accountId).lean();
             if (acct?.exchangeData) {
-              return ExchangeFactory.getClientForAccount({
-                provider: (acct.tradingPlatform as any) || "paper",
-                ...acct.exchangeData,
-              });
+              const creds = buildExchangeCredentials(
+                acct.tradingPlatform,
+                (acct.exchangeData as Record<string, unknown>) || {},
+              );
+              if (creds) return ExchangeFactory.getClientForAccount(creds);
             }
           }
           if (accountId) {
             const acct = await Account.findById(accountId).lean();
             if (acct?.exchangeData) {
-              return ExchangeFactory.getClientForAccount({
-                provider: (acct.tradingPlatform as any) || "paper",
-                ...acct.exchangeData,
-              });
+              const creds = buildExchangeCredentials(
+                acct.tradingPlatform,
+                (acct.exchangeData as Record<string, unknown>) || {},
+              );
+              if (creds) return ExchangeFactory.getClientForAccount(creds);
             }
           }
           return null;

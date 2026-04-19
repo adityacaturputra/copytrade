@@ -7,6 +7,8 @@ import {
   ExchangeFactory,
   type ExchangeProvider,
   type ExchangeCredentials,
+  buildExchangeCredentials,
+  exchangeSupportsDirectAlgoCancel,
   normalizeExchangeProvider as normalizeSharedExchangeProvider,
 } from "@copytrade/shared/lib/exchange/ExchangeFactory";
 import type { ExchangeClient } from "@copytrade/shared/lib/exchange/types";
@@ -127,32 +129,16 @@ export function normalizeSourceType(value: unknown): SourceType | null {
 }
 
 export function toExchangeCredentials(account: AccountRecord): ExchangeCredentials {
-  const provider = normalizeExchangeProvider(account.tradingPlatform);
-  if (!provider) {
+  const credentials = buildExchangeCredentials(
+    account.tradingPlatform,
+    (account.exchangeData || {}) as Record<string, unknown>,
+  );
+  if (!credentials) {
     throw new Error(
       `Account "${account.name}" (${String(account._id)}) does not have a valid tradingPlatform`,
     );
   }
-
-  const exchangeData = (account.exchangeData || {}) as Record<string, unknown>;
-
-  return {
-    provider,
-    apiKey:
-      typeof exchangeData.apiKey === "string" ? exchangeData.apiKey : undefined,
-    secretKey:
-      typeof exchangeData.secretKey === "string"
-        ? exchangeData.secretKey
-        : undefined,
-    passphrase:
-      typeof exchangeData.passphrase === "string"
-        ? exchangeData.passphrase
-        : undefined,
-    simulated:
-      typeof exchangeData.simulated === "boolean"
-        ? exchangeData.simulated
-        : undefined,
-  };
+  return credentials;
 }
 
 export function getSourceConfigForAccount(account: AccountRecord): BaseSourceConfig {
@@ -216,8 +202,9 @@ export async function cancelAlgoOrdersByTypes(
   symbol: string,
   types: Array<"tp" | "sl" | "conditional">,
 ): Promise<{ cancelled: string[]; errors: string[] }> {
-  const supportsDirectAlgoCancel =
-    exchange.name === "bybit" || exchange.name === "binance";
+  const supportsDirectAlgoCancel = exchangeSupportsDirectAlgoCancel(
+    exchange.name,
+  );
 
   if (!supportsDirectAlgoCancel) {
     return exchange.cancelAlgoOrders(symbol);

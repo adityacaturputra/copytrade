@@ -10,7 +10,7 @@ import {
 } from "@copytrade/shared/lib/database";
 import {
   ExchangeFactory,
-  ExchangeCredentials,
+  buildExchangeCredentials,
 } from "@copytrade/shared/lib/exchange/ExchangeFactory";
 import { getRiskConfig } from "@copytrade/shared/lib/risk";
 import { getSignalConfig } from "@copytrade/shared/lib/signal-config";
@@ -56,7 +56,7 @@ export async function GET() {
         accountName: acct.name,
         sourceType: acct.sourceType || "discord",
         tradingPlatform: acct.tradingPlatform || "paper",
-        isDemo: acct.exchangeData?.simulated || false,
+        isDemo: Boolean(acct.exchangeData?.simulated),
         channelIds: acct.channelIds || [],
         account: null,
         exchangeError: null,
@@ -64,14 +64,13 @@ export async function GET() {
 
       if (acct.exchangeData) {
         try {
-          const creds: ExchangeCredentials = {
-            provider: (acct.tradingPlatform as any) || "paper",
-            apiKey: acct.exchangeData.apiKey,
-            secretKey: acct.exchangeData.secretKey,
-            passphrase: acct.exchangeData.passphrase,
-            simulated: acct.exchangeData.simulated,
-          };
-          const client = ExchangeFactory.getClientForAccount(creds);
+          const creds = buildExchangeCredentials(
+            acct.tradingPlatform,
+            (acct.exchangeData as Record<string, unknown>) || {},
+          );
+          const client = creds
+            ? ExchangeFactory.getClientForAccount(creds)
+            : ExchangeFactory.getPaperClient();
           const accountInfo = await client.getAccountInfo();
           info.account = accountInfo;
           accountExchangeMap.set(acct._id.toString(), { client, info });

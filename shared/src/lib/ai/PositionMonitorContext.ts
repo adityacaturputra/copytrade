@@ -1,10 +1,10 @@
 import { Account, Position } from "../database";
 import { SourceType } from "../enums";
 import {
-  ExchangeCredentials,
   ExchangeFactory,
-  normalizeExchangeProvider,
+  buildExchangeCredentials,
 } from "../exchange/ExchangeFactory";
+import type { ExchangeCredentialValues } from "../exchange/exchange-credentials";
 import { ExchangeClient } from "../exchange/types";
 import {
   PositionAnalysisInput,
@@ -44,12 +44,7 @@ interface MonitorAccountLike {
   _id: { toString(): string };
   name: string;
   sourceType?: string;
-  exchangeData?: {
-    apiKey?: string;
-    secretKey?: string;
-    passphrase?: string;
-    simulated?: boolean;
-  };
+  exchangeData?: ExchangeCredentialValues;
   sourceData?: {
     method?: "bot" | "user";
     token?: string;
@@ -75,16 +70,13 @@ function getExchangeForMonitorAccount(
   account: MonitorAccountLike | null,
 ): ExchangeClient {
   if (account?.exchangeData) {
-    const provider = normalizeExchangeProvider(account.tradingPlatform);
-    const credentials: ExchangeCredentials = {
-      provider: provider || "paper",
-      apiKey: account.exchangeData.apiKey,
-      secretKey: account.exchangeData.secretKey,
-      passphrase: account.exchangeData.passphrase,
-      simulated: account.exchangeData.simulated,
-    };
-
-    return ExchangeFactory.getClientForAccount(credentials);
+    const credentials = buildExchangeCredentials(
+      account.tradingPlatform,
+      account.exchangeData as Record<string, unknown>,
+    );
+    if (credentials) {
+      return ExchangeFactory.getClientForAccount(credentials);
+    }
   }
 
   return ExchangeFactory.getPaperClient();

@@ -1,8 +1,7 @@
 import { connectDB, Position, Account, IPosition } from "./database";
 import {
   ExchangeFactory,
-  ExchangeCredentials,
-  normalizeExchangeProvider,
+  buildExchangeCredentials,
 } from "./exchange/ExchangeFactory";
 import { ExchangeClient } from "./exchange/types";
 import { splitQuantityForTPs } from "./executor";
@@ -20,15 +19,11 @@ async function getExchangeForPosition(position: {
   if (position.accountId) {
     const account = await Account.findById(position.accountId).lean();
     if (account?.exchangeData) {
-      const provider = normalizeExchangeProvider(account.tradingPlatform);
-      const creds: ExchangeCredentials = {
-        provider: provider || "paper",
-        apiKey: account.exchangeData.apiKey,
-        secretKey: account.exchangeData.secretKey,
-        passphrase: account.exchangeData.passphrase,
-        simulated: account.exchangeData.simulated,
-      };
-      return ExchangeFactory.getClientForAccount(creds);
+      const creds = buildExchangeCredentials(
+        account.tradingPlatform,
+        account.exchangeData as Record<string, unknown>,
+      );
+      if (creds) return ExchangeFactory.getClientForAccount(creds);
     }
   }
   return ExchangeFactory.getPaperClient();

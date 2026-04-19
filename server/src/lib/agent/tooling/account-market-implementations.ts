@@ -5,6 +5,10 @@ import {
 } from "@copytrade/shared/lib/database";
 import type { ToolExecutor } from "./shared";
 import {
+  isPaperExchangeProvider,
+  validateExchangeCredentials,
+} from "@copytrade/shared/lib/exchange/ExchangeFactory";
+import {
   type AccountRecord,
   normalizeExchangeProvider,
   resolveExchangeContext,
@@ -24,14 +28,8 @@ export const accountMarketToolImplementations: Record<string, ToolExecutor> = {
         const provider = normalizeExchangeProvider(acc.tradingPlatform);
         const exchangeData = (acc.exchangeData || {}) as Record<string, unknown>;
         const hasCredentials =
-          provider === "paper"
-            ? true
-            : Boolean(
-                typeof exchangeData.apiKey === "string" &&
-                  exchangeData.apiKey &&
-                  typeof exchangeData.secretKey === "string" &&
-                  exchangeData.secretKey,
-              );
+          isPaperExchangeProvider(provider) ||
+          validateExchangeCredentials(provider, exchangeData).valid;
 
         return {
           accountId: String(acc._id),
