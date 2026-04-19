@@ -19,10 +19,10 @@
 
 import mongoose from "mongoose";
 import {
-  ExchangeFactory,
   normalizeExchangeProvider,
   type ExchangeProvider,
 } from "@copytrade/shared/lib/exchange/ExchangeFactory";
+import { resetExchangeAccountState } from "@copytrade/shared/lib/exchange/reset-account-state";
 import { Account } from "@copytrade/shared/lib/database";
 import { loadClientEnv } from "./load-env";
 
@@ -76,9 +76,6 @@ const PRESERVED_COLLECTIONS = [
 ];
 
 type ProviderResetHooks = {
-  cancelAlgoOrders?: (
-    exchangeData?: Record<string, unknown>,
-  ) => Promise<void>;
   resetDemoFunds?: () => Promise<void>;
   getDemoResetBlocker?: (options: { simulated: boolean }) => string | null;
 };
@@ -86,9 +83,6 @@ type ProviderResetHooks = {
 const PROVIDER_RESET_HOOKS: Partial<Record<ExchangeProvider, ProviderResetHooks>> =
   {
     okx: {
-      cancelAlgoOrders: async (exchangeData) => {
-        await cancelOkxAlgoOrders(exchangeData as OkxExchangeData | undefined);
-      },
       resetDemoFunds: resetOkxDemoFunds,
       getDemoResetBlocker: ({ simulated }) =>
         simulated
@@ -173,9 +167,9 @@ async function main() {
     console.log();
   }
 
-  // Step 2: Close Exchange Positions (iterate over DB accounts)
+  // Step 2: Reset Exchange State (iterate over DB accounts)
   if (!skipExchange && !resetFundsOnly) {
-    log(BOLD + "Step 2: Resetting Exchange Positions..." + CRESET);
+    log(BOLD + "Step 2: Resetting Exchange State..." + CRESET);
 
     try {
       // Re-connect to load accounts
@@ -186,76 +180,34 @@ async function main() {
       log("  Found " + accounts.length + " active accounts");
 
       if (accounts.length === 0) {
-        warn("  No active accounts with exchange credentials");
+        warn("  No active accounts to reset");
       } else {
         for (const acct of accounts) {
-          if (!acct.exchangeData) {
-            log('  Account "' + acct.name + '": no exchangeData, skipped');
-            continue;
-          }
           const provider =
             normalizeExchangeProvider(acct.tradingPlatform) || "paper";
-          const providerHooks = PROVIDER_RESET_HOOKS[provider];
           log('  Account "' + acct.name + '" (' + provider + "):");
 
           try {
-            const exchange = ExchangeFactory.getClientForAccount({
-              provider: provider as any,
-              ...acct.exchangeData,
-            });
+            const resetResult = await resetExchangeAccountState(
+              {
+                name: acct.name,
+                tradingPlatform: acct.tradingPlatform,
+                exchangeData:
+                  (acct.exchangeData as Record<string, unknown> | null) || null,
+              },
+              { dryRun },
+            );
 
-            log("    Fetching account info...");
-            try {
-              const info = await exchange.getAccountInfo();
-              log(
-                "    Balance: $" +
-                  info.totalBalance.toFixed(2) +
-                  " (available: $" +
-                  info.availableBalance.toFixed(2) +
-                  ")",
-              );
-            } catch {
-              warn("    Could not fetch account info");
-            }
+            const printer =
+              resetResult.status === "error"
+                ? error
+                : resetResult.status === "skipped"
+                  ? warn
+                  : success;
+            printer("    " + resetResult.message);
 
-            const positions = await exchange.getOpenPositions();
-            log("    Open positions: " + positions.length);
-            for (const pos of positions) {
-              log(
-                "      - " +
-                  pos.symbol +
-                  " " +
-                  pos.side +
-                  " | qty: " +
-                  pos.quantity +
-                  " | PnL: $" +
-                  pos.unrealizedPnl.toFixed(2),
-              );
-            }
-
-            if (positions.length === 0) {
-              success("    No open positions to close");
-            } else if (dryRun) {
-              warn(
-                "    [DRY] Would close " + positions.length + " position(s)",
-              );
-            } else {
-              const result = await exchange.closeAllPositions();
-              if (result.closed.length > 0)
-                success("    Closed: " + result.closed.join(", "));
-              if (result.errors.length > 0)
-                error("    Errors: " + result.errors.join(", "));
-            }
-
-            if (providerHooks?.cancelAlgoOrders) {
-              log("    Cancelling algo orders (TP/SL)...");
-              if (dryRun) {
-                warn("    [DRY] Would cancel all pending algo orders");
-              } else {
-                await providerHooks.cancelAlgoOrders(
-                  (acct.exchangeData || {}) as Record<string, unknown>,
-                );
-              }
+            for (const detail of resetResult.details) {
+              log("    " + detail);
             }
           } catch (err) {
             error(
@@ -321,64 +273,6 @@ async function main() {
   }
   console.log(BOLD + CYAN + "=".repeat(55) + CRESET);
   console.log();
-}
-
-// OKX Algo Order Cancellation
-type OkxExchangeData = {
-  apiKey?: string;
-  secretKey?: string;
-  passphrase?: string;
-  simulated?: boolean;
-};
-
-async function cancelOkxAlgoOrders(exchangeData?: OkxExchangeData) {
-  try {
-    const axios = (await import("axios")).default;
-    const CryptoJS = (await import("crypto-js")).default;
-    const apiKey = exchangeData?.apiKey || process.env.OKX_API_KEY;
-    const secretKey = exchangeData?.secretKey || process.env.OKX_SECRET_KEY;
-    const passphrase = exchangeData?.passphrase || process.env.OKX_PASSPHRASE;
-    if (!apiKey || !secretKey || !passphrase) {
-      warn("  OKX credentials not configured, skipping");
-      return;
-    }
-    const sk: string = secretKey;
-    const ak: string = apiKey;
-    const pp: string = passphrase;
-
-    const simulated =
-      exchangeData?.simulated ?? process.env.OKX_SIMULATED === "true";
-    const baseUrl = process.env.OKX_BASE_URL || "https://www.okx.com";
-    const timestamp = new Date().toISOString().replace(/\.\d{3}Z$/, ".000Z");
-    const method = "POST";
-    const requestPath = "/api/v5/trade/cancel-algos";
-    const body = JSON.stringify({ ordType: "conditional" });
-    const message = timestamp + method + requestPath + body;
-    const sign = CryptoJS.HmacSHA256(message, sk).toString(CryptoJS.enc.Base64);
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      "OK-ACCESS-KEY": ak,
-      "OK-ACCESS-SIGN": sign,
-      "OK-ACCESS-TIMESTAMP": timestamp,
-      "OK-ACCESS-PASSPHRASE": pp,
-    };
-    if (simulated) headers["x-simulated-trading"] = "1";
-
-    const response = await axios.post(baseUrl + requestPath, body, { headers });
-    const data = response.data;
-    if (data.code === "0") {
-      success("  Cancelled algo orders: " + JSON.stringify(data.data));
-    } else {
-      warn(
-        "  Algo order cancellation: " + (data.msg || "no pending algo orders"),
-      );
-    }
-  } catch (err) {
-    warn(
-      "  Could not cancel algo orders: " +
-        (err instanceof Error ? err.message : String(err)),
-    );
-  }
 }
 
 // OKX Demo Fund Reset

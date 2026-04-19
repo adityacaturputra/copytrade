@@ -1,10 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB, Account } from "@copytrade/shared/lib/database";
 import mongoose from "mongoose";
-import {
-  ExchangeFactory,
-  buildExchangeCredentials,
-} from "@copytrade/shared/lib/exchange/ExchangeFactory";
+import { resetExchangeAccountState } from "@copytrade/shared/lib/exchange/reset-account-state";
 
 export const dynamic = "force-dynamic";
 
@@ -91,54 +88,52 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // ─── Step 2: Close Exchange Positions (iterate all accounts) ─────────
+    // ─── Step 2: Reset Exchange State (cancel orders/algo, close positions) ─────
     if (!skipExchange) {
       try {
+        await connectDB();
         const accounts = await Account.find({ isActive: true }).lean();
 
         if (accounts.length === 0) {
           results.push({
             step: "Exchange",
             status: "skipped",
-            message: "No active accounts with exchange credentials",
+            message: "No active accounts to reset",
           });
         } else {
           const allDetails: string[] = [];
-          let totalClosed = 0;
+          let totalCancelledOrders = 0;
+          let totalCancelledAlgoOrders = 0;
+          let totalClosedPositions = 0;
           let totalErrors = 0;
 
           for (const account of accounts) {
-            if (!account.exchangeData) {
-              allDetails.push(
-                `Account "${account.name}": no exchangeData, skipped`,
-              );
-              continue;
-            }
-
             try {
-              const creds = buildExchangeCredentials(
-                account.tradingPlatform,
-                (account.exchangeData as Record<string, unknown>) || {},
-              );
-              const exchange = creds
-                ? ExchangeFactory.getClientForAccount(creds)
-                : ExchangeFactory.getPaperClient();
-              const positions = await exchange.getOpenPositions();
-              allDetails.push(
-                `Account "${account.name}" (${account.tradingPlatform}): ${positions.length} open positions`,
-              );
+              const resetResult = await resetExchangeAccountState({
+                name: account.name,
+                tradingPlatform: account.tradingPlatform,
+                exchangeData:
+                  (account.exchangeData as Record<string, unknown> | null) ||
+                  null,
+              });
 
-              if (positions.length > 0) {
-                const result = await exchange.closeAllPositions();
-                totalClosed += result.closed.length;
-                totalErrors += result.errors.length;
-                if (result.closed.length > 0) {
-                  allDetails.push(`  Closed: ${result.closed.join(", ")}`);
-                }
-                if (result.errors.length > 0) {
-                  allDetails.push(`  Errors: ${result.errors.join(", ")}`);
-                }
+              totalCancelledOrders += resetResult.cancelledOrders;
+              totalCancelledAlgoOrders += resetResult.cancelledAlgoOrders;
+              totalClosedPositions += resetResult.closedPositions;
+              if (resetResult.status === "error") {
+                totalErrors +=
+                  resetResult.orderCancelErrors +
+                  resetResult.algoCancelErrors +
+                  resetResult.positionCloseErrors ||
+                  1;
               }
+
+              allDetails.push(
+                `Account "${resetResult.accountName}" (${resetResult.provider}): ${resetResult.message}`,
+              );
+              allDetails.push(
+                ...resetResult.details.map((detail) => `  ${detail}`),
+              );
             } catch (err) {
               totalErrors++;
               allDetails.push(
@@ -150,7 +145,11 @@ export async function POST(request: NextRequest) {
           results.push({
             step: "Exchange",
             status: totalErrors > 0 ? "error" : "success",
-            message: `Closed ${totalClosed} positions across ${accounts.length} accounts`,
+            message:
+              `Reset ${accounts.length} account(s): ` +
+              `${totalCancelledOrders} order(s) cancelled, ` +
+              `${totalCancelledAlgoOrders} algo order(s) cancelled, ` +
+              `${totalClosedPositions} position(s) closed`,
             details: allDetails,
           });
         }
