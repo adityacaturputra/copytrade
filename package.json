@@ -11,6 +11,22 @@
     "build:client": "pnpm --filter copytrade build",
     "build:server": "pnpm --filter copytrade-backend build",
     "lint": "pnpm --filter @copytrade/shared build && pnpm --filter copytrade --filter copytrade-backend -r lint",
-    "typecheck": "pnpm --filter @copytrade/shared typecheck && pnpm --filter copytrade typecheck && pnpm --filter copytrade-backend lint"
+    "typecheck": "pnpm --filter @copytrade/shared typecheck && pnpm --filter copytrade typecheck && pnpm --filter copytrade-backend lint",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:unit": "vitest run $(find shared/src server/src -name '*.test.ts' ! -name '*.functional.test.ts' ! -name '*.integration.test.ts')",
+    "test:functional": "vitest run $(find server/src -name '*.functional.test.ts')",
+    "test:integration": "vitest run $(find shared/src server/src -name '*.integration.test.ts')",
+    "test:e2e:live": "vitest run $(find tests/live -name '*.live.test.ts')",
+    "test:coverage": "vitest run --coverage"
+  },
+  "devDependencies": {
+    "@types/supertest": "^6.0.3",
+    "@vitest/coverage-v8": "^3.2.4",
+    "dotenv": "^17.3.1",
+    "mongodb-memory-server": "^10.2.3",
+    "mongoose": "^8.20.1",
+    "supertest": "^7.1.4",
+    "vitest": "^3.2.4"
   }
 }

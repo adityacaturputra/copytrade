@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
 import {
   buildBulkSignalParserPrompt,
@@ -28,7 +28,7 @@ test("vision extraction prompt rejects charts that already ran through TP", () =
   const prompt = buildVisionExtractionPrompt();
 
   assert.match(prompt, /Freshness rules for chart images/i);
-  assert.match(prompt, /already above the final TP/i);
-  assert.match(prompt, /already below the final TP/i);
+  assert.match(prompt, /especially above the final TP/i);
+  assert.match(prompt, /especially below the final TP/i);
   assert.match(prompt, /not "new_entry"/i);
 });

@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
 import { BinanceExchange } from "./BinanceExchange";
 import { ExchangeOrderType, OrderSide } from "../enums";
@@ -120,9 +120,9 @@ test("conditional algo orders use MARKET_LOT_SIZE and price tick precision", asy
     path: string,
     params: RequestParams = {},
   ) => {
-    if (path === "/fapi/v1/algoOrder") {
+    if (path === "/fapi/v1/order") {
       payload = params;
-      return { algoId: "algo-1" };
+      return { orderId: "algo-1" };
     }
     return {};
   };
@@ -136,7 +136,7 @@ test("conditional algo orders use MARKET_LOT_SIZE and price tick precision", asy
   );
 
   assert.equal(payload?.quantity, "2");
-  assert.equal(payload?.triggerPrice, "65234.5");
+  assert.equal(payload?.stopPrice, "65234.5");
 });
 
 test("signed requests include payload in the Binance error message for DB logs", async () => {

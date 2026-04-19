@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
 import { inspectPendingLimitOrder } from "./pending-order-sync";
 import { ExchangeClient } from "./exchange/types";

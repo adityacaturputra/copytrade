@@ -24,6 +24,21 @@ export async function connectDB(): Promise<void> {
   }
 }
 
+export async function disconnectDB(): Promise<void> {
+  try {
+    if (mongoose.connection.readyState !== 0) {
+      await mongoose.disconnect();
+    }
+  } finally {
+    resetDBConnectionState();
+  }
+}
+
+export function resetDBConnectionState(): void {
+  isConnected = false;
+  processedMessageIndexesEnsured = false;
+}
+
 async function ensureProcessedMessageIndexes(): Promise<void> {
   if (processedMessageIndexesEnsured) return;
 
