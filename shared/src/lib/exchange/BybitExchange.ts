@@ -132,7 +132,9 @@ function getBybitBaseUrl(simulated: boolean): string {
   return (
     process.env.BYBIT_PROXY_URL ||
     (simulated
-      ? process.env.BYBIT_TESTNET_BASE_URL || "https://api-testnet.bybit.com"
+      ? process.env.BYBIT_DEMO_BASE_URL ||
+        process.env.BYBIT_TESTNET_BASE_URL ||
+        "https://api-demo.bybit.com"
       : process.env.BYBIT_BASE_URL || "https://api.bybit.com")
   );
 }
@@ -143,6 +145,8 @@ export class BybitExchange implements ExchangeClient {
   private readonly apiKey: string;
   private readonly secretKey: string;
   private readonly client: AxiosInstance;
+  private readonly simulated: boolean;
+  private readonly baseUrl: string;
   private readonly specsCache = new Map<
     string,
     { specs: InstrumentSpecs; ts: number }
@@ -151,8 +155,10 @@ export class BybitExchange implements ExchangeClient {
   constructor(apiKey: string, secretKey: string, simulated: boolean = false) {
     this.apiKey = apiKey.trim();
     this.secretKey = secretKey.trim();
+    this.simulated = simulated;
+    this.baseUrl = getBybitBaseUrl(simulated);
     this.client = axios.create({
-      baseURL: getBybitBaseUrl(simulated),
+      baseURL: this.baseUrl,
       timeout: 30000,
       headers: {
         "Content-Type": "application/json",
@@ -255,9 +261,19 @@ export class BybitExchange implements ExchangeClient {
         | undefined;
       const code =
         typeof data?.retCode === "number" ? ` code=${data.retCode}` : "";
+      const status =
+        typeof error.response?.status === "number"
+          ? ` status=${error.response.status}`
+          : "";
       const message = data?.retMsg || error.message || "Unknown Bybit error";
+      const environmentHint =
+        error.response?.status === 401
+          ? this.simulated
+            ? " | hint=Bybit demo keys must use api-demo.bybit.com. Testnet keys must use api-testnet.bybit.com."
+            : " | hint=Bybit production keys must use api.bybit.com."
+          : "";
       return new Error(
-        `[Bybit] ${context} failed${code}: ${message}${payloadSuffix}`,
+        `[Bybit] ${context} failed${status}${code}: ${message}${payloadSuffix} | baseUrl=${this.baseUrl}${environmentHint}`,
       );
     }
 
