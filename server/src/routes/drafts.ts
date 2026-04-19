@@ -71,14 +71,17 @@ router.post("/:id/accept", async (req: Request, res: Response) => {
   const startTime = Date.now();
   const requestId = `accept-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
   const lp = `[${requestId}]`;
+  const draftId = req.params.id;
+  let processId: string | undefined;
+  let accountId: string | undefined;
+  let symbol: string | undefined;
 
   console.log(`${lp} 📨 POST /api/drafts/:id/accept — request received`);
 
   try {
     await connectDB();
 
-    const id = req.params.id;
-    const draft = await DraftTrade.findById(id);
+    const draft = await DraftTrade.findById(draftId);
     if (!draft) {
       res.status(404).json({ success: false, error: "Draft not found" });
       return;
@@ -105,7 +108,9 @@ router.post("/:id/accept", async (req: Request, res: Response) => {
       return;
     }
 
-    const processId = draft.processId || createTradeProcessId("draftproc");
+    processId = draft.processId || createTradeProcessId("draftproc");
+    accountId = draft.accountId || undefined;
+    symbol = draft.symbol;
     if (!draft.processId) {
       draft.processId = processId;
       await draft.save();
@@ -206,10 +211,27 @@ router.post("/:id/accept", async (req: Request, res: Response) => {
   } catch (error) {
     const duration = Date.now() - startTime;
     const errorMessage = error instanceof Error ? error.message : String(error);
+
+    if (processId) {
+      await logProcessStep({
+        accountId,
+        processId,
+        type: "draft_process",
+        action: "manual_accept_failed",
+        symbol,
+        details: {
+          draftId,
+        },
+        result: "error",
+        error: errorMessage,
+      });
+    }
+
     console.error(`${lp} ❌ ${errorMessage} (${duration}ms)`);
     res.status(500).json({
       success: false,
       error: errorMessage,
+      processId: processId || null,
     });
   }
 });

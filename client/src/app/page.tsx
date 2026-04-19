@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { calculateRisk } from "@copytrade/shared/lib/risk-calc";
+import { buildBackendApiUrl } from "../lib/backend-url";
 
 // ==================== Types ====================
 
@@ -300,11 +301,16 @@ export default function Dashboard() {
   ) => {
     setActingDraft(draftId);
     try {
-      const res = await fetch(`/api/drafts/${draftId}/${action}`, {
-        method: "POST",
-        headers: extraBody ? { "Content-Type": "application/json" } : undefined,
-        body: extraBody ? JSON.stringify(extraBody) : undefined,
-      });
+      const res = await fetch(
+        buildBackendApiUrl(`/api/drafts/${draftId}/${action}`),
+        {
+          method: "POST",
+          headers: extraBody
+            ? { "Content-Type": "application/json" }
+            : undefined,
+          body: extraBody ? JSON.stringify(extraBody) : undefined,
+        },
+      );
       const json = await res.json();
       if (json.success) {
         const successMessage =
@@ -320,7 +326,10 @@ export default function Dashboard() {
         setRefreshKey((k) => k + 1);
         await fetchData();
       } else {
-        alert(`Failed: ${json.error}`);
+        setRefreshKey((k) => k + 1);
+        await fetchData();
+        const processSuffix = json.processId ? `\nProcess: ${json.processId}` : "";
+        alert(`Failed: ${json.error}${processSuffix}`);
       }
     } catch (err) {
       alert(`Error: ${err instanceof Error ? err.message : "Unknown"}`);
