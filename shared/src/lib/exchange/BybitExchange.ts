@@ -127,6 +127,16 @@ const BYBIT_SETTLE_COIN = "USDT";
 const BYBIT_ACCOUNT_TYPE = "UNIFIED";
 const BYBIT_RECV_WINDOW = "10000";
 const SPECS_CACHE_TTL = 30 * 60 * 1000;
+const BYBIT_MARGIN_MODE = {
+  isolated: {
+    account: "ISOLATED_MARGIN",
+    tradeMode: 1,
+  },
+  cross: {
+    account: "REGULAR_MARGIN",
+    tradeMode: 0,
+  },
+} as const;
 
 function getBybitBaseUrl(simulated: boolean): string {
   return (
@@ -469,6 +479,77 @@ export class BybitExchange implements ExchangeClient {
     );
   }
 
+  private isIgnorableMarginModeError(message: string): boolean {
+    const normalized = message.toLowerCase();
+
+    return (
+      normalized.includes("not modified") ||
+      normalized.includes("has not been modified") ||
+      normalized.includes("margin mode is not modified") ||
+      normalized.includes("position mode is not modified") ||
+      normalized.includes("same tp sl mode") ||
+      normalized.includes("not applicable") ||
+      normalized.includes("not supported") ||
+      normalized.includes("uta2.0") ||
+      normalized.includes("uta 2.0")
+    );
+  }
+
+  private async ensureAccountMarginMode(
+    marginType: "isolated" | "cross",
+  ): Promise<void> {
+    try {
+      await this.signedRequest(
+        "POST",
+        "/v5/account/set-margin-mode",
+        {
+          setMarginMode: BYBIT_MARGIN_MODE[marginType].account,
+        },
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (this.isIgnorableMarginModeError(message)) {
+        return;
+      }
+      throw error;
+    }
+  }
+
+  private async ensureSymbolMarginMode(
+    symbol: string,
+    leverage: number,
+    marginType: "isolated" | "cross",
+  ): Promise<void> {
+    try {
+      await this.signedRequest(
+        "POST",
+        "/v5/position/switch-isolated",
+        {
+          category: BYBIT_LINEAR_CATEGORY,
+          symbol,
+          tradeMode: BYBIT_MARGIN_MODE[marginType].tradeMode,
+          buyLeverage: String(leverage),
+          sellLeverage: String(leverage),
+        },
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (this.isIgnorableMarginModeError(message)) {
+        return;
+      }
+      throw error;
+    }
+  }
+
+  private async ensureMarginMode(
+    symbol: string,
+    leverage: number,
+    marginType: "isolated" | "cross",
+  ): Promise<void> {
+    await this.ensureAccountMarginMode(marginType);
+    await this.ensureSymbolMarginMode(symbol, leverage, marginType);
+  }
+
   private async placeConditionalCloseOrder(
     type: "tp" | "sl",
     symbol: string,
@@ -808,13 +889,18 @@ export class BybitExchange implements ExchangeClient {
   async setLeverage(
     symbol: string,
     leverage: number,
-    _marginType: "isolated" | "cross" = "isolated",
+    marginType: "isolated" | "cross" = "isolated",
     _side?: "BUY" | "SELL",
   ): Promise<number> {
     const normalized = this.toSymbol(symbol);
     const requestedLeverage = Math.max(1, Math.floor(leverage));
 
     try {
+      await this.ensureMarginMode(
+        normalized,
+        requestedLeverage,
+        marginType,
+      );
       await this.signedRequest(
         "POST",
         "/v5/position/set-leverage",
