@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import mongoose from "mongoose";
 import { connectDB, Account, DiscordSource } from "@copytrade/shared/lib/database";
 import { SourceType } from "@copytrade/shared/lib/enums";
 import type { ExchangeCredentialValues } from "@copytrade/shared/lib/exchange/exchange-credentials";
@@ -17,9 +18,20 @@ type AccountUpdateInput = {
   channelIds?: string[];
   channelNames?: Record<string, string>;
   disabledChannelIds?: string[];
+  duplicateFromId?: string;
   tradingPlatform?: unknown;
   sourceData?: Record<string, unknown>;
   exchangeData?: ExchangeCredentialValues;
+};
+
+type DuplicateSourceAccount = {
+  _id: unknown;
+  name: string;
+  sourceType?: string;
+  sourceData?: Record<string, unknown> | null;
+  tradingPlatform?: string | null;
+  exchangeData?: Record<string, unknown> | null;
+  disabledChannelIds?: string[];
 };
 
 function isMaskedValue(value: unknown): boolean {
@@ -135,6 +147,96 @@ function applyAccountUpdates(
   }
 }
 
+function validateSourceConfiguration(
+  sourceType: unknown,
+  sourceData?: Record<string, unknown> | null,
+): string | null {
+  const data = sourceData || {};
+
+  if (sourceType === "discord") {
+    if (!data.token) return "Discord token is required";
+    if (!data.method) return "Discord method (bot/user) is required";
+  }
+
+  if (sourceType === "telegram" && !data.botToken) {
+    return "Telegram bot token is required";
+  }
+
+  return null;
+}
+
+async function getDuplicateSourceAccount(
+  duplicateFromId: unknown,
+): Promise<DuplicateSourceAccount | null> {
+  if (typeof duplicateFromId !== "string" || duplicateFromId.trim().length === 0) {
+    return null;
+  }
+
+  if (!mongoose.Types.ObjectId.isValid(duplicateFromId.trim())) {
+    return null;
+  }
+
+  const account = await Account.findById(duplicateFromId.trim()).lean();
+  return account as DuplicateSourceAccount | null;
+}
+
+function shouldInheritSourceData(
+  sourceAccount: DuplicateSourceAccount | null,
+  sourceType: unknown,
+): boolean {
+  return Boolean(sourceAccount && sourceAccount.sourceType === sourceType);
+}
+
+function shouldInheritExchangeData(
+  sourceAccount: DuplicateSourceAccount | null,
+  tradingPlatform: unknown,
+): boolean {
+  if (!sourceAccount) return false;
+
+  return (
+    resolveAccountTradingPlatform(sourceAccount.tradingPlatform, undefined) ===
+    resolveAccountTradingPlatform(undefined, tradingPlatform)
+  );
+}
+
+function buildSourceDataForCreate(
+  sourceAccount: DuplicateSourceAccount | null,
+  sourceType: unknown,
+  sourceData: unknown,
+) {
+  return mergePersistedConfig(
+    shouldInheritSourceData(sourceAccount, sourceType)
+      ? sourceAccount?.sourceData
+      : null,
+    sourceData,
+  );
+}
+
+function buildExchangeDataForCreate(
+  sourceAccount: DuplicateSourceAccount | null,
+  tradingPlatform: unknown,
+  exchangeData: unknown,
+) {
+  return mergePersistedConfig(
+    shouldInheritExchangeData(sourceAccount, tradingPlatform)
+      ? sourceAccount?.exchangeData
+      : null,
+    exchangeData,
+  );
+}
+
+function buildDisabledChannelIdsForCreate(
+  sourceAccount: DuplicateSourceAccount | null,
+  channelIds: string[],
+) {
+  if (!sourceAccount?.disabledChannelIds?.length) return [];
+
+  const activeChannelIds = new Set(channelIds);
+  return sourceAccount.disabledChannelIds.filter((channelId) =>
+    activeChannelIds.has(channelId),
+  );
+}
+
 // ─── GET /api/accounts ─────────────────────────────────────────────────────
 export async function GET() {
   try {
@@ -152,6 +254,9 @@ export async function GET() {
           : undefined,
         refreshToken: acc.sourceData?.refreshToken
           ? "••••••••" + String(acc.sourceData.refreshToken).slice(-4)
+          : undefined,
+        botToken: acc.sourceData?.botToken
+          ? "••••••••" + String(acc.sourceData.botToken).slice(-4)
           : undefined,
       },
       exchangeData: {
@@ -184,6 +289,7 @@ export async function POST(req: NextRequest) {
       sourceData,
       channelIds,
       channelNames,
+      duplicateFromId,
       tradingPlatform,
       exchangeData,
     } = body;
@@ -220,26 +326,39 @@ export async function POST(req: NextRequest) {
       DEFAULT_EXCHANGE_PROVIDER,
       tradingPlatform,
     );
+    const duplicateSourceAccount = await getDuplicateSourceAccount(duplicateFromId);
+    if (duplicateFromId && !duplicateSourceAccount) {
+      return NextResponse.json(
+        { success: false, error: "Source account for duplication not found" },
+        { status: 404 },
+      );
+    }
 
-    // Validate source credentials based on type
-    if (sourceType === "discord") {
-      if (!sourceData?.token) {
-        return NextResponse.json(
-          { success: false, error: "Discord token is required" },
-          { status: 400 },
-        );
-      }
-      if (!sourceData?.method) {
-        return NextResponse.json(
-          { success: false, error: "Discord method (bot/user) is required" },
-          { status: 400 },
-        );
-      }
+    const mergedSourceData = buildSourceDataForCreate(
+      duplicateSourceAccount,
+      sourceType,
+      sourceData,
+    );
+    const mergedExchangeData = buildExchangeDataForCreate(
+      duplicateSourceAccount,
+      provider,
+      exchangeData,
+    );
+
+    const sourceValidationError = validateSourceConfiguration(
+      sourceType,
+      mergedSourceData,
+    );
+    if (sourceValidationError) {
+      return NextResponse.json(
+        { success: false, error: sourceValidationError },
+        { status: 400 },
+      );
     }
 
     const exchangeValidation = validateExchangeCredentials(
       provider,
-      (exchangeData as Record<string, unknown>) || {},
+      mergedExchangeData,
     );
     if (!exchangeValidation.valid) {
       return NextResponse.json(
@@ -252,12 +371,17 @@ export async function POST(req: NextRequest) {
       name,
       isActive: true,
       sourceType,
-      sourceData: sourceData || {},
+      sourceData: mergedSourceData,
       channelIds,
       channelNames: channelNames || {},
-      disabledChannelIds: [],
+      disabledChannelIds: buildDisabledChannelIdsForCreate(
+        duplicateSourceAccount,
+        channelIds,
+      ),
       tradingPlatform: provider,
-      exchangeData: exchangeData || null,
+      exchangeData: Object.keys(mergedExchangeData).length
+        ? mergedExchangeData
+        : null,
     });
 
     console.log(

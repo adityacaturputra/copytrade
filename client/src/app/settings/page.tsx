@@ -62,6 +62,7 @@ interface ChannelEntry {
 }
 
 interface AccountFormData {
+  duplicateFromId: string | null;
   name: string;
   sourceType: string;
   // Discord
@@ -80,6 +81,7 @@ interface AccountFormData {
 }
 
 const emptyForm: AccountFormData = {
+  duplicateFromId: null,
   name: "",
   sourceType: "discord",
   method: "bot",
@@ -180,6 +182,9 @@ export default function SettingsPage() {
   >({});
   const [checkingHealth, setCheckingHealth] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [openAccountMenuId, setOpenAccountMenuId] = useState<string | null>(
+    null,
+  );
 
   // ─── Risk state ───────────────────────────────────────────
   const [riskConfig, setRiskConfigState] =
@@ -390,6 +395,20 @@ export default function SettingsPage() {
     fetchCronSettings();
   }, [fetchAccounts, fetchSettings, fetchProxies, fetchCronSettings]);
 
+  useEffect(() => {
+    if (!openAccountMenuId) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (target.closest("[data-account-actions-menu]")) return;
+      setOpenAccountMenuId(null);
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [openAccountMenuId]);
+
   // ─── Account handlers ─────────────────────────────────────
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -413,13 +432,23 @@ export default function SettingsPage() {
       return;
     }
 
-    if (form.sourceType === "discord" && !editingId && !form.token) {
+    if (
+      form.sourceType === "discord" &&
+      !editingId &&
+      !form.duplicateFromId &&
+      !form.token
+    ) {
       setFormError("Discord token is required for new accounts.");
       setSaving(false);
       return;
     }
 
-    if (form.sourceType === "telegram" && !editingId && !form.botToken) {
+    if (
+      form.sourceType === "telegram" &&
+      !editingId &&
+      !form.duplicateFromId &&
+      !form.botToken
+    ) {
       setFormError("Telegram bot token is required for new accounts.");
       setSaving(false);
       return;
@@ -435,7 +464,7 @@ export default function SettingsPage() {
       valid: boolean;
       error?: string;
     } =
-      !editingId && exchangeConfig
+      !editingId && !form.duplicateFromId && exchangeConfig
         ? validateExchangeCredentials(form.tradingPlatform, exchangeDataPreview)
         : { valid: true };
 
@@ -464,11 +493,12 @@ export default function SettingsPage() {
         form.exchangeIsDemo,
       );
 
-      const body = {
-        id: editingId || undefined,
-        name: form.name,
-        sourceType: form.sourceType,
-        sourceData,
+    const body = {
+      id: editingId || undefined,
+      duplicateFromId: editingId ? undefined : form.duplicateFromId || undefined,
+      name: form.name,
+      sourceType: form.sourceType,
+      sourceData,
         channelIds: channelIdsArray,
         channelNames: channelNamesMap,
         tradingPlatform: form.tradingPlatform,
@@ -501,6 +531,7 @@ export default function SettingsPage() {
     const sourceChannelNames = account.channelNames || {};
     setEditingId(account._id);
     setForm({
+      duplicateFromId: null,
       name: account.name,
       sourceType: account.sourceType || "discord",
       // Discord fields
@@ -524,6 +555,42 @@ export default function SettingsPage() {
     });
     setShowForm(true);
     setFormError(null);
+  };
+
+  const handleDuplicate = (account: AccountData) => {
+    const sourceChannelNames = account.channelNames || {};
+    setEditingId(null);
+    setForm({
+      duplicateFromId: account._id,
+      name: `${account.name} Copy`,
+      sourceType: account.sourceType || "discord",
+      method: (account.sourceData?.method as string) || "bot",
+      token: "",
+      refreshToken: "",
+      autoRefresh: (account.sourceData?.autoRefresh as boolean) ?? true,
+      botToken: "",
+      channels: account.channelIds.map((cid: string) => ({
+        id: cid,
+        name: sourceChannelNames[cid] || "",
+      })),
+      tradingPlatform: resolveAccountFormTradingPlatform(
+        account.tradingPlatform,
+      ),
+      exchangeValues: buildExchangeFormValues(account.exchangeData),
+      exchangeIsDemo: getExchangeSimulationValue(account.exchangeData),
+    });
+    setShowForm(true);
+    setFormError(null);
+  };
+
+  const toggleAccountActionsMenu = (accountId: string) => {
+    setOpenAccountMenuId((currentId) =>
+      currentId === accountId ? null : accountId,
+    );
+  };
+
+  const closeAccountActionsMenu = () => {
+    setOpenAccountMenuId(null);
   };
 
   const handleDelete = async (id: string) => {
@@ -903,8 +970,18 @@ export default function SettingsPage() {
             {showForm && (
               <div className="card border-primary-700/50">
                 <h3 className="text-lg font-semibold mb-4">
-                  {editingId ? "✏️ Edit Account" : "➕ Add New Account"}
+                  {editingId
+                    ? "✏️ Edit Account"
+                    : form.duplicateFromId
+                      ? "🧬 Duplicate Account"
+                      : "➕ Add New Account"}
                 </h3>
+                {form.duplicateFromId && !editingId && (
+                  <p className="text-xs text-slate-400 mb-4">
+                    Source token and exchange credentials will be reused from the
+                    original account unless you paste new values here.
+                  </p>
+                )}
                 <form onSubmit={handleSubmit} className="space-y-5">
                   {/* ── Basic Info ── */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1271,6 +1348,8 @@ export default function SettingsPage() {
                         </span>
                       ) : editingId ? (
                         "💾 Update Account"
+                      ) : form.duplicateFromId ? (
+                        "🧬 Create Duplicate"
                       ) : (
                         "✅ Create Account"
                       )}
@@ -1422,38 +1501,79 @@ export default function SettingsPage() {
                         </div>
 
                         {/* Actions */}
-                        <div className="flex items-center gap-1.5 shrink-0">
+                        <div
+                          className="relative shrink-0"
+                          data-account-actions-menu
+                        >
                           <button
-                            onClick={() => checkHealth(account._id)}
-                            disabled={checkingHealth !== null}
-                            className="text-slate-400 hover:text-emerald-400 transition p-1.5"
-                            title="Check health"
+                            type="button"
+                            onClick={() => toggleAccountActionsMenu(account._id)}
+                            className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-700 bg-slate-800 text-slate-300 transition hover:border-slate-600 hover:bg-slate-700 hover:text-white"
+                            title="Account actions"
+                            aria-haspopup="menu"
+                            aria-expanded={openAccountMenuId === account._id}
                           >
-                            {checkingHealth === account._id ? (
-                              <div className="spinner w-4 h-4 border-2" />
-                            ) : (
-                              "🩺"
-                            )}
+                            ⋯
                           </button>
-                          <button
-                            onClick={() => handleEdit(account)}
-                            className="text-slate-400 hover:text-white transition p-1.5"
-                            title="Edit"
-                          >
-                            ✏️
-                          </button>
-                          <button
-                            onClick={() => handleDelete(account._id)}
-                            disabled={deleting === account._id}
-                            className="text-slate-400 hover:text-red-400 transition p-1.5"
-                            title="Delete"
-                          >
-                            {deleting === account._id ? (
-                              <div className="spinner w-4 h-4 border-2" />
-                            ) : (
-                              "🗑️"
-                            )}
-                          </button>
+
+                          {openAccountMenuId === account._id && (
+                            <div className="absolute right-0 top-11 z-20 min-w-44 overflow-hidden rounded-xl border border-slate-700 bg-slate-900/95 p-1.5 shadow-2xl backdrop-blur">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  closeAccountActionsMenu();
+                                  void checkHealth(account._id);
+                                }}
+                                disabled={checkingHealth !== null}
+                                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-slate-200 transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {checkingHealth === account._id ? (
+                                  <div className="spinner h-4 w-4 border-2" />
+                                ) : (
+                                  <span>🩺</span>
+                                )}
+                                <span>Check Health</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  closeAccountActionsMenu();
+                                  handleDuplicate(account);
+                                }}
+                                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-slate-200 transition hover:bg-slate-800"
+                              >
+                                <span>🧬</span>
+                                <span>Duplicate</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  closeAccountActionsMenu();
+                                  handleEdit(account);
+                                }}
+                                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-slate-200 transition hover:bg-slate-800"
+                              >
+                                <span>✏️</span>
+                                <span>Edit</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  closeAccountActionsMenu();
+                                  void handleDelete(account._id);
+                                }}
+                                disabled={deleting === account._id}
+                                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-red-300 transition hover:bg-red-950/40 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {deleting === account._id ? (
+                                  <div className="spinner h-4 w-4 border-2" />
+                                ) : (
+                                  <span>🗑️</span>
+                                )}
+                                <span>Delete</span>
+                              </button>
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
