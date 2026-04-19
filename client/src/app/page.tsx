@@ -394,9 +394,51 @@ export default function Dashboard() {
     selectedAccountId !== "all"
       ? data?.accounts?.find((a) => a.accountId === selectedAccountId) || null
       : null;
-  const displayAccountInfo = displayAccount?.account || data?.account || null;
-  const displayExchangeError =
-    displayAccount?.exchangeError || data?.exchangeError || null;
+  const visibleExchangeAccounts =
+    selectedAccountId === "all"
+      ? data?.accounts || []
+      : displayAccount
+        ? [displayAccount]
+        : [];
+  const displayAccountInfo = displayAccount?.account || null;
+  const displayExchangeError = displayAccount?.exchangeError || null;
+  const hasVisibleExchangeConnection = visibleExchangeAccounts.some(
+    (account) => account.account !== null,
+  );
+  const connectedExchangeAccounts = visibleExchangeAccounts.filter(
+    (account) => account.account !== null,
+  );
+  const demoExchangeAccounts = visibleExchangeAccounts.filter(
+    (account) => account.isDemo,
+  );
+  const visibleBalanceTotals = connectedExchangeAccounts.reduce<
+    Record<string, { totalBalance: number; availableBalance: number }>
+  >((accumulator, account) => {
+    const currency = account.account?.currency || "UNKNOWN";
+
+    if (!accumulator[currency]) {
+      accumulator[currency] = {
+        totalBalance: 0,
+        availableBalance: 0,
+      };
+    }
+
+    accumulator[currency].totalBalance += account.account?.totalBalance || 0;
+    accumulator[currency].availableBalance +=
+      account.account?.availableBalance || 0;
+
+    return accumulator;
+  }, {});
+  const visibleBalanceTotalEntries = Object.entries(visibleBalanceTotals);
+  const exchangeHeaderLabel =
+    selectedAccountId === "all"
+      ? visibleExchangeAccounts.length > 0
+        ? "MULTI ACCOUNT"
+        : (data?.exchangeProvider || "unknown").toUpperCase()
+      : (displayAccount?.tradingPlatform ||
+          data?.exchangeProvider ||
+          "unknown"
+        ).toUpperCase();
   const openPositions =
     data?.openPositions?.filter(
       (pos) =>
@@ -611,59 +653,218 @@ export default function Dashboard() {
 
         {/* Exchange Connection Status */}
         <div
-          className={`rounded-lg px-3 sm:px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 ${
-            data?.account
-              ? "bg-slate-800/50 border border-slate-700"
-              : "bg-red-900/30 border border-red-700/50"
+          className={`rounded-xl px-3 sm:px-4 py-3.5 sm:py-4 ${
+            hasVisibleExchangeConnection
+              ? "border border-slate-700 bg-slate-800/50"
+              : "border border-red-700/50 bg-red-900/30"
           }`}
         >
-          <div className="flex items-center justify-between sm:justify-start gap-2">
-            <div className="flex items-center gap-2">
-              <span
-                className={`w-3 h-3 rounded-full shrink-0 ${data?.account ? "bg-green-500 pulse-dot" : "bg-red-500 animate-pulse"}`}
-              />
-              <span className="text-sm font-medium">
-                Exchange:{" "}
-                <span className="text-white uppercase">
-                  {data?.exchangeProvider || "unknown"}
-                </span>
-              </span>
-            </div>
-            {data?.exchangeProvider === "okx" && (
-              <span className="badge badge-warning sm:ml-0">DEMO MODE</span>
-            )}
-          </div>
-          {displayAccountInfo ? (
-            <div className="flex flex-wrap items-center gap-2 sm:gap-4 sm:ml-4 text-xs sm:text-sm">
-              <span>
-                Balance:{" "}
-                <span className="text-white font-mono font-bold">
-                  {displayAccountInfo.totalBalance?.toFixed(2)}{" "}
-                  {displayAccountInfo.currency}
-                </span>
-              </span>
-              <span>
-                Available:{" "}
-                <span className="text-white font-mono">
-                  {displayAccountInfo.availableBalance?.toFixed(2)}
-                </span>
-              </span>
-              {displayAccountInfo.unrealizedPnl !== 0 && (
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div className="flex min-w-0 items-start gap-3">
                 <span
-                  className={
-                    displayAccountInfo.unrealizedPnl >= 0
-                      ? "text-success"
-                      : "text-danger"
-                  }
-                >
-                  PnL: {displayAccountInfo.unrealizedPnl >= 0 ? "+" : ""}
-                  {displayAccountInfo.unrealizedPnl?.toFixed(2)}
-                </span>
-              )}
+                  className={`mt-1 h-3 w-3 shrink-0 rounded-full ${hasVisibleExchangeConnection ? "bg-green-500 pulse-dot" : "bg-red-500 animate-pulse"}`}
+                />
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                      Exchange Overview
+                    </span>
+                    <span className="rounded-full border border-slate-700 bg-slate-900/70 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-200">
+                      {exchangeHeaderLabel}
+                    </span>
+                    {displayAccount?.isDemo && (
+                      <span className="badge badge-warning">Demo Mode</span>
+                    )}
+                  </div>
+                  <p className="mt-1 text-sm text-slate-300">
+                    {selectedAccountId === "all"
+                      ? `${visibleExchangeAccounts.length} trading account${visibleExchangeAccounts.length === 1 ? "" : "s"} visible`
+                      : displayAccount
+                        ? `${displayAccount.accountName} • ${displayAccount.tradingPlatform.toUpperCase()}`
+                        : "No account selected"}
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-lg border border-slate-700/70 bg-slate-900/60 px-3 py-2">
+                  <div className="text-[11px] uppercase tracking-wide text-slate-500">
+                    Connected
+                  </div>
+                  <div className="mt-1 text-sm font-semibold text-white">
+                    {connectedExchangeAccounts.length}/{visibleExchangeAccounts.length}
+                  </div>
+                </div>
+                <div className="rounded-lg border border-slate-700/70 bg-slate-900/60 px-3 py-2">
+                  <div className="text-[11px] uppercase tracking-wide text-slate-500">
+                    Demo Accounts
+                  </div>
+                  <div className="mt-1 text-sm font-semibold text-white">
+                    {demoExchangeAccounts.length}
+                  </div>
+                </div>
+                {visibleBalanceTotalEntries.map(([currency, totals]) => (
+                  <div
+                    key={currency}
+                    className="rounded-lg border border-slate-700/70 bg-slate-900/60 px-3 py-2"
+                  >
+                    <div className="text-[11px] uppercase tracking-wide text-slate-500">
+                      Total Balance {currency}
+                    </div>
+                    <div className="mt-1 text-sm font-semibold text-white">
+                      {totals.totalBalance.toFixed(2)}
+                    </div>
+                    <div className="text-xs text-slate-400">
+                      Avail. {totals.availableBalance.toFixed(2)}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
-          ) : (
-            <div className="sm:ml-4 text-xs sm:text-sm">
-              <span className="text-red-300">
+
+            {selectedAccountId === "all" && visibleExchangeAccounts.length > 0 ? (
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {visibleExchangeAccounts.map((account) => (
+                  <div
+                    key={account.accountId}
+                    className="rounded-xl border border-slate-700/70 bg-slate-950/40 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-base font-semibold text-white">
+                          {account.accountName}
+                        </div>
+                        <div className="mt-1 flex flex-wrap items-center gap-2">
+                          <span className="text-[11px] uppercase tracking-[0.16em] text-slate-500">
+                            {account.tradingPlatform}
+                          </span>
+                          <span className="text-[11px] uppercase tracking-[0.16em] text-slate-600">
+                            {account.sourceType}
+                          </span>
+                        </div>
+                      </div>
+                      {account.isDemo && (
+                        <span className="badge badge-warning">Demo Mode</span>
+                      )}
+                    </div>
+
+                    {account.account ? (
+                      <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                        <div className="rounded-lg bg-slate-900/70 px-3 py-2">
+                          <div className="text-[11px] uppercase tracking-wide text-slate-500">
+                            Balance
+                          </div>
+                          <div className="mt-1 font-mono text-lg font-semibold text-white">
+                            {account.account.totalBalance.toFixed(2)}
+                          </div>
+                          <div className="text-xs text-slate-400">
+                            {account.account.currency}
+                          </div>
+                        </div>
+                        <div className="rounded-lg bg-slate-900/70 px-3 py-2">
+                          <div className="text-[11px] uppercase tracking-wide text-slate-500">
+                            Available
+                          </div>
+                          <div className="mt-1 font-mono text-lg font-semibold text-white">
+                            {account.account.availableBalance.toFixed(2)}
+                          </div>
+                          <div className="text-xs text-slate-400">
+                            Free margin
+                          </div>
+                        </div>
+                        <div className="rounded-lg bg-slate-900/70 px-3 py-2">
+                          <div className="text-[11px] uppercase tracking-wide text-slate-500">
+                            Unrealized PnL
+                          </div>
+                          <div
+                            className={`mt-1 font-mono text-lg font-semibold ${
+                              account.account.unrealizedPnl >= 0
+                                ? "text-emerald-400"
+                                : "text-rose-400"
+                            }`}
+                          >
+                            {account.account.unrealizedPnl >= 0 ? "+" : ""}
+                            {account.account.unrealizedPnl.toFixed(2)}
+                          </div>
+                          <div className="text-xs text-slate-400">
+                            Live exchange
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="mt-4 rounded-lg border border-red-900/40 bg-red-950/20 px-3 py-2 text-sm text-red-300">
+                        ⚠️{" "}
+                        {account.exchangeError || "Failed to load exchange balance."}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : displayAccountInfo ? (
+              <div className="rounded-xl border border-slate-700/70 bg-slate-950/40 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="text-base font-semibold text-white">
+                      {displayAccount?.accountName || "Selected Account"}
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                      <span className="text-[11px] uppercase tracking-[0.16em] text-slate-500">
+                        {displayAccount?.tradingPlatform || exchangeHeaderLabel}
+                      </span>
+                      {displayAccount?.sourceType && (
+                        <span className="text-[11px] uppercase tracking-[0.16em] text-slate-600">
+                          {displayAccount.sourceType}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  {displayAccount?.isDemo && (
+                    <span className="badge badge-warning">Demo Mode</span>
+                  )}
+                </div>
+
+                <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                  <div className="rounded-lg bg-slate-900/70 px-3 py-2">
+                    <div className="text-[11px] uppercase tracking-wide text-slate-500">
+                      Balance
+                    </div>
+                    <div className="mt-1 font-mono text-lg font-semibold text-white">
+                      {displayAccountInfo.totalBalance?.toFixed(2)}
+                    </div>
+                    <div className="text-xs text-slate-400">
+                      {displayAccountInfo.currency}
+                    </div>
+                  </div>
+                  <div className="rounded-lg bg-slate-900/70 px-3 py-2">
+                    <div className="text-[11px] uppercase tracking-wide text-slate-500">
+                      Available
+                    </div>
+                    <div className="mt-1 font-mono text-lg font-semibold text-white">
+                      {displayAccountInfo.availableBalance?.toFixed(2)}
+                    </div>
+                    <div className="text-xs text-slate-400">Free margin</div>
+                  </div>
+                  <div className="rounded-lg bg-slate-900/70 px-3 py-2">
+                    <div className="text-[11px] uppercase tracking-wide text-slate-500">
+                      Unrealized PnL
+                    </div>
+                    <div
+                      className={`mt-1 font-mono text-lg font-semibold ${
+                        displayAccountInfo.unrealizedPnl >= 0
+                          ? "text-emerald-400"
+                          : "text-rose-400"
+                      }`}
+                    >
+                      {displayAccountInfo.unrealizedPnl >= 0 ? "+" : ""}
+                      {displayAccountInfo.unrealizedPnl?.toFixed(2)}
+                    </div>
+                    <div className="text-xs text-slate-400">Live exchange</div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-lg border border-red-900/40 bg-red-950/20 px-3 py-2 text-sm text-red-300">
                 ⚠️{" "}
                 {displayExchangeError?.toLowerCase().includes("ip whitelist")
                   ? `Your IP is not in the OKX API key whitelist. Go to OKX → Profile → API Management → Edit your key → Add your current IP or disable IP restriction.`
@@ -674,9 +875,9 @@ export default function Dashboard() {
                     ? `OKX servers are unreachable from your network (ISP blocking). Enable VPN to connect.`
                     : displayExchangeError ||
                       "Check your API keys and network connection."}
-              </span>
-            </div>
-          )}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Cron Status Panel */}
@@ -1066,13 +1267,15 @@ export default function Dashboard() {
       <footer className="border-t border-slate-700 mt-8 py-4 text-center text-xs text-slate-500">
         <p>
           CopyTrade — Automated AI Trading Signal Copier • Discord → AI →{" "}
-          {(data?.exchangeProvider || "mexc").toUpperCase()}
+          {exchangeHeaderLabel}
         </p>
         <p className="mt-1">
           Mode: {tradingMode === "auto" ? "🤖 Auto" : "👆 Manual"} • Exchange:{" "}
-          {data?.exchangeProvider === "okx"
-            ? "OKX Demo"
-            : (data?.exchangeProvider || "mexc").toUpperCase()}{" "}
+          {selectedAccountId === "all"
+            ? exchangeHeaderLabel
+            : displayAccount?.isDemo
+              ? `${exchangeHeaderLabel} Demo`
+              : exchangeHeaderLabel}{" "}
           • Cron: Signal Check every 5 min • Position Monitor every 30 min
         </p>
       </footer>
