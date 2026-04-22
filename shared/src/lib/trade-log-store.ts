@@ -2,7 +2,6 @@ import { mkdir, appendFile, readFile, stat } from "fs/promises";
 import path from "path";
 import { randomUUID } from "crypto";
 import mongoose from "mongoose";
-import type { TradeLog as TradeLogModelType } from "./database";
 
 export interface TradeLogRecord {
   _id: string;
@@ -228,7 +227,7 @@ async function writeLogToFiles(record: TradeLogRecord) {
 }
 
 async function writeLogToMongo(record: TradeLogRecord) {
-  const { TradeLog } = loadDatabaseModule();
+  const { TradeLog } = await loadDatabaseModule();
 
   await TradeLog.create({
     accountId: record.accountId || null,
@@ -247,8 +246,8 @@ function isMongoReady() {
   return mongoose.connection.readyState === 1;
 }
 
-function loadDatabaseModule(): { TradeLog: typeof TradeLogModelType } {
-  return require("./database") as { TradeLog: typeof TradeLogModelType };
+async function loadDatabaseModule(): Promise<typeof import("./database")> {
+  return import("./database");
 }
 
 function normalizeMongoRecord(record: Record<string, unknown>): TradeLogRecord {
@@ -293,7 +292,7 @@ async function readMongoLogsByProcess(
 ): Promise<TradeLogRecord[]> {
   if (!shouldReadMongoLegacy() || !isMongoReady()) return [];
 
-  const { TradeLog } = loadDatabaseModule();
+  const { TradeLog } = await loadDatabaseModule();
   try {
     const logs = await TradeLog.find({ processId })
       .sort({ createdAt: order === "asc" ? 1 : -1 })
@@ -317,7 +316,7 @@ async function readMongoLogsByProcess(
 async function readAllMongoLogs(): Promise<TradeLogRecord[]> {
   if (!shouldReadMongoLegacy() || !isMongoReady()) return [];
 
-  const { TradeLog } = loadDatabaseModule();
+  const { TradeLog } = await loadDatabaseModule();
   try {
     const logs = await TradeLog.find().sort({ createdAt: 1 }).lean().exec();
     return logs.map((item: unknown) =>
