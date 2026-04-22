@@ -5,6 +5,15 @@ import { ExchangeOrderType, OrderSide } from "../enums";
 
 type MockSpecs = Awaited<ReturnType<BybitExchange["getInstrumentSpecs"]>>;
 type RequestParams = Record<string, string | number | boolean | undefined>;
+const DEFAULT_SPECS: MockSpecs = {
+  ctVal: 1,
+  lotSz: 0.1,
+  minSz: 0.1,
+  ctValCcy: "BTC",
+  tickSz: 0.5,
+  qtyDecimals: 1,
+  priceDecimals: 1,
+};
 
 function createExchange(specs?: MockSpecs) {
   const exchange = new BybitExchange("key", "secret") as any;
@@ -75,15 +84,7 @@ test("Bybit getAccountInfo normalizes wallet balances", async () => {
 });
 
 test("Bybit market orders clamp quantity and use ticker price for fills", async () => {
-  const exchange = createExchange({
-    ctVal: 1,
-    lotSz: 0.1,
-    minSz: 0.1,
-    ctValCcy: "BTC",
-    tickSz: 0.5,
-    qtyDecimals: 1,
-    priceDecimals: 1,
-  }) as any;
+  const exchange = createExchange(DEFAULT_SPECS) as any;
 
   const leverageCalls: Array<{
     symbol: string;
@@ -138,15 +139,7 @@ test("Bybit market orders clamp quantity and use ticker price for fills", async 
 });
 
 test("Bybit limit orders require a valid price", async () => {
-  const exchange = createExchange({
-    ctVal: 1,
-    lotSz: 0.1,
-    minSz: 0.1,
-    ctValCcy: "BTC",
-    tickSz: 0.5,
-    qtyDecimals: 1,
-    priceDecimals: 1,
-  }) as any;
+  const exchange = createExchange(DEFAULT_SPECS) as any;
 
   await assert.rejects(
     exchange.placeOrder({
@@ -160,15 +153,7 @@ test("Bybit limit orders require a valid price", async () => {
 });
 
 test("Bybit closePosition filters by position id and rounds the close size", async () => {
-  const exchange = createExchange({
-    ctVal: 1,
-    lotSz: 0.1,
-    minSz: 0.1,
-    ctValCcy: "BTC",
-    tickSz: 0.5,
-    qtyDecimals: 1,
-    priceDecimals: 1,
-  }) as any;
+  const exchange = createExchange(DEFAULT_SPECS) as any;
 
   let payload: RequestParams | undefined;
   exchange.fetchPositions = async () => [
@@ -654,4 +639,340 @@ test("Bybit cancelOrder returns false when the order no longer exists", async ()
   const result = await exchange.cancelOrder("missing", "BTCUSDT");
 
   assert.equal(result, false);
+});
+
+test("Bybit request helpers serialize payloads and normalize auth errors", async () => {
+  const exchange = new BybitExchange("key", "secret", true) as any;
+  const getCalls: Array<{ url: string; headers?: Record<string, string> }> = [];
+  const postCalls: Array<{
+    path: string;
+    body: Record<string, unknown>;
+    headers?: Record<string, string>;
+  }> = [];
+
+  exchange.client.get = async (url: string, config?: { headers?: Record<string, string> }) => {
+    getCalls.push({ url, headers: config?.headers });
+
+    if (url.startsWith("/ok") || url.startsWith("/signed-get")) {
+      return { data: { retCode: 0, retMsg: "OK", result: { value: 1 } } };
+    }
+
+    if (url.startsWith("/v5/auth")) {
+      throw {
+        isAxiosError: true,
+        message: "Request failed with status code 401",
+        response: {
+          status: 401,
+          data: { retCode: 10003, retMsg: "invalid api key" },
+        },
+      };
+    }
+
+    return { data: { retCode: 10001, retMsg: "bad request", result: null } };
+  };
+  exchange.client.post = async (
+    path: string,
+    body: Record<string, unknown>,
+    config?: { headers?: Record<string, string> },
+  ) => {
+    postCalls.push({ path, body, headers: config?.headers });
+
+    if (path === "/post-ok") {
+      return { data: { retCode: 0, retMsg: "OK", result: { ok: true } } };
+    }
+
+    return { data: { retCode: 130021, retMsg: "post failed", result: {} } };
+  };
+
+  assert.deepEqual(
+    await exchange.publicRequest("/ok", { b: 2, a: 1, skip: undefined }),
+    { value: 1 },
+  );
+  assert.equal(getCalls[0]?.url, "/ok");
+
+  const signedGet = await exchange.signedRequest("GET", "/signed-get", {
+    b: 2,
+    a: 1,
+    skip: undefined,
+  });
+  const signedPost = await exchange.signedRequest("POST", "/post-ok", {
+    keep: "yes",
+    skip: undefined,
+  });
+
+  assert.deepEqual(signedGet, { value: 1 });
+  assert.deepEqual(signedPost, { ok: true });
+  assert.equal(getCalls[1]?.url, "/signed-get?a=1&b=2");
+  assert.equal(postCalls[0]?.path, "/post-ok");
+  assert.deepEqual(postCalls[0]?.body, { keep: "yes" });
+  assert.equal(Boolean(getCalls[1]?.headers?.["X-BAPI-SIGN"]), true);
+  assert.equal(Boolean(postCalls[0]?.headers?.["X-BAPI-SIGN"]), true);
+
+  await assert.rejects(
+    () => exchange.publicRequest("/fail", { foo: "bar" }),
+    /payload=\{"foo":"bar"\}/,
+  );
+  await assert.rejects(
+    () => exchange.publicRequest("/v5/auth", {}),
+    /api-demo\.bybit\.com/,
+  );
+  await assert.rejects(
+    () => exchange.signedRequest("POST", "/post-fail", { foo: "bar" }),
+    /payload=\{"foo":"bar"\}/,
+  );
+});
+
+test("Bybit pagination helpers walk cursors for positions and realtime orders", async () => {
+  const exchange = createExchange() as any;
+
+  exchange.signedRequest = async (
+    _method: string,
+    path: string,
+    payload: RequestParams = {},
+  ) => {
+    if (path === "/v5/position/list") {
+      if (!payload.cursor) {
+        return {
+          list: [{ symbol: "BTCUSDT", side: "Buy", size: "1" }],
+          nextPageCursor: "cursor-1",
+        };
+      }
+      return {
+        list: [{ symbol: "ETHUSDT", side: "Sell", size: "2" }],
+      };
+    }
+
+    if (path === "/v5/order/realtime") {
+      if (!payload.cursor) {
+        return {
+          list: [{ orderId: "1", symbol: "BTCUSDT" }],
+          nextPageCursor: "cursor-2",
+        };
+      }
+      return {
+        list: [{ orderId: "2", symbol: "BTCUSDT" }],
+      };
+    }
+
+    throw new Error(`Unexpected path: ${path}`);
+  };
+
+  assert.deepEqual(await exchange.fetchPositions("BTCUSDT"), [
+    { symbol: "BTCUSDT", side: "Buy", size: "1" },
+    { symbol: "ETHUSDT", side: "Sell", size: "2" },
+  ]);
+  assert.deepEqual(await exchange.fetchRealtimeOrders("StopOrder", "BTCUSDT"), [
+    { orderId: "1", symbol: "BTCUSDT" },
+    { orderId: "2", symbol: "BTCUSDT" },
+  ]);
+});
+
+test("Bybit conditional close orders clamp values, compute trigger direction, and fall back to generated link ids", async () => {
+  const exchange = createExchange(DEFAULT_SPECS) as any;
+  let payload: RequestParams | undefined;
+
+  exchange.fetchTargetPosition = async () => ({
+    symbol: "BTCUSDT",
+    side: "Buy",
+    size: "1.26",
+    positionIdx: 1,
+    markPrice: "0",
+  });
+  exchange.getTickerPrice = async () => 65000;
+  exchange.buildAlgoOrderLinkId = () => "generated-link";
+  exchange.signedRequest = async (
+    _method: string,
+    path: string,
+    params: RequestParams = {},
+  ) => {
+    if (path === "/v5/order/create") {
+      payload = params;
+      return {};
+    }
+    throw new Error(`Unexpected path: ${path}`);
+  };
+
+  const orderId = await exchange.placeTakeProfit(
+    "BTCUSDT",
+    64000.24,
+    0,
+    OrderSide.SELL,
+    2,
+  );
+
+  assert.equal(orderId, "generated-link");
+  assert.deepEqual(payload, {
+    category: "linear",
+    symbol: "BTCUSDT",
+    side: "Sell",
+    orderType: "Market",
+    qty: "1.2",
+    triggerPrice: "64000.0",
+    triggerDirection: 2,
+    triggerBy: "MarkPrice",
+    reduceOnly: true,
+    closeOnTrigger: true,
+    positionIdx: 1,
+    orderLinkId: "generated-link",
+  });
+});
+
+test("Bybit conditional close orders reject tiny quantities and target-position lookup enforces close side", async () => {
+  const exchange = createExchange(DEFAULT_SPECS) as any;
+
+  exchange.fetchTargetPosition = async () => ({
+    symbol: "BTCUSDT",
+    side: "Buy",
+    size: "0.04",
+    positionIdx: 1,
+    markPrice: "65000",
+  });
+
+  await assert.rejects(
+    () =>
+      exchange.placeStopLoss("BTCUSDT", 62000, 0, OrderSide.SELL, 0.04),
+    /Conditional SL quantity too small/,
+  );
+
+  const lookupExchange = createExchange() as any;
+  lookupExchange.fetchPositions = async () => [
+    { symbol: "BTCUSDT", side: "Buy", size: "1", positionIdx: 1 },
+  ];
+
+  await assert.rejects(
+    () => lookupExchange.fetchTargetPosition("BTCUSDT", "BUY"),
+    /matching close side BUY/,
+  );
+});
+
+test("Bybit closeAllPositions aggregates per-position and fetch-level failures", async () => {
+  const exchange = createExchange() as any;
+
+  exchange.getOpenPositions = async () => [
+    { symbol: "BTCUSDT", side: "LONG", positionId: "BTCUSDT:1", quantity: 1 },
+    { symbol: "ETHUSDT", side: "SHORT", positionId: "ETHUSDT:2", quantity: 2 },
+  ];
+  exchange.closePosition = async (symbol: string) => {
+    if (symbol === "ETHUSDT") throw new Error("rejected");
+  };
+
+  assert.deepEqual(await exchange.closeAllPositions(), {
+    closed: ["BTCUSDT (LONG)"],
+    errors: ["ETHUSDT: rejected"],
+  });
+
+  exchange.getOpenPositions = async () => {
+    throw new Error("offline");
+  };
+
+  assert.deepEqual(await exchange.closeAllPositions(), {
+    closed: [],
+    errors: ["Failed to fetch positions: offline"],
+  });
+});
+
+test("Bybit setLeverage tolerates not-modified responses and cross margin mode", async () => {
+  const exchange = createExchange() as any;
+  const calls: Array<{ path: string; payload: Record<string, unknown> }> = [];
+
+  exchange.signedRequest = async (
+    _method: string,
+    path: string,
+    payload: Record<string, unknown>,
+  ) => {
+    calls.push({ path, payload });
+    if (path === "/v5/account/set-margin-mode") {
+      throw new Error("margin mode is not modified");
+    }
+    if (path === "/v5/position/switch-isolated") {
+      throw new Error("position mode is not modified");
+    }
+    if (path === "/v5/position/set-leverage") {
+      throw new Error("not modified");
+    }
+    return {};
+  };
+
+  const result = await exchange.setLeverage("BTCUSDT", 9, "cross");
+
+  assert.equal(result, 9);
+  assert.deepEqual(
+    calls.map((call) => [call.path, call.payload]),
+    [
+      ["/v5/account/set-margin-mode", { setMarginMode: "REGULAR_MARGIN" }],
+      [
+        "/v5/position/switch-isolated",
+        {
+          category: "linear",
+          symbol: "BTCUSDT",
+          tradeMode: 0,
+          buyLeverage: "9",
+          sellLeverage: "9",
+        },
+      ],
+      [
+        "/v5/position/set-leverage",
+        {
+          category: "linear",
+          symbol: "BTCUSDT",
+          buyLeverage: "9",
+          sellLeverage: "9",
+        },
+      ],
+    ],
+  );
+});
+
+test("Bybit market-data and order-management errors cover missing rows and unexpected cancel failures", async () => {
+  const exchange = createExchange() as any;
+
+  exchange.publicRequest = async (path: string) => {
+    if (path === "/v5/market/tickers") return { list: [] };
+    return { list: [] };
+  };
+  exchange.signedRequest = async () => {
+    throw new Error("fatal");
+  };
+
+  await assert.rejects(
+    () => exchange.getTickerPrice("BTCUSDT"),
+    /Ticker not found on Bybit/,
+  );
+  await assert.rejects(() => exchange.cancelOrder("1", "BTCUSDT"), /fatal/);
+});
+
+test("Bybit cancelAlgoOrders records stop-order and trading-stop failures, and missing instruments are rejected", async () => {
+  const exchange = createExchange() as any;
+
+  exchange.fetchRealtimeOrders = async () => [
+    { orderId: "algo-1", symbol: "BTCUSDT" },
+    { symbol: "BTCUSDT" },
+  ];
+  exchange.cancelOrder = async () => {
+    throw new Error("cancel failed");
+  };
+  exchange.fetchPositions = async () => [
+    {
+      symbol: "BTCUSDT",
+      side: "Buy",
+      size: "1",
+      positionIdx: 1,
+      takeProfit: "70000",
+      stopLoss: "0",
+    },
+  ];
+  exchange.clearTradingStopsForPosition = async () => {
+    throw new Error("clear failed");
+  };
+
+  assert.deepEqual(await exchange.cancelAlgoOrders("BTCUSDT"), {
+    cancelled: [],
+    errors: ["algo-1: cancel failed", "position:1: clear failed"],
+  });
+
+  exchange.publicRequest = async () => ({ list: [] });
+  await assert.rejects(
+    () => exchange.getInstrumentSpecs("DOGEUSDT"),
+    /Instrument not found on Bybit: DOGEUSDT/,
+  );
 });

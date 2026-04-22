@@ -2,13 +2,17 @@ import assert from "node:assert/strict";
 import { beforeEach, test, vi } from "vitest";
 
 const executorMocks = vi.hoisted(() => ({
+  connectDB: vi.fn(),
   processedMessageFind: vi.fn(),
+  processedMessageInsertMany: vi.fn(),
+  processedMessageUpdateOne: vi.fn(),
   positionFind: vi.fn(),
   positionFindOne: vi.fn(),
   positionCountDocuments: vi.fn(),
   positionCreate: vi.fn(),
   accountFind: vi.fn(),
   accountFindById: vi.fn(),
+  accountFindByIdAndUpdate: vi.fn(),
   getTradingMode: vi.fn(),
   buildTPTargets: vi.fn(),
   recalculateTPAllocation: vi.fn(),
@@ -26,6 +30,8 @@ const executorMocks = vi.hoisted(() => ({
   logExecutorWarn: vi.fn(),
   logProcessStep: vi.fn(),
   analyzeMessagesWithAI: vi.fn(),
+  draftFind: vi.fn(),
+  draftFindOne: vi.fn(),
   createDraft: vi.fn(),
   refreshDraftFromSignal: vi.fn(),
   rejectDraftWithReason: vi.fn(),
@@ -36,9 +42,11 @@ const executorMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./database", () => ({
-  connectDB: vi.fn(),
+  connectDB: executorMocks.connectDB,
   ProcessedMessage: {
     find: executorMocks.processedMessageFind,
+    insertMany: executorMocks.processedMessageInsertMany,
+    updateOne: executorMocks.processedMessageUpdateOne,
   },
   Position: {
     find: executorMocks.positionFind,
@@ -47,12 +55,13 @@ vi.mock("./database", () => ({
     create: executorMocks.positionCreate,
   },
   DraftTrade: {
-    find: vi.fn(),
+    find: executorMocks.draftFind,
+    findOne: executorMocks.draftFindOne,
   },
   Account: {
     find: executorMocks.accountFind,
     findById: executorMocks.accountFindById,
-    findByIdAndUpdate: vi.fn(),
+    findByIdAndUpdate: executorMocks.accountFindByIdAndUpdate,
   },
   getTradingMode: executorMocks.getTradingMode,
   buildTPTargets: executorMocks.buildTPTargets,
@@ -111,9 +120,23 @@ vi.mock("./executor-signal-utils", () => ({
 
 import {
   checkDuplicatePosition,
+  executeTrade,
   executeSignal,
+  runSignalCheck,
   splitQuantityForTPs,
 } from "./executor";
+
+function mockLean<T>(value: T) {
+  return {
+    lean: vi.fn().mockResolvedValue(value),
+  };
+}
+
+function mockSortedLean<T>(value: T) {
+  return {
+    sort: vi.fn().mockReturnValue(mockLean(value)),
+  };
+}
 
 function createDoc(overrides: Record<string, unknown> = {}) {
   const doc: Record<string, unknown> & { save: ReturnType<typeof vi.fn> } = {
@@ -136,13 +159,17 @@ function createDoc(overrides: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
+  executorMocks.connectDB.mockReset();
   executorMocks.processedMessageFind.mockReset();
+  executorMocks.processedMessageInsertMany.mockReset();
+  executorMocks.processedMessageUpdateOne.mockReset();
   executorMocks.positionFind.mockReset();
   executorMocks.positionFindOne.mockReset();
   executorMocks.positionCountDocuments.mockReset();
   executorMocks.positionCreate.mockReset();
   executorMocks.accountFind.mockReset();
   executorMocks.accountFindById.mockReset();
+  executorMocks.accountFindByIdAndUpdate.mockReset();
   executorMocks.getTradingMode.mockReset();
   executorMocks.buildTPTargets.mockReset();
   executorMocks.recalculateTPAllocation.mockReset();
@@ -160,6 +187,8 @@ beforeEach(() => {
   executorMocks.logExecutorWarn.mockReset();
   executorMocks.logProcessStep.mockReset();
   executorMocks.analyzeMessagesWithAI.mockReset();
+  executorMocks.draftFind.mockReset();
+  executorMocks.draftFindOne.mockReset();
   executorMocks.createDraft.mockReset();
   executorMocks.refreshDraftFromSignal.mockReset();
   executorMocks.rejectDraftWithReason.mockReset();
@@ -172,6 +201,12 @@ beforeEach(() => {
   executorMocks.logExecutorWarn.mockResolvedValue(undefined);
   executorMocks.logExecutorError.mockResolvedValue(undefined);
   executorMocks.logProcessStep.mockResolvedValue(undefined);
+  executorMocks.connectDB.mockResolvedValue(undefined);
+  executorMocks.processedMessageInsertMany.mockResolvedValue(undefined);
+  executorMocks.processedMessageUpdateOne.mockResolvedValue(undefined);
+  executorMocks.accountFindByIdAndUpdate.mockResolvedValue(undefined);
+  executorMocks.draftFind.mockResolvedValue([]);
+  executorMocks.draftFindOne.mockResolvedValue(null);
   executorMocks.resolveEffectiveRiskConfig.mockResolvedValue({
     defaultLeverage: 10,
     defaultPositionSize: 1,
@@ -364,6 +399,208 @@ test("executeSignal skips trades without stop loss when skipNoSL is enabled", as
   });
 });
 
+test("executeSignal opens a new trade and auto-calculates stop loss from RR when needed", async () => {
+  const exchange = {
+    name: "paper",
+    getAccountInfo: vi
+      .fn()
+      .mockResolvedValue({ availableBalance: 1000, totalBalance: 1000 }),
+    setLeverage: vi.fn().mockResolvedValue(10),
+    placeOrder: vi.fn().mockResolvedValue({
+      orderId: "open-1",
+      price: 100,
+      quantity: 1,
+    }),
+    getInstrumentSpecs: vi.fn().mockResolvedValue({ lotSz: 0.01, qtyDecimals: 2 }),
+    placeTakeProfit: vi.fn().mockResolvedValue("tp-1"),
+    placeStopLoss: vi.fn().mockResolvedValue("sl-1"),
+  };
+  executorMocks.positionFindOne.mockResolvedValue(null);
+  executorMocks.getPaperClient.mockReturnValue(exchange);
+  executorMocks.calculateRiskBasedPosition.mockResolvedValue({
+    applied: false,
+    skipReason: "kept requested sizing",
+  });
+  executorMocks.positionCreate.mockImplementation(async (payload) => ({
+    _id: { toString: () => "new-pos" },
+    side: payload.side,
+    ...payload,
+  }));
+
+  const result = await executeSignal(
+    {
+      action: "BUY",
+      symbol: "BTCUSDT",
+      entryPrice: 100,
+      takeProfitTargets: [120],
+      defaultRR: 2,
+    } as never,
+    "msg-open",
+    "chan-1",
+    undefined,
+    undefined,
+    "proc-open",
+  );
+
+  assert.equal(result.type, "opened");
+  assert.equal(result.position._id.toString(), "new-pos");
+  assert.equal(executorMocks.autoCalculateSLFromRR.mock.calls.length, 1);
+  assert.equal(exchange.placeOrder.mock.calls[0]?.[0].type, "MARKET");
+});
+
+test("executeSignal uses risk-config RR fallbacks for duplicate-entry proceed, auto-sl, and auto-tp branches", async () => {
+  const exchange = {
+    name: "paper",
+    getAccountInfo: vi
+      .fn()
+      .mockResolvedValue({ availableBalance: 1000, totalBalance: 1000 }),
+    setLeverage: vi.fn().mockResolvedValue(10),
+    placeOrder: vi
+      .fn()
+      .mockResolvedValueOnce({
+        orderId: "rr-open-1",
+        price: 100,
+        quantity: 1,
+      })
+      .mockResolvedValueOnce({
+        orderId: "rr-open-2",
+        price: 100,
+        quantity: 1,
+      }),
+    getInstrumentSpecs: vi.fn().mockResolvedValue({ lotSz: 0.01, qtyDecimals: 2 }),
+    placeTakeProfit: vi.fn().mockResolvedValue("tp-1"),
+    placeStopLoss: vi.fn().mockResolvedValue("sl-1"),
+  };
+  executorMocks.resolveEffectiveRiskConfig.mockResolvedValue({
+    defaultLeverage: 10,
+    defaultPositionSize: 1,
+    defaultRR: 3,
+    maxPositions: 0,
+    skipNoSL: false,
+  });
+  executorMocks.positionFindOne
+    .mockResolvedValueOnce(createDoc({ entryPrice: 99, stopLossPrice: 95 }))
+    .mockResolvedValueOnce(null);
+  executorMocks.getPaperClient.mockReturnValue(exchange);
+  executorMocks.calculateRiskBasedPosition.mockResolvedValue({
+    applied: false,
+    skipReason: "kept requested sizing",
+  });
+  executorMocks.positionCreate.mockImplementation(async (payload) => ({
+    _id: { toString: () => `pos-${payload.orderId || payload.symbol}` },
+    side: payload.side,
+    ...payload,
+  }));
+
+  const autoSlResult = await executeSignal(
+    {
+      action: "BUY",
+      symbol: "BTCUSDT",
+      entryPrice: 100,
+      takeProfitTargets: [130],
+    } as never,
+    "msg-auto-sl",
+    "chan-1",
+    undefined,
+    undefined,
+    "proc-auto-sl",
+  );
+  const autoTpResult = await executeSignal(
+    {
+      action: "BUY",
+      symbol: "ETHUSDT",
+      entryPrice: 100,
+      stopLoss: 95,
+      takeProfitTargets: [],
+    } as never,
+    "msg-auto-tp",
+    "chan-1",
+    undefined,
+    undefined,
+    "proc-auto-tp",
+  );
+
+  assert.equal(autoSlResult.type, "opened");
+  assert.equal(autoTpResult.type, "opened");
+  assert.deepEqual(executorMocks.autoCalculateSLFromRR.mock.calls.at(-1), [
+    100,
+    130,
+    3,
+    "LONG",
+  ]);
+  assert.deepEqual(executorMocks.autoCalculateTPFromRR.mock.calls.at(-1), [
+    100,
+    95,
+    3,
+    "LONG",
+  ]);
+  assert.ok(
+    executorMocks.logExecutorInfo.mock.calls.some((call) =>
+      String(call[0]).includes("proceeding as new order"),
+    ),
+  );
+});
+
+test("executeSignal prefers signal defaultRR over risk config when auto-calculating TP", async () => {
+  const exchange = {
+    name: "paper",
+    getAccountInfo: vi
+      .fn()
+      .mockResolvedValue({ availableBalance: 1000, totalBalance: 1000 }),
+    setLeverage: vi.fn().mockResolvedValue(10),
+    placeOrder: vi.fn().mockResolvedValue({
+      orderId: "sig-rr-open",
+      price: 100,
+      quantity: 1,
+    }),
+    getInstrumentSpecs: vi.fn().mockResolvedValue({ lotSz: 0.01, qtyDecimals: 2 }),
+    placeTakeProfit: vi.fn().mockResolvedValue("tp-1"),
+    placeStopLoss: vi.fn().mockResolvedValue("sl-1"),
+  };
+  executorMocks.resolveEffectiveRiskConfig.mockResolvedValue({
+    defaultLeverage: 10,
+    defaultPositionSize: 1,
+    defaultRR: 2,
+    maxPositions: 0,
+    skipNoSL: false,
+  });
+  executorMocks.positionFindOne.mockResolvedValueOnce(null);
+  executorMocks.getPaperClient.mockReturnValue(exchange);
+  executorMocks.calculateRiskBasedPosition.mockResolvedValue({
+    applied: false,
+    skipReason: "kept requested sizing",
+  });
+  executorMocks.positionCreate.mockImplementation(async (payload) => ({
+    _id: { toString: () => "sig-rr-pos" },
+    side: payload.side,
+    ...payload,
+  }));
+
+  const result = await executeSignal(
+    {
+      action: "BUY",
+      symbol: "XRPUSDT",
+      entryPrice: 100,
+      stopLoss: 96,
+      takeProfitTargets: [],
+      defaultRR: 4,
+    } as never,
+    "msg-signal-rr",
+    "chan-rr",
+    undefined,
+    undefined,
+    "proc-signal-rr",
+  );
+
+  assert.equal(result.type, "opened");
+  assert.deepEqual(executorMocks.autoCalculateTPFromRR.mock.calls.at(-1), [
+    100,
+    96,
+    4,
+    "LONG",
+  ]);
+});
+
 test("executeSignal closes positions or noops when none exist", async () => {
   const exchange = {
     closePosition: vi.fn().mockResolvedValue(undefined),
@@ -408,6 +645,38 @@ test("executeSignal closes positions or noops when none exist", async () => {
   });
   assert.equal(closedDoc.status, "closed");
   assert.equal(exchange.closePosition.mock.calls.length, 1);
+});
+
+test("executeSignal CLOSE falls back to paper exchange when account credentials are unavailable", async () => {
+  const paperExchange = {
+    closePosition: vi.fn().mockResolvedValue(undefined),
+  };
+  const closeDoc = createDoc({
+    symbol: "ETHUSDT",
+    quantity: 1.5,
+    orderId: "ord-paper",
+    accountId: "acc-missing",
+  });
+  executorMocks.positionFind.mockResolvedValue([closeDoc]);
+  executorMocks.accountFindById.mockReturnValue(mockLean({ tradingPlatform: "bybit" }));
+  executorMocks.buildExchangeCredentials.mockReturnValue(null);
+  executorMocks.getPaperClient.mockReturnValue(paperExchange);
+
+  const result = await executeSignal(
+    { action: "CLOSE", symbol: "ETHUSDT" } as never,
+    "msg-close",
+    "chan-2",
+    undefined,
+    "acc-1",
+    "proc-close",
+  );
+
+  assert.deepEqual(result, {
+    type: "closed",
+    closedCount: 1,
+  });
+  assert.equal(paperExchange.closePosition.mock.calls.length, 1);
+  assert.equal(closeDoc.status, "closed");
 });
 
 test("executeSignal updates or noops position updates and handles add-tp flows", async () => {
@@ -491,6 +760,139 @@ test("executeSignal updates or noops position updates and handles add-tp flows",
   });
 });
 
+test("executeSignal covers update-sl, update-tp append, add-tp account fallback warnings, and empty add-tp input", async () => {
+  const updateSlDoc = createDoc({
+    stopLossPrice: 95,
+  });
+  const updateTpAppendDoc = createDoc({
+    quantity: 3,
+    takeProfitTargets: [{ price: 110, status: "filled", quantity: 3, percentage: 100 }],
+  });
+  const addTpWarnDoc = createDoc({
+    accountId: null,
+    side: "SHORT",
+    quantity: 2,
+    takeProfitTargets: [{ price: 110, status: "pending", quantity: 2, percentage: 100 }],
+  });
+  const exchange = {
+    placeTakeProfit: vi.fn().mockRejectedValue(new Error("exchange tp rejected")),
+  };
+
+  executorMocks.positionFindOne
+    .mockResolvedValueOnce(updateSlDoc)
+    .mockResolvedValueOnce(updateTpAppendDoc)
+    .mockResolvedValueOnce(addTpWarnDoc)
+    .mockResolvedValueOnce(addTpWarnDoc);
+  executorMocks.buildTPTargets.mockReturnValue([
+    { price: 140, quantity: 3, percentage: 100, status: "pending" },
+  ]);
+  executorMocks.recalculateTPAllocation.mockImplementation((targets) => targets);
+  executorMocks.accountFindById.mockReturnValue(
+    mockLean({
+      tradingPlatform: "bybit",
+      exchangeData: { apiKey: "k", secret: "s" },
+    }),
+  );
+  executorMocks.buildExchangeCredentials.mockReturnValue({ provider: "bybit" });
+  executorMocks.getClientForAccount.mockReturnValue(exchange);
+
+  const updatedSl = await executeSignal(
+    { action: "UPDATE_SL", symbol: "BTCUSDT", stopLoss: 88 } as never,
+    "msg-1",
+    "chan-1",
+    undefined,
+    "acc-1",
+    "proc-1",
+  );
+  const appendedTp = await executeSignal(
+    { action: "UPDATE_TP", symbol: "BTCUSDT", takeProfitTargets: [140] } as never,
+    "msg-2",
+    "chan-1",
+    undefined,
+    "acc-1",
+    "proc-2",
+  );
+  const addTpWarn = await executeSignal(
+    { action: "ADD_TP", symbol: "BTCUSDT", takeProfitTargets: [145] } as never,
+    "msg-3",
+    "chan-1",
+    undefined,
+    "acc-1",
+    "proc-3",
+  );
+  const addTpEmpty = await executeSignal(
+    { action: "ADD_TP", symbol: "BTCUSDT", takeProfitTargets: [] } as never,
+    "msg-4",
+    "chan-1",
+    undefined,
+    "acc-1",
+    "proc-4",
+  );
+
+  assert.deepEqual(updatedSl, {
+    type: "updated",
+    code: "update_sl",
+    details: "UPDATE_SL applied for BTCUSDT",
+  });
+  assert.equal(updateSlDoc.stopLossPrice, 88);
+  assert.deepEqual(appendedTp, {
+    type: "updated",
+    code: "update_tp",
+    details: "UPDATE_TP applied for BTCUSDT",
+  });
+  assert.equal(updateTpAppendDoc.takeProfitTargets.length, 2);
+  assert.equal(updateTpAppendDoc.takeProfitTargets[1].price, 140);
+  assert.deepEqual(addTpWarn, {
+    type: "updated",
+    code: "add_tp",
+    details: "Added 1 TP target(s) for BTCUSDT",
+  });
+  assert.equal(addTpWarnDoc.takeProfitTargets[1].price, 145);
+  assert.equal(exchange.placeTakeProfit.mock.calls[0]?.[3], "BUY");
+  assert.ok(
+    executorMocks.logExecutorWarn.mock.calls.some((call) =>
+      String(call[0]).includes("Failed to place TP on exchange at 145"),
+    ),
+  );
+  assert.deepEqual(addTpEmpty, {
+    type: "noop",
+    code: "no_open_position",
+    details: "No open position found for BTCUSDT (channel=chan-1) to add TP",
+  });
+});
+
+test("executeSignal ADD_TP works without an exchange client when no credentials exist", async () => {
+  const addTpLocalOnly = createDoc({
+    accountId: "acc-no-creds",
+    side: "LONG",
+    quantity: 2,
+    takeProfitTargets: [{ price: 110, status: "pending", quantity: 2, percentage: 100 }],
+  });
+  executorMocks.positionFindOne.mockResolvedValueOnce(addTpLocalOnly);
+  executorMocks.accountFindById
+    .mockReturnValueOnce(mockLean({ tradingPlatform: "bybit" }))
+    .mockReturnValueOnce(mockLean({ tradingPlatform: "okx" }));
+  executorMocks.buildExchangeCredentials.mockReturnValue(null);
+  executorMocks.recalculateTPAllocation.mockImplementation((targets) => targets);
+
+  const result = await executeSignal(
+    { action: "ADD_TP", symbol: "BTCUSDT", takeProfitTargets: [135] } as never,
+    "msg-local",
+    "chan-3",
+    undefined,
+    "acc-fallback",
+    "proc-local",
+  );
+
+  assert.deepEqual(result, {
+    type: "updated",
+    code: "add_tp",
+    details: "Added 1 TP target(s) for BTCUSDT",
+  });
+  assert.equal(addTpLocalOnly.takeProfitTargets[1].price, 135);
+  assert.equal(executorMocks.getClientForAccount.mock.calls.length, 0);
+});
+
 test("executeSignal skips unhandled actions", async () => {
   const result = await executeSignal(
     { action: "HOLD", symbol: "BTCUSDT" } as never,
@@ -506,4 +908,413 @@ test("executeSignal skips unhandled actions", async () => {
     code: "unhandled_action",
     reason: "Unhandled signal action: HOLD",
   });
+});
+
+test("executeTrade uses the paper exchange fallback, applies risk sizing, and stores market positions with TP/SL", async () => {
+  const exchange = {
+    name: "paper",
+    getAccountInfo: vi
+      .fn()
+      .mockResolvedValue({ availableBalance: 500, totalBalance: 650 }),
+    setLeverage: vi.fn().mockResolvedValue(12),
+    placeOrder: vi.fn().mockResolvedValue({
+      orderId: "order-1",
+      price: 101,
+      quantity: 1.25,
+    }),
+    getInstrumentSpecs: vi
+      .fn()
+      .mockResolvedValue({ lotSz: 0.01, qtyDecimals: 2 }),
+    placeTakeProfit: vi.fn().mockResolvedValue("tp-id"),
+    placeStopLoss: vi.fn().mockResolvedValue("sl-id"),
+  };
+  executorMocks.getPaperClient.mockReturnValue(exchange);
+  executorMocks.calculateRiskBasedPosition.mockResolvedValue({
+    applied: true,
+    quantity: 1.25,
+    leverage: 12,
+    accountBalance: 500,
+    marginUsdt: 12.5,
+    slDistancePercent: 0.05,
+    notionalSize: 125,
+  });
+  executorMocks.positionCreate.mockImplementation(async (payload) => ({
+    _id: { toString: () => "pos-created" },
+    side: payload.side,
+    ...payload,
+  }));
+
+  const position = await executeTrade({
+    symbol: "BTCUSDT",
+    action: "BUY",
+    entryPrice: 100,
+    stopLoss: 95,
+    takeProfitTargets: [110, 120],
+    leverage: 5,
+    quantity: 1,
+    orderType: "MARKET",
+    channelId: "chan-1",
+    messageId: "msg-1",
+    signalData: "{}",
+  } as never);
+
+  assert.equal(executorMocks.calculateRiskBasedPosition.mock.calls.length, 1);
+  assert.equal(exchange.setLeverage.mock.calls[0]?.[0], "BTCUSDT");
+  assert.equal(exchange.placeOrder.mock.calls[0]?.[0].type, "MARKET");
+  assert.equal(exchange.placeTakeProfit.mock.calls.length, 2);
+  assert.equal(exchange.placeStopLoss.mock.calls.length, 1);
+  assert.equal(executorMocks.positionCreate.mock.calls[0]?.[0].status, "open");
+  assert.equal(executorMocks.positionCreate.mock.calls[0]?.[0].tpSlPlaced, true);
+  assert.equal(position._id.toString(), "pos-created");
+});
+
+test("executeTrade uses account exchange credentials for limit orders and skips TP/SL placement", async () => {
+  const exchange = {
+    name: "bybit",
+    getAccountInfo: vi.fn().mockRejectedValue(new Error("balance offline")),
+    setLeverage: vi.fn().mockRejectedValue(new Error("not supported")),
+    placeOrder: vi.fn().mockResolvedValue({
+      orderId: "limit-1",
+      price: 200,
+      quantity: 2,
+    }),
+    getInstrumentSpecs: vi.fn(),
+    placeTakeProfit: vi.fn(),
+    placeStopLoss: vi.fn(),
+  };
+  executorMocks.accountFindById.mockReturnValue(
+    mockLean({
+      tradingPlatform: "bybit",
+      exchangeData: { apiKey: "k", secret: "s" },
+    }),
+  );
+  executorMocks.calculateRiskBasedPosition.mockResolvedValue({
+    applied: false,
+    skipReason: "kept requested sizing",
+  });
+  executorMocks.buildExchangeCredentials.mockReturnValue({ provider: "bybit" });
+  executorMocks.getClientForAccount.mockReturnValue(exchange);
+  executorMocks.positionCreate.mockImplementation(async (payload) => ({
+    _id: { toString: () => "limit-pos" },
+    side: payload.side,
+    ...payload,
+  }));
+
+  const position = await executeTrade({
+    symbol: "ETHUSDT",
+    action: "SELL",
+    entryPrice: 200,
+    stopLoss: 210,
+    takeProfitTargets: [180],
+    leverage: 8,
+    quantity: 2,
+    orderType: "LIMIT",
+    channelId: "chan-2",
+    accountId: "acc-1",
+    signalData: "{}",
+  } as never);
+
+  assert.deepEqual(executorMocks.buildExchangeCredentials.mock.calls[0]?.[0], "bybit");
+  assert.equal(executorMocks.getClientForAccount.mock.calls.length, 1);
+  assert.equal(exchange.placeOrder.mock.calls[0]?.[0].type, "LIMIT");
+  assert.equal(exchange.placeOrder.mock.calls[0]?.[0].price, 200);
+  assert.equal(exchange.placeTakeProfit.mock.calls.length, 0);
+  assert.equal(exchange.placeStopLoss.mock.calls.length, 0);
+  assert.equal(executorMocks.positionCreate.mock.calls[0]?.[0].status, "pending");
+  assert.equal(executorMocks.positionCreate.mock.calls[0]?.[0].tpSlPlaced, false);
+  assert.equal(position.side, "SHORT");
+});
+
+test("executeTrade warns and still saves the position when market stop-loss placement fails", async () => {
+  const exchange = {
+    name: "paper",
+    getAccountInfo: vi
+      .fn()
+      .mockResolvedValue({ availableBalance: 500, totalBalance: 500 }),
+    setLeverage: vi.fn().mockResolvedValue(8),
+    placeOrder: vi.fn().mockResolvedValue({
+      orderId: "order-sl-warn",
+      price: 101,
+      quantity: 1,
+    }),
+    getInstrumentSpecs: vi.fn().mockResolvedValue({ lotSz: 0.01, qtyDecimals: 2 }),
+    placeTakeProfit: vi.fn().mockResolvedValue("tp-ok"),
+    placeStopLoss: vi.fn().mockRejectedValue("sl transport failed"),
+  };
+  executorMocks.getPaperClient.mockReturnValue(exchange);
+  executorMocks.calculateRiskBasedPosition.mockResolvedValue({
+    applied: false,
+    skipReason: "kept requested sizing",
+  });
+  executorMocks.positionCreate.mockImplementation(async (payload) => ({
+    _id: { toString: () => "sl-warn-pos" },
+    side: payload.side,
+    ...payload,
+  }));
+
+  const position = await executeTrade({
+    symbol: "ADAUSDT",
+    action: "BUY",
+    entryPrice: 100,
+    stopLoss: 95,
+    takeProfitTargets: [110],
+    leverage: 8,
+    quantity: 1,
+    orderType: "MARKET",
+    channelId: "chan-sl",
+    messageId: "msg-sl",
+    signalData: "{}",
+  } as never);
+
+  assert.equal(position._id.toString(), "sl-warn-pos");
+  assert.equal(exchange.placeStopLoss.mock.calls.length, 1);
+  assert.ok(
+    executorMocks.logExecutorWarn.mock.calls.some(
+      (call) =>
+        String(call[0]).includes("Failed to place SL: sl transport failed") &&
+        call[1]?.action === "console_stop_loss_failed",
+    ),
+  );
+});
+
+test("executeTrade warns when risk sizing is skipped for missing entry price and TP placement fails", async () => {
+  const exchange = {
+    name: "paper",
+    getAccountInfo: vi
+      .fn()
+      .mockResolvedValue({ availableBalance: 400, totalBalance: 400 }),
+    setLeverage: vi.fn().mockResolvedValue(5),
+    placeOrder: vi.fn().mockResolvedValue({
+      orderId: "order-tp-warn",
+      price: 99,
+      quantity: 1,
+    }),
+    getInstrumentSpecs: vi.fn().mockResolvedValue({ lotSz: 0.01, qtyDecimals: 2 }),
+    placeTakeProfit: vi.fn().mockRejectedValue(new Error("tp rejected")),
+    placeStopLoss: vi.fn().mockResolvedValue("sl-ok"),
+  };
+  executorMocks.getPaperClient.mockReturnValue(exchange);
+  executorMocks.positionCreate.mockImplementation(async (payload) => ({
+    _id: { toString: () => "tp-warn-pos" },
+    side: payload.side,
+    ...payload,
+  }));
+
+  const position = await executeTrade({
+    symbol: "DOGEUSDT",
+    action: "BUY",
+    entryPrice: undefined,
+    stopLoss: 90,
+    takeProfitTargets: [110],
+    leverage: 5,
+    quantity: 1,
+    orderType: "MARKET",
+    channelId: "chan-tp",
+    messageId: "msg-tp",
+    signalData: "{}",
+  } as never);
+
+  assert.equal(position._id.toString(), "tp-warn-pos");
+  assert.equal(exchange.placeTakeProfit.mock.calls.length, 1);
+  assert.ok(
+    executorMocks.logExecutorWarn.mock.calls.some(
+      (call) =>
+        String(call[0]).includes("Risk management skipped: no entry price available") &&
+        call[1]?.action === "console_risk_skipped",
+    ),
+  );
+  assert.ok(
+    executorMocks.logExecutorWarn.mock.calls.some(
+      (call) =>
+        String(call[0]).includes("Failed to place TP at 110: tp rejected") &&
+        call[1]?.action === "console_take_profit_failed",
+    ),
+  );
+});
+
+test("runSignalCheck processes manual-mode messages across parse failure, ignored, and drafted outcomes", async () => {
+  const fetchMessages = vi.fn().mockResolvedValue([
+    {
+      messageId: "m1",
+      channelId: "chan-1",
+      author: "Trader",
+      content: "bad parse",
+      timestamp: new Date("2024-01-01T00:00:00Z"),
+    },
+    {
+      messageId: "m2",
+      channelId: "chan-1",
+      author: "Trader",
+      content: "hold",
+      timestamp: new Date("2024-01-01T00:00:01Z"),
+    },
+    {
+      messageId: "m3",
+      channelId: "chan-1",
+      author: "Trader",
+      content: "buy",
+      timestamp: new Date("2024-01-01T00:00:02Z"),
+    },
+  ]);
+  executorMocks.getTradingMode.mockResolvedValue("manual");
+  executorMocks.getSignalConfig.mockResolvedValue({
+    fetchLimit: 20,
+    timeWindowHours: 6,
+    batchSize: 5,
+  });
+  executorMocks.processedMessageFind
+    .mockReturnValueOnce(mockLean([{ messageId: "old", accountId: { toString: () => "acc-9" } }]))
+    .mockReturnValueOnce(mockLean([]));
+  executorMocks.accountFind.mockReturnValue(
+    mockSortedLean([
+      {
+        _id: { toString: () => "acc-disabled" },
+        name: "Disabled",
+        sourceType: "discord",
+        channelIds: ["chan-x"],
+        disabledChannelIds: ["chan-x"],
+        sourceData: {},
+      },
+      {
+        _id: { toString: () => "acc-1" },
+        name: "Signals",
+        sourceType: "discord",
+        channelIds: ["chan-1"],
+        disabledChannelIds: [],
+        sourceData: { token: "abc" },
+      },
+    ]),
+  );
+  executorMocks.sourceGetProvider.mockReturnValue({ fetchMessages });
+  executorMocks.analyzeMessagesWithAI.mockResolvedValue([
+    { messageId: "m1", signal: null, parseError: "invalid schema" },
+    { messageId: "m2", signal: { action: "HOLD" } },
+    { messageId: "m3", signal: { action: "BUY", symbol: "BTCUSDT" } },
+  ]);
+  executorMocks.createTradeProcessId
+    .mockReturnValueOnce("proc-1")
+    .mockReturnValueOnce("proc-2")
+    .mockReturnValueOnce("proc-3");
+  executorMocks.createDraft.mockResolvedValue({ _id: { toString: () => "draft-1" } });
+
+  const result = await runSignalCheck();
+
+  assert.deepEqual(result, {
+    checked: 3,
+    newSignals: 1,
+    executed: 0,
+    drafted: 1,
+    errors: ["Message m1: AI parse failed: invalid schema"],
+    sources: [
+      { name: "Disabled", channels: 1, healthy: true },
+      { name: "Signals", channels: 1, healthy: true },
+    ],
+  });
+  assert.equal(fetchMessages.mock.calls[0]?.[1], 20);
+  assert.equal(fetchMessages.mock.calls[0]?.[2], 6);
+  assert.deepEqual([...fetchMessages.mock.calls[0]?.[3]], []);
+  assert.equal(executorMocks.processedMessageInsertMany.mock.calls.length, 1);
+  assert.equal(executorMocks.processedMessageUpdateOne.mock.calls.length, 4);
+  assert.equal(executorMocks.createDraft.mock.calls.length, 1);
+  assert.equal(executorMocks.accountFindByIdAndUpdate.mock.calls.length, 1);
+});
+
+test("runSignalCheck handles provider errors and auto-mode cancel signals that reject drafts and close positions", async () => {
+  const cancelledDraft = {
+    _id: { toString: () => "draft-2" },
+    symbol: "BTCUSDT",
+    accountId: "acc-2",
+    processId: "draft-proc",
+    status: "pending",
+    resolvedAt: null,
+    save: vi.fn().mockResolvedValue(undefined),
+  };
+  const openPosition = createDoc({
+    symbol: "BTCUSDT",
+    side: "LONG",
+    quantity: 3,
+    orderId: "order-77",
+    accountId: "acc-2",
+  });
+  const exchange = {
+    closePosition: vi.fn().mockResolvedValue(undefined),
+  };
+  executorMocks.getTradingMode.mockResolvedValue("auto");
+  executorMocks.getSignalConfig.mockResolvedValue({
+    fetchLimit: 10,
+    timeWindowHours: 12,
+    batchSize: 2,
+  });
+  executorMocks.processedMessageFind
+    .mockReturnValueOnce(mockLean([]))
+    .mockReturnValueOnce(mockLean([]));
+  executorMocks.accountFind.mockReturnValue(
+    mockSortedLean([
+      {
+        _id: { toString: () => "acc-bad" },
+        name: "Broken Source",
+        sourceType: "discord",
+        channelIds: ["chan-bad"],
+        disabledChannelIds: [],
+        sourceData: {},
+      },
+      {
+        _id: { toString: () => "acc-2" },
+        name: "Auto Source",
+        sourceType: "discord",
+        channelIds: ["chan-2"],
+        disabledChannelIds: [],
+        sourceData: {},
+      },
+    ]),
+  );
+  executorMocks.sourceGetProvider
+    .mockReturnValueOnce({
+      fetchMessages: vi.fn().mockRejectedValue(new Error("source offline")),
+    })
+    .mockReturnValueOnce({
+      fetchMessages: vi.fn().mockResolvedValue([
+        {
+          messageId: "cancel-1",
+          channelId: "chan-2",
+          author: "Trader",
+          content: "cancel btc",
+          sourceId: "acc-2",
+          sourceName: "Auto Source",
+        },
+      ]),
+    });
+  executorMocks.analyzeMessagesWithAI.mockResolvedValue([
+    {
+      messageId: "cancel-1",
+      signal: { action: "CANCEL", symbol: "BTCUSDT", reasoning: "setup invalid" },
+    },
+  ]);
+  executorMocks.createTradeProcessId.mockReturnValue("proc-cancel");
+  executorMocks.draftFind.mockResolvedValue([cancelledDraft]);
+  executorMocks.positionFind.mockResolvedValue([openPosition]);
+  executorMocks.accountFindById.mockReturnValue(
+    mockLean({
+      tradingPlatform: "bybit",
+      exchangeData: { apiKey: "k", secret: "s" },
+    }),
+  );
+  executorMocks.buildExchangeCredentials.mockReturnValue({ provider: "bybit" });
+  executorMocks.getClientForAccount.mockReturnValue(exchange);
+
+  const result = await runSignalCheck();
+
+  assert.equal(result.checked, 1);
+  assert.equal(result.newSignals, 0);
+  assert.equal(result.executed, 0);
+  assert.deepEqual(result.errors, ['Account "Broken Source": source offline']);
+  assert.deepEqual(result.sources, [
+    { name: "Broken Source", channels: 1, healthy: false },
+    { name: "Auto Source", channels: 1, healthy: true },
+  ]);
+  assert.equal(cancelledDraft.status, "rejected");
+  assert.ok(cancelledDraft.resolvedAt instanceof Date);
+  assert.equal(openPosition.status, "closed");
+  assert.match(String(openPosition.closeReason), /Cancel request by Trader/);
+  assert.equal(exchange.closePosition.mock.calls.length, 1);
 });

@@ -770,3 +770,324 @@ test("okx cancelOrder returns false when the batch cancel response rejects it", 
 
   assert.equal(result, false);
 });
+
+test("okx auth helpers and position-mode cache handle simulated headers and fallback reads", async () => {
+  const exchange = new OkxExchange("key", "secret", "passphrase", true) as any;
+  let calls = 0;
+
+  exchange.client.get = async () => {
+    calls += 1;
+    if (calls === 1) {
+      return { data: { data: [{ posMode: "net_mode" }] } };
+    }
+    throw new Error("offline");
+  };
+
+  const headers = exchange.authHeaders("GET", "/api/v5/account/config");
+  const first = await exchange.getPositionMode();
+  const cached = await exchange.getPositionMode();
+  exchange.accountConfigCache = { posMode: "net_mode", ts: 0 };
+  const fallback = await exchange.getPositionMode(true);
+
+  assert.equal(headers["OK-ACCESS-KEY"], "key");
+  assert.equal(headers["OK-ACCESS-PASSPHRASE"], "passphrase");
+  assert.equal(headers["x-simulated-trading"], "1");
+  assert.equal(typeof headers["OK-ACCESS-SIGN"], "string");
+  assert.equal(first, "net_mode");
+  assert.equal(cached, "net_mode");
+  assert.equal(fallback, "net_mode");
+});
+
+test("okx validateInstrument suggests alternatives and wraps unexpected lookup failures", async () => {
+  const exchange = new OkxExchange("key", "secret", "passphrase") as any;
+  let calls = 0;
+
+  exchange.client.get = async (path: string) => {
+    calls += 1;
+    if (calls === 1) {
+      assert.equal(
+        path,
+        "/api/v5/public/instruments?instType=SWAP&instId=BTC-USDT-SWAP",
+      );
+      return { data: { code: "0", data: [] } };
+    }
+    return {
+      data: {
+        code: "0",
+        data: [
+          { instId: "BTC-USD-SWAP", baseCcy: "BTC", quoteCcy: "USD", state: "live" },
+          { instId: "BTC-USDC-SWAP", baseCcy: "BTC", quoteCcy: "USDC", state: "live" },
+        ],
+      },
+    };
+  };
+
+  await assert.rejects(
+    () => exchange.validateInstrument("BTCUSDT"),
+    /Did you mean one of: BTC-USD-SWAP \(USD\), BTC-USDC-SWAP \(USDC\)\?/,
+  );
+
+  exchange.client.get = async () => {
+    throw new Error("gateway timeout");
+  };
+
+  await assert.rejects(
+    () => exchange.validateInstrument("ETHUSDT"),
+    /Failed to validate instrument ETH-USDT-SWAP: gateway timeout/,
+  );
+});
+
+test("okx account configuration helpers cover success, business errors, and graceful ensure flow", async () => {
+  const exchange = new OkxExchange("key", "secret", "passphrase") as any;
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]) => warnings.push(args.join(" "));
+
+  try {
+    exchange.client.post = async (path: string) => {
+      if (path === "/api/v5/account/set-account-mode") {
+        return { data: { code: "0" } };
+      }
+      return { data: { code: "0" } };
+    };
+    await exchange.setAccountMode("2");
+
+    exchange.client.post = async (_path: string, _body: string) => ({
+      data: { code: "1", msg: "not allowed" },
+    });
+    await assert.rejects(
+      () => exchange.setPositionMode("BTCUSDT", "net_mode"),
+      /Failed to set OKX position mode: not allowed/,
+    );
+
+    exchange.setAccountMode = async () => {
+      throw new Error("mode locked");
+    };
+    exchange.setPositionMode = async () => {
+      throw new Error("position locked");
+    };
+    await exchange.ensureAccountConfigured("BTCUSDT");
+
+    assert.equal(
+      warnings.some((line) => line.includes("Could not set account mode")),
+      true,
+    );
+    assert.equal(
+      warnings.some((line) => line.includes("Could not set position mode")),
+      true,
+    );
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test("okx account and market data helpers surface API failures and empty results", async () => {
+  const exchange = new OkxExchange("key", "secret", "passphrase") as any;
+
+  exchange.client.get = async (path: string) => {
+    if (path === "/api/v5/account/balance") {
+      return { data: { code: "1", msg: "denied" } };
+    }
+    if (path.includes("/market/ticker")) {
+      return { data: { code: "1", data: [] } };
+    }
+    return { data: { code: "1", data: [] } };
+  };
+
+  await assert.rejects(() => exchange.getAccountInfo(), /OKX API error: denied/);
+  await assert.rejects(
+    () => exchange.getTickerPrice("BTCUSDT"),
+    /Failed to get price for BTCUSDT/,
+  );
+  assert.deepEqual(await exchange.getKlines("BTCUSDT"), []);
+});
+
+test("okx placeOrder handles axios retry paths, retry failures, and non-retry request failures", async () => {
+  const exchange = new OkxExchange("key", "secret", "passphrase") as any;
+  exchange.accountConfigCache = {
+    posMode: "long_short_mode",
+    ts: Date.now(),
+  };
+  exchange.validateInstrument = async () => ({
+    instId: "BTC-USDT-SWAP",
+    ctVal: "1",
+    lotSz: "1",
+    minSz: "1",
+  });
+  exchange.setLeverage = async () => {};
+  exchange.ensureAccountConfigured = async () => {};
+  exchange.getTickerPrice = async () => 65000;
+
+  let calls = 0;
+  exchange.client.post = async () => {
+    calls += 1;
+    if (calls === 1) {
+      throw {
+        isAxiosError: true,
+        message: "Request failed with status code 400",
+        response: {
+          status: 400,
+          data: {
+            code: "51010",
+            msg: "mode mismatch",
+            data: [{ sCode: "51010", sMsg: "mode mismatch" }],
+          },
+        },
+      };
+    }
+    return {
+      data: {
+        code: "0",
+        data: [{ sCode: "0", ordId: "retry-1" }],
+      },
+    };
+  };
+
+  const retried = await exchange.placeOrder({
+    symbol: "BTCUSDT",
+    side: OrderSide.BUY,
+    type: ExchangeOrderType.MARKET,
+    quantity: 1,
+    leverage: 3,
+  });
+
+  assert.equal(retried.orderId, "retry-1");
+
+  exchange.client.post = async () => {
+    throw new Error("network down");
+  };
+
+  await assert.rejects(
+    () =>
+      exchange.placeOrder({
+        symbol: "BTCUSDT",
+        side: OrderSide.SELL,
+        type: ExchangeOrderType.MARKET,
+        quantity: 1,
+      }),
+    /OKX order request failed: network down/,
+  );
+});
+
+test("okx closePosition and closeAllPositions report missing positions and fallback failures", async () => {
+  const exchange = new OkxExchange("key", "secret", "passphrase") as any;
+  exchange.accountConfigCache = {
+    posMode: "net_mode",
+    ts: Date.now(),
+  };
+
+  exchange.getOpenPositions = async () => [];
+  await assert.rejects(
+    () => exchange.closePosition("BTCUSDT"),
+    /No open position found for BTCUSDT/,
+  );
+
+  exchange.getOpenPositions = async () => [
+    {
+      symbol: "BTCUSDT",
+      positionId: "pos-1",
+      side: "LONG",
+      marginType: "isolated",
+      quantity: 1,
+    },
+  ];
+  exchange.client.post = async (path: string) => {
+    if (path === "/api/v5/trade/close-position") {
+      return { data: { code: "1", msg: "close failed", data: [] } };
+    }
+    return {
+      data: {
+        code: "1",
+        msg: "fallback failed",
+        data: [{ sCode: "51603", sMsg: "fallback rejected" }],
+      },
+    };
+  };
+
+  await assert.rejects(
+    () => exchange.closePosition("BTCUSDT", "pos-1", 1),
+    /Failed to close OKX position: fallback failed/,
+  );
+
+  exchange.getOpenPositions = async () => {
+    throw new Error("positions offline");
+  };
+  assert.deepEqual(await exchange.closeAllPositions(), {
+    closed: [],
+    errors: ["Failed to fetch positions: positions offline"],
+  });
+});
+
+test("okx stop-loss, take-profit, algo cancellation, and specs failures cover remaining branches", async () => {
+  const exchange = new OkxExchange("key", "secret", "passphrase") as any;
+
+  exchange.accountConfigCache = {
+    posMode: "net_mode",
+    ts: Date.now(),
+  };
+  let calls = 0;
+  exchange.client.post = async (_path: string, body: string) => {
+    calls += 1;
+    const payload = JSON.parse(body);
+    if (calls === 1) {
+      assert.equal("posSide" in payload, false);
+      return { data: { code: "1", msg: "sl failed", data: [] } };
+    }
+    if (calls === 2) {
+      assert.equal("posSide" in payload, false);
+      return { data: { code: "1", msg: "tp failed", data: [] } };
+    }
+    return { data: { code: "1", msg: "batch failed" } };
+  };
+
+  await assert.rejects(
+    () => exchange.placeStopLoss("BTCUSDT", 60000, 0, OrderSide.SELL, 1),
+    /Failed to place OKX stop loss: sl failed/,
+  );
+  await assert.rejects(
+    () => exchange.placeTakeProfit("BTCUSDT", 70000, 0, OrderSide.BUY, 1),
+    /Failed to place OKX take profit: tp failed/,
+  );
+
+  exchange.getAlgoOrders = async () => [];
+  assert.deepEqual(await exchange.cancelAlgoOrders("BTCUSDT"), {
+    cancelled: [],
+    errors: [],
+  });
+
+  exchange.getAlgoOrders = async () => [{ orderId: "algo-1" }];
+  assert.deepEqual(await exchange.cancelAlgoOrders("BTCUSDT"), {
+    cancelled: [],
+    errors: ["Batch cancel failed: batch failed"],
+  });
+
+  exchange.client.get = async () => ({
+    data: {
+      code: "0",
+      data: [
+        {
+          lotSz: "1",
+          tickSz: "5",
+          ctVal: "1",
+          minSz: "2",
+          ctValCcy: "",
+        },
+      ],
+    },
+  });
+  assert.deepEqual(await exchange.getInstrumentSpecs("ETHUSDT"), {
+    ctVal: 1,
+    lotSz: 1,
+    minSz: 2,
+    ctValCcy: "",
+    tickSz: 5,
+    qtyDecimals: 0,
+    priceDecimals: 0,
+  });
+
+  exchange.client.get = async () => ({ data: { code: "1", msg: "missing" } });
+  await assert.rejects(
+    () => exchange.getInstrumentSpecs("DOGEUSDT"),
+    /Failed to get instrument specs for DOGE-USDT-SWAP: missing/,
+  );
+});

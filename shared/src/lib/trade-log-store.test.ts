@@ -225,6 +225,72 @@ test("createTradeLog warns in dual mode when mongo is unavailable but file write
   assert.match(String(warnSpy.mock.calls[0][0]), /Mongo log write failed/);
 });
 
+test("createTradeLog throws for file-only failures, mongo-only failures, and dual-write failures", async () => {
+  setEnv({
+    PROCESS_LOG_STORAGE: "file",
+    PROCESS_LOG_DIR: "/tmp/copytrade-fail",
+  });
+  storeMocks.appendFile.mockRejectedValueOnce(new Error("disk full"));
+  await assert.rejects(
+    () =>
+      createTradeLog({
+        processId: "file-only",
+        type: "executor",
+        action: "BUY",
+      }),
+    /disk full/,
+  );
+
+  setEnv({
+    PROCESS_LOG_STORAGE: "mongo",
+  });
+  await assert.rejects(
+    () =>
+      createTradeLog({
+        processId: "mongo-only",
+        type: "executor",
+        action: "SELL",
+      }),
+    /MongoDB connection is not ready/,
+  );
+
+  setEnv({
+    PROCESS_LOG_STORAGE: "dual",
+    PROCESS_LOG_DIR: "/tmp/copytrade-dual-fail",
+  });
+  storeMocks.appendFile.mockRejectedValueOnce(new Error("append failed"));
+  await assert.rejects(
+    () =>
+      createTradeLog({
+        processId: "dual-both",
+        type: "executor",
+        action: "TP",
+      }),
+    /append failed/,
+  );
+});
+
+test("createTradeLog warns when file writes fail but mongo writes succeed in dual mode", async () => {
+  setEnv({
+    PROCESS_LOG_STORAGE: "dual",
+    PROCESS_LOG_DIR: "/tmp/copytrade-dual-warn",
+  });
+  storeMocks.mongooseConnection.readyState = 1;
+  storeMocks.appendFile.mockRejectedValue(new Error("readonly fs"));
+  storeMocks.tradeLogCreate.mockResolvedValue({ _id: "mongo-ok" });
+  const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+  const record = await createTradeLog({
+    processId: "proc-dual-warn",
+    type: "executor",
+    action: "SL",
+  });
+
+  assert.equal(record.processId, "proc-dual-warn");
+  assert.equal(storeMocks.tradeLogCreate.mock.calls.length, 1);
+  assert.match(String(warnSpy.mock.calls[0][0]), /File log write failed: readonly fs/);
+});
+
 test("getProcessTradeLogs merges file and mongo logs, normalizes mongo records, dedupes, and sorts", async () => {
   setEnv({
     PROCESS_LOG_STORAGE: "dual",
@@ -450,6 +516,87 @@ test("remote backend mode proxies create, list, count, and recent-log requests",
   assert.equal(listed.totalCount, 9);
   assert.equal(counted, 7);
   assert.deepEqual(recent, [{ _id: "remote-log-3" }, { _id: "remote-log-4" }]);
+});
+
+test("getProcessTradeLogs supports remote proxy mode and local file-only mode without mongo reads", async () => {
+  setEnv({
+    BACKEND_URL: "https://backend.example.com",
+    NEXT_RUNTIME: "nodejs",
+  });
+  storeMocks.fetchMock.mockResolvedValueOnce({
+    ok: true,
+    json: async () => ({
+      success: true,
+      data: {
+        logs: [{ _id: "remote-proc-1" }],
+        totalCount: 1,
+        page: 1,
+        limit: 3,
+        totalPages: 1,
+      },
+    }),
+  });
+
+  const remoteLogs = await getProcessTradeLogs({
+    processId: "proc-remote",
+    limit: 3,
+    order: "desc",
+  });
+
+  assert.deepEqual(remoteLogs, [{ _id: "remote-proc-1" }]);
+  assert.equal(
+    storeMocks.fetchMock.mock.calls[0][0],
+    "https://backend.example.com/api/logs?processId=proc-remote&hideCronNoise=false&order=desc&limit=3",
+  );
+
+  setEnv({
+    BACKEND_URL: undefined,
+    NEXT_RUNTIME: undefined,
+    PROCESS_LOG_STORAGE: "file",
+    PROCESS_LOG_INCLUDE_MONGO_LEGACY: "false",
+    PROCESS_LOG_DIR: "/tmp/copytrade-process-local",
+  });
+  storeMocks.stat.mockRejectedValue(Object.assign(new Error("missing"), { code: "ENOENT" }));
+
+  const localLogs = await getProcessTradeLogs({
+    processId: "proc-local",
+  });
+
+  assert.deepEqual(localLogs, []);
+  assert.equal(storeMocks.tradeLogFind.mock.calls.length, 0);
+});
+
+test("countTradeLogs and getRecentTradeLogs use local list mode when no remote backend is active", async () => {
+  setEnv({
+    PROCESS_LOG_STORAGE: "file",
+    PROCESS_LOG_DIR: "/tmp/copytrade-count-local",
+  });
+  storeMocks.readFile.mockResolvedValue(
+    [
+      JSON.stringify({
+        _id: "local-1",
+        accountId: "acc-1",
+        processId: "proc-1",
+        type: "executor",
+        action: "BUY",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+      JSON.stringify({
+        _id: "local-2",
+        accountId: "acc-1",
+        processId: "proc-2",
+        type: "executor",
+        action: "SELL",
+        createdAt: "2026-01-02T00:00:00.000Z",
+      }),
+    ].join("\n"),
+  );
+
+  const total = await countTradeLogs();
+  const recent = await getRecentTradeLogs(1);
+
+  assert.equal(total, 2);
+  assert.deepEqual(recent.map((log) => log._id), ["local-2"]);
 });
 
 test("remote backend mode surfaces request failures", async () => {

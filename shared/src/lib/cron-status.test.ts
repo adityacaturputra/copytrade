@@ -1,4 +1,4 @@
-import { beforeEach, test, vi } from "vitest";
+import { afterEach, beforeEach, test, vi } from "vitest";
 import assert from "node:assert/strict";
 import {
   finishCron,
@@ -11,6 +11,10 @@ import {
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-04-21T00:00:00.000Z"));
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 test("cron-status initializes default entries and returns defensive copies", () => {

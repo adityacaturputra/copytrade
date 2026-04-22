@@ -75,6 +75,27 @@ test("cron route rejects unauthorized requests when CRON_SECRET is configured", 
   warnSpy.mockRestore();
 });
 
+test("cron route accepts authorized requests when CRON_SECRET matches", async () => {
+  process.env.CRON_SECRET = "secret";
+  cronMocks.tryStart.mockReturnValue(true);
+  cronMocks.runSignalCheck.mockResolvedValue({
+    checked: 1,
+    newSignals: 0,
+    executed: 0,
+    errors: [],
+  });
+
+  const res = await request(createApp())
+    .post("/signal-check")
+    .set("authorization", "Bearer secret");
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.success, true);
+
+  await Promise.resolve();
+  await Promise.resolve();
+});
+
 test("cron route returns conflict when a job is already running and reports status", async () => {
   cronMocks.tryStart.mockReturnValue(false);
   cronMocks.getCronStatus.mockReturnValue({ running: true, progress: "busy" });
@@ -138,5 +159,78 @@ test("cron route starts jobs and runs success and error background flows", async
   ]);
   assert.equal(errorSpy.mock.calls.length > 0, true);
 
+  errorSpy.mockRestore();
+});
+
+test("cron route records partial-success signal and TP/SL runs, and position monitor failures", async () => {
+  cronMocks.tryStart.mockReturnValue(true);
+  cronMocks.runSignalCheck.mockResolvedValue({
+    checked: 5,
+    newSignals: 2,
+    executed: 1,
+    errors: ["minor"],
+  });
+  cronMocks.runPositionMonitor.mockRejectedValue(new Error("monitor blew up"));
+  cronMocks.runTpslMonitor.mockResolvedValue({
+    checked: 4,
+    promoted: 1,
+    tpslPlaced: 1,
+    errors: ["partial"],
+  });
+
+  const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  const app = createApp();
+
+  const signal = await request(app).post("/signal-check");
+  assert.equal(signal.status, 200);
+
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.deepEqual(cronMocks.finishCron.mock.calls[0], [
+    "signal-check",
+    "error",
+  ]);
+  assert.deepEqual(cronMocks.updateProgress.mock.calls[1], [
+    "signal-check",
+    "Running signal check...",
+  ]);
+  assert.deepEqual(cronMocks.createTradeLog.mock.calls[0], [
+    {
+      type: "cron",
+      action: "signal_check_start",
+      details: "Starting Discord signal check cron job",
+      result: "started",
+    },
+  ]);
+
+  const position = await request(app).get("/position-monitor");
+  assert.equal(position.status, 200);
+
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.deepEqual(cronMocks.finishCron.mock.calls[1], [
+    "position-monitor",
+    "error",
+    "monitor blew up",
+  ]);
+
+  const tpsl = await request(app).get("/tp-sl-monitor");
+  assert.equal(tpsl.status, 200);
+
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.deepEqual(cronMocks.updateProgress.mock.calls.at(-1), [
+    "tp-sl-monitor",
+    "Done — checked: 4, promoted: 1, TP/SL placed: 1, errors: 1",
+    "warning",
+  ]);
+  assert.deepEqual(cronMocks.finishCron.mock.calls.at(-1), [
+    "tp-sl-monitor",
+    "error",
+  ]);
+  assert.equal(errorSpy.mock.calls.length >= 1, true);
   errorSpy.mockRestore();
 });

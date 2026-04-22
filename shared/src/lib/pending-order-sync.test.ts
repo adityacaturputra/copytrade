@@ -209,3 +209,111 @@ test("inspectPendingLimitOrder detects OKX short fill via same-side position", a
 
   assert.equal(inspection.type, "filled");
 });
+
+test("inspectPendingLimitOrder returns filled state from history and omits zero fill prices", async () => {
+  const exchange = createExchangeMock({
+    getOrderHistory: async () => [
+      {
+        orderId: "hist-filled",
+        symbol: "BTCUSDT",
+        side: "BUY",
+        type: "LIMIT",
+        price: 67000,
+        quantity: 0.02,
+        filledQuantity: 0.02,
+        fee: 0,
+        status: "FILLED",
+        createdAt: Date.now(),
+      },
+      {
+        orderId: "hist-filled-zero",
+        symbol: "BTCUSDT",
+        side: "BUY",
+        type: "LIMIT",
+        price: 0,
+        quantity: 0.02,
+        filledQuantity: 0.02,
+        fee: 0,
+        status: "filled",
+        createdAt: Date.now(),
+      },
+    ],
+  });
+
+  const filled = await inspectPendingLimitOrder(exchange, {
+    symbol: "BTCUSDT",
+    side: "LONG",
+    orderId: "hist-filled",
+    openedAt: new Date(Date.now() - 10 * 60 * 1000),
+  } as any);
+  const zeroPrice = await inspectPendingLimitOrder(exchange, {
+    symbol: "BTCUSDT",
+    side: "LONG",
+    orderId: "hist-filled-zero",
+    openedAt: new Date(Date.now() - 10 * 60 * 1000),
+  } as any);
+
+  assert.deepEqual(filled, {
+    type: "filled",
+    reason: "Order hist-filled is filled",
+    fillPrice: 67000,
+  });
+  assert.deepEqual(zeroPrice, {
+    type: "filled",
+    reason: "Order hist-filled-zero is filled",
+    fillPrice: undefined,
+  });
+});
+
+test("inspectPendingLimitOrder maps cancelled and unknown history states", async () => {
+  const exchange = createExchangeMock({
+    getOrderHistory: async () => [
+      {
+        orderId: "hist-cancelled",
+        symbol: "BTCUSDT",
+        side: "BUY",
+        type: "LIMIT",
+        price: 67000,
+        quantity: 0.02,
+        filledQuantity: 0,
+        fee: 0,
+        status: "cancelled",
+        createdAt: Date.now(),
+      },
+      {
+        orderId: "hist-unknown",
+        symbol: "BTCUSDT",
+        side: "BUY",
+        type: "LIMIT",
+        price: 67000,
+        quantity: 0.02,
+        filledQuantity: 0,
+        fee: 0,
+        status: "mystery-state",
+        createdAt: Date.now(),
+      },
+    ],
+  });
+
+  const cancelled = await inspectPendingLimitOrder(exchange, {
+    symbol: "BTCUSDT",
+    side: "LONG",
+    orderId: "hist-cancelled",
+    openedAt: new Date(Date.now() - 10 * 60 * 1000),
+  } as any);
+  const unknown = await inspectPendingLimitOrder(exchange, {
+    symbol: "BTCUSDT",
+    side: "LONG",
+    orderId: "hist-unknown",
+    openedAt: new Date(Date.now() - 10 * 60 * 1000),
+  } as any);
+
+  assert.deepEqual(cancelled, {
+    type: "cancelled",
+    reason: "Limit order hist-cancelled is cancelled on exchange",
+  });
+  assert.deepEqual(unknown, {
+    type: "live",
+    reason: "Treating exchange order state mystery-state as still pending",
+  });
+});

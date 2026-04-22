@@ -123,6 +123,25 @@ test("OpenAIAnalyzer bulk parsing falls back to one-by-one parsing when bulk nor
   );
 });
 
+test("OpenAIAnalyzer bulk fallback records null when one-by-one parsing throws", async () => {
+  openAiAnalyzerMocks.create.mockResolvedValueOnce({
+    choices: [{ message: { content: '{"bulk":true}' } }],
+  });
+  openAiAnalyzerMocks.parseBulkSignalResponse.mockReturnValueOnce(null);
+
+  const analyzer = new OpenAIAnalyzer();
+  const parseSignalSpy = vi
+    .spyOn(analyzer, "parseSignal")
+    .mockRejectedValueOnce(new Error("parse blew up"));
+
+  const fallback = await analyzer.parseBulkSignals([
+    { messageId: "1", content: "buy btc" },
+  ]);
+
+  assert.deepEqual(fallback, [{ messageId: "1", signal: null }]);
+  assert.equal(parseSignalSpy.mock.calls.length, 1);
+});
+
 test("OpenAIAnalyzer analyzePosition returns parsed JSON or a HOLD fallback", async () => {
   openAiAnalyzerMocks.create
     .mockResolvedValueOnce({
@@ -183,4 +202,40 @@ test("OpenAIAnalyzer rotates API keys on rate limits and uses env overrides", as
     { apiKey: "good-key", baseURL: "https://proxy.example/v1" },
   ]);
   assert.equal(openAiAnalyzerMocks.create.mock.calls[1]?.[0]?.model, "gpt-test");
+});
+
+test("OpenAIAnalyzer rejects when no API key is configured", async () => {
+  delete process.env.OPENAI_API_KEY;
+
+  const analyzer = new OpenAIAnalyzer();
+
+  await assert.rejects(analyzer.parseSignal("buy btc"), /OPENAI_API_KEY is missing/);
+});
+
+test("OpenAIAnalyzer rethrows non-retryable API failures", async () => {
+  openAiAnalyzerMocks.create.mockRejectedValueOnce({
+    status: 401,
+    message: "unauthorized",
+  });
+
+  const analyzer = new OpenAIAnalyzer();
+
+  await assert.rejects(analyzer.parseSignal("buy btc"), (error) => {
+    assert.deepEqual(error, { status: 401, message: "unauthorized" });
+    return true;
+  });
+});
+
+test("OpenAIAnalyzer surfaces an aggregate error when all retryable keys fail", async () => {
+  process.env.OPENAI_API_KEY = "key-1,key-2";
+  openAiAnalyzerMocks.create
+    .mockRejectedValueOnce({ status: 429, message: "rate limit" })
+    .mockRejectedValueOnce({ status: 402, message: "quota exhausted" });
+
+  const analyzer = new OpenAIAnalyzer();
+
+  await assert.rejects(
+    analyzer.parseSignal("buy btc"),
+    /All OpenAI API keys failed/,
+  );
 });

@@ -400,3 +400,255 @@ test("runPositionMonitor records per-position failures and general monitor failu
     syncedClosed: 0,
   });
 });
+
+test("runPositionMonitor keeps positions unchanged for low-confidence AI decisions and uses account exchange clients with ticker fallback", async () => {
+  const weakClose = createPosition({
+    _id: { toString: () => "weak-close" },
+    symbol: "WEAKCLOSE",
+    accountId: "acc-1",
+  });
+  const weakMoveSl = createPosition({
+    _id: { toString: () => "weak-sl" },
+    symbol: "WEAKSL",
+    accountId: "acc-1",
+    stopLossPrice: 90,
+  });
+  const weakPartial = createPosition({
+    _id: { toString: () => "weak-partial" },
+    symbol: "WEAKPART",
+    accountId: "acc-1",
+    quantity: 6,
+  });
+  const weakUpdate = createPosition({
+    _id: { toString: () => "weak-update" },
+    symbol: "TICKERUSDT",
+    accountId: "acc-1",
+    side: "SHORT",
+    takeProfitTargets: [{ price: 80, quantity: 4, percentage: 100, status: "pending" }],
+  });
+  const positions = [weakClose, weakMoveSl, weakPartial, weakUpdate];
+  const exchange = createExchange();
+  const analyzer = {
+    analyzePosition: vi.fn().mockImplementation(async (input: { symbol: string }) => {
+      switch (input.symbol) {
+        case "WEAKCLOSE":
+          return { decision: "CLOSE", confidence: 69, reason: "not strong enough" };
+        case "WEAKSL":
+          return {
+            decision: "MOVE_SL",
+            confidence: 59,
+            reason: "too early",
+            newStopLoss: 101,
+          };
+        case "WEAKPART":
+          return {
+            decision: "PARTIAL_CLOSE",
+            confidence: 60,
+            reason: "hold a bit longer",
+            closePercentage: 30,
+          };
+        default:
+          return {
+            decision: "UPDATE_TP",
+            confidence: 59,
+            reason: "not enough confirmation",
+            newTakeProfit: 70,
+          };
+      }
+    }),
+  };
+
+  usePositionState(positions);
+  exchange.getOpenPositions.mockResolvedValue([
+    {
+      symbol: "WEAKCLOSE",
+      markPrice: 108,
+      unrealizedPnl: 4,
+      entryPrice: 100,
+      quantity: 4,
+    },
+    {
+      symbol: "WEAKSL",
+      markPrice: 108,
+      unrealizedPnl: 4,
+      entryPrice: 100,
+      quantity: 4,
+    },
+    {
+      symbol: "WEAKPART",
+      markPrice: 108,
+      unrealizedPnl: 4,
+      entryPrice: 100,
+      quantity: 6,
+    },
+    {
+      symbol: "TICKERUSDT",
+      markPrice: 0,
+      unrealizedPnl: 2,
+      entryPrice: 100,
+      quantity: 4,
+    },
+  ]);
+  exchange.getTickerPrice.mockResolvedValue(92);
+  monitorMocks.accountFindById.mockReturnValue(
+    createLeanQuery({
+      tradingPlatform: "bybit",
+      exchangeData: { apiKey: "k", secret: "s" },
+    }),
+  );
+  monitorMocks.buildExchangeCredentials.mockReturnValue({ provider: "bybit" });
+  monitorMocks.getClientForAccount.mockReturnValue(exchange);
+  monitorMocks.getAnalyzer.mockReturnValue(analyzer);
+
+  const result = await runPositionMonitor();
+
+  assert.deepEqual(result, {
+    checked: 4,
+    actions: 0,
+    errors: [],
+    syncedClosed: 0,
+  });
+  assert.equal(weakClose.status, "open");
+  assert.equal(weakMoveSl.stopLossPrice, 90);
+  assert.equal(weakPartial.quantity, 6);
+  assert.equal(weakUpdate.takeProfitTargets[0].price, 80);
+  assert.equal(weakUpdate.currentPrice, 92);
+  assert.equal(weakUpdate.pnl, 80);
+  assert.equal(exchange.getTickerPrice.mock.calls[0]?.[0], "TICKERUSDT");
+  assert.ok(monitorMocks.buildExchangeCredentials.mock.calls.length > 0);
+  assert.ok(monitorMocks.getClientForAccount.mock.calls.length > 0);
+});
+
+test("runPositionMonitor handles pending inspection errors, full partial closes, TP appends, exchange-close warnings, and exchange sync fetch failures", async () => {
+  const pendingError = createPosition({
+    _id: { toString: () => "pending-error" },
+    symbol: "PENDERR",
+    status: "pending",
+  });
+  const fullPartial = createPosition({
+    _id: { toString: () => "full-partial" },
+    symbol: "FULLPART",
+    quantity: 2,
+  });
+  const appendTp = createPosition({
+    _id: { toString: () => "append-tp" },
+    symbol: "APPENDTP",
+    takeProfitTargets: [{ price: 120, quantity: 4, percentage: 100, status: "filled" }],
+  });
+  const closeWarn = createPosition({
+    _id: { toString: () => "close-warn" },
+    symbol: "AICLOSEWARN",
+  });
+  const syncFetchFail = createPosition({
+    _id: { toString: () => "sync-fetch-fail" },
+    symbol: "SYNCFAIL",
+    accountId: "acc-2",
+  });
+  const positions = [pendingError, fullPartial, appendTp, closeWarn, syncFetchFail];
+  const exchange = createExchange();
+  const analyzer = {
+    analyzePosition: vi.fn().mockImplementation(async (input: { symbol: string }) => {
+      switch (input.symbol) {
+        case "FULLPART":
+          return {
+            decision: "PARTIAL_CLOSE",
+            confidence: 80,
+            reason: "exit fully",
+            closePercentage: 100,
+          };
+        case "APPENDTP":
+          return {
+            decision: "UPDATE_TP",
+            confidence: 75,
+            reason: "add extension",
+            newTakeProfit: 135,
+          };
+        case "AICLOSEWARN":
+          return {
+            decision: "CLOSE",
+            confidence: 90,
+            reason: "protect gains",
+          };
+        default:
+          return { decision: "HOLD", confidence: 90, reason: "healthy" };
+      }
+    }),
+  };
+
+  usePositionState(positions);
+  exchange.getOpenPositions.mockImplementation(async () => [
+    {
+      symbol: "FULLPART",
+      markPrice: 106,
+      unrealizedPnl: 3,
+      entryPrice: 100,
+      quantity: 2,
+    },
+    {
+      symbol: "APPENDTP",
+      markPrice: 106,
+      unrealizedPnl: 3,
+      entryPrice: 100,
+      quantity: 4,
+    },
+    {
+      symbol: "AICLOSEWARN",
+      markPrice: 106,
+      unrealizedPnl: 3,
+      entryPrice: 100,
+      quantity: 4,
+    },
+  ]);
+  exchange.closePosition.mockImplementation(async (symbol: string) => {
+    if (symbol === "AICLOSEWARN") {
+      throw new Error("exchange close rejected");
+    }
+  });
+  monitorMocks.getPaperClient.mockReturnValue(exchange);
+  monitorMocks.getAnalyzer.mockReturnValue(analyzer);
+  monitorMocks.inspectPendingLimitOrder.mockRejectedValue(new Error("inspection failed"));
+  monitorMocks.accountFindById.mockImplementation((accountId: string) => {
+    if (accountId === "acc-2") {
+      return createLeanQuery({
+        tradingPlatform: "bybit",
+        exchangeData: { apiKey: "k", secret: "s" },
+      });
+    }
+    return createLeanQuery(null);
+  });
+  monitorMocks.buildExchangeCredentials.mockReturnValue({ provider: "bybit" });
+  monitorMocks.getClientForAccount.mockReturnValue({
+    ...createExchange(),
+    getOpenPositions: vi.fn().mockRejectedValue(new Error("account offline")),
+    closePosition: vi.fn().mockResolvedValue(undefined),
+  });
+
+  const result = await runPositionMonitor();
+
+  assert.deepEqual(result, {
+    checked: 4,
+    actions: 3,
+    errors: ["Pending PENDERR: inspection failed"],
+    syncedClosed: 1,
+  });
+  assert.equal(pendingError.status, "pending");
+  assert.equal(fullPartial.status, "closed");
+  assert.match(String(fullPartial.closeReason), /AI Partial Close: exit fully/);
+  assert.equal(appendTp.takeProfitTargets.length, 2);
+  assert.equal(appendTp.takeProfitTargets[1].price, 135);
+  assert.equal(appendTp.takeProfitTargets[1].status, "pending");
+  assert.equal(closeWarn.status, "closed");
+  assert.match(String(closeWarn.closeReason), /AI Close: protect gains/);
+  assert.equal(syncFetchFail.status, "closed");
+  assert.equal(syncFetchFail.closeReason, "Closed on Exchange (external)");
+  assert.ok(
+    monitorMocks.logExecutorWarn.mock.calls.some((call) =>
+      String(call[0]).includes("Failed to fetch exchange positions for account acc-2"),
+    ),
+  );
+  assert.ok(
+    monitorMocks.logExecutorWarn.mock.calls.some((call) =>
+      String(call[0]).includes("Exchange close failed for AICLOSEWARN"),
+    ),
+  );
+});
