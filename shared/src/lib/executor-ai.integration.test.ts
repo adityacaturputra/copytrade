@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { startTestMongo, clearTestMongo, stopTestMongo } from "../../../tests/helpers/mongo";
+import { startTestMongo, clearTestMongo, stopTestMongo } from "../../../tests/helpers/mongo.ts";
 
 const {
   parseBulkSignalsMock,

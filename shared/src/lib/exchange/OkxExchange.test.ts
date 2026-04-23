@@ -332,6 +332,78 @@ test("okx cancelAlgoOrders returns mixed batch cancellation results", async () =
   });
 });
 
+test("okx placeTakeProfit maps BUY closes to short posSide and getOpenOrders without symbol returns an empty list on non-success responses", async () => {
+  const exchange = new OkxExchange("key", "secret", "passphrase") as any;
+
+  exchange.getPositionMode = async () => "long_short_mode";
+
+  let postedPayload: Record<string, string> | undefined;
+  exchange.client.post = async (_path: string, body: string) => {
+    postedPayload = JSON.parse(body);
+    return {
+      data: {
+        code: "0",
+        data: [{ algoId: "tp-hedge-1" }],
+      },
+    };
+  };
+
+  assert.equal(
+    await exchange.placeTakeProfit("BTCUSDT", 70000, 69950, "BUY", 1),
+    "tp-hedge-1",
+  );
+  assert.deepEqual(postedPayload, {
+    instId: "BTC-USDT-SWAP",
+    tdMode: "isolated",
+    side: "buy",
+    ordType: "conditional",
+    sz: "1",
+    tpTriggerPx: "70000",
+    tpOrdPx: "69950",
+    posSide: "short",
+  });
+
+  exchange.client.get = async (path: string) => {
+    assert.equal(path, "/api/v5/trade/orders-pending?instType=SWAP");
+    return {
+      data: {
+        code: "1",
+        data: [],
+      },
+    };
+  };
+
+  assert.deepEqual(await exchange.getOpenOrders(), []);
+});
+
+test("okx cancelOrder succeeds and getAlgoOrders without a symbol returns an empty list on non-success responses", async () => {
+  const exchange = new OkxExchange("key", "secret", "passphrase") as any;
+
+  exchange.client.post = async () => ({
+    data: {
+      code: "0",
+      data: [{ sCode: "0" }],
+    },
+  });
+
+  assert.equal(await exchange.cancelOrder("live-1", "BTCUSDT"), true);
+
+  exchange.client.get = async (path: string) => {
+    assert.equal(
+      path,
+      "/api/v5/trade/orders-algo-pending?ordType=conditional&instType=SWAP",
+    );
+    return {
+      data: {
+        code: "1",
+        data: [],
+      },
+    };
+  };
+
+  assert.deepEqual(await exchange.getAlgoOrders(), []);
+});
+
 test("okx normalizes open orders, algo orders, and history rows", async () => {
   const exchange = new OkxExchange("key", "secret", "passphrase") as any;
 

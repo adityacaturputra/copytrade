@@ -4,7 +4,7 @@ import {
   connectDB,
   disconnectDB,
   resetDBConnectionState,
-} from "../../shared/src/lib/database";
+} from "../../shared/src/lib/database.ts";
 
 let mongoServer: MongoMemoryServer | null = null;
 

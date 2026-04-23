@@ -284,6 +284,60 @@ test("Bybit getAlgoOrders merges exchange stop orders with position trading stop
   ]);
 });
 
+test("Bybit closePosition rejects missing positions and setLeverage tolerates not-modified responses", async () => {
+  const exchange = createExchange(DEFAULT_SPECS) as any;
+
+  exchange.fetchPositions = async () => [];
+  await assert.rejects(
+    () => exchange.closePosition("BTCUSDT", undefined, 1),
+    /No open Bybit position found for BTCUSDT/,
+  );
+
+  exchange.ensureMarginMode = async () => {};
+  exchange.signedRequest = async () => {
+    throw new Error("leverage not modified");
+  };
+
+  assert.equal(await exchange.setLeverage("BTCUSDT", 9), 9);
+});
+
+test("Bybit cancelOrder succeeds and getAlgoOrders ignores malformed position trading-stop rows", async () => {
+  const exchange = createExchange() as any;
+
+  exchange.signedRequest = async () => ({});
+  assert.equal(await exchange.cancelOrder("open-1", "BTCUSDT"), true);
+
+  exchange.fetchRealtimeOrders = async () => [];
+  exchange.fetchPositions = async () => [
+    {
+      symbol: "",
+      side: "Buy",
+      size: "1",
+      positionIdx: 1,
+      takeProfit: "72000",
+      stopLoss: "64000",
+    },
+    {
+      symbol: "BTCUSDT",
+      side: "None",
+      size: "1",
+      positionIdx: 1,
+      takeProfit: "72000",
+      stopLoss: "64000",
+    },
+    {
+      symbol: "BTCUSDT",
+      side: "Sell",
+      size: "0",
+      positionIdx: 2,
+      takeProfit: "60000",
+      stopLoss: "71000",
+    },
+  ];
+
+  assert.deepEqual(await exchange.getAlgoOrders("BTCUSDT"), []);
+});
+
 test("Bybit cancelAlgoOrders combines realtime stop cancellations and trading-stop resets", async () => {
   const exchange = createExchange() as any;
 

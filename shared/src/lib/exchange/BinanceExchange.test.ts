@@ -119,6 +119,39 @@ test("conditional algo orders use MARKET_LOT_SIZE and price tick precision", asy
   assert.equal(payload?.algoType, "CONDITIONAL");
 });
 
+test("take-profit algo orders normalize symbols and trigger prices", async () => {
+  const exchange = createExchange(DEFAULT_SPECS);
+
+  let payload: RequestParams | undefined;
+  (exchange as any).signedRequest = async (
+    _method: string,
+    path: string,
+    params: RequestParams = {},
+  ) => {
+    if (path === "/fapi/v1/algoOrder") {
+      payload = params;
+      return { algoId: "algo-tp-1" };
+    }
+    return {};
+  };
+
+  const orderId = await exchange.placeTakeProfit(
+    "btc-usdt",
+    70123.45,
+    70123.45,
+    OrderSide.SELL,
+    2.345,
+  );
+
+  assert.equal(orderId, "algo-tp-1");
+  assert.equal(payload?.symbol, "BTCUSDT");
+  assert.equal(payload?.algoType, "CONDITIONAL");
+  assert.equal(payload?.side, "SELL");
+  assert.equal(payload?.workingType, "MARK_PRICE");
+  assert.equal(payload?.quantity, "2");
+  assert.equal(payload?.triggerPrice, "70123.4");
+});
+
 test("getAlgoOrders prefers Binance algo endpoint and normalizes rows", async () => {
   const exchange = createExchange(DEFAULT_SPECS);
 
@@ -209,6 +242,39 @@ test("cancelAlgoOrders uses Binance bulk algo cancel endpoint", async () => {
     calls.map((call) => call.path),
     ["/fapi/v1/openAlgoOrders", "/fapi/v1/algoOpenOrders"],
   );
+});
+
+test("Binance getAlgoOrders skips malformed rows and cancelAlgoOrders returns early when nothing is open", async () => {
+  const exchange = createExchange(DEFAULT_SPECS) as any;
+
+  exchange.signedRequest = async (
+    _method: string,
+    path: string,
+    params: RequestParams = {},
+  ) => {
+    if (path === "/fapi/v1/openAlgoOrders") {
+      assert.equal(params.symbol, undefined);
+      assert.equal(params.algoType, "CONDITIONAL");
+      return [
+        {
+          algoId: 321,
+          symbol: "BTCUSDT",
+          type: "STOP_MARKET",
+          triggerPrice: "61000",
+          quantity: "1",
+        },
+      ];
+    }
+    throw new Error(`Unexpected path ${path}`);
+  };
+
+  assert.deepEqual(await exchange.getAlgoOrders(), []);
+
+  exchange.getAlgoOrders = async () => [];
+  assert.deepEqual(await exchange.cancelAlgoOrders("BTCUSDT"), {
+    cancelled: [],
+    errors: [],
+  });
 });
 
 test("reads account, ticker, klines, and open positions through normalized adapters", async () => {
