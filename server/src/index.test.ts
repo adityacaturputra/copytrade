@@ -22,11 +22,11 @@ test("server index creates and exports the app instance", async () => {
   assert.equal(createApp.mock.calls.length, 1);
   assert.equal(startServer.mock.calls.length, 0);
 
-  mod.bootServer({ main: {} } as NodeRequire, {} as NodeModule);
+  mod.bootServer({ main: {} } as NodeJS.Require, {} as NodeJS.Module);
   assert.equal(startServer.mock.calls.length, 0);
 
-  const currentModule = {} as NodeModule;
-  mod.bootServer({ main: currentModule } as NodeRequire, currentModule);
+  const currentModule = {} as NodeJS.Module;
+  mod.bootServer({ main: currentModule } as NodeJS.Require, currentModule);
   assert.equal(startServer.mock.calls.length, 1);
   assert.deepEqual(startServer.mock.calls[0], [app]);
 });

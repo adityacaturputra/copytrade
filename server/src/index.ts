@@ -3,8 +3,8 @@ import { createApp, startServer } from "./app";
 const app = createApp();
 
 export function bootServer(
-  currentRequire: NodeRequire = require,
-  currentModule: NodeModule = module,
+  currentRequire: NodeJS.Require = require,
+  currentModule: NodeJS.Module = module,
 ) {
   if (currentRequire.main === currentModule) {
     startServer(app);

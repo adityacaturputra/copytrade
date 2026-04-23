@@ -904,36 +904,36 @@ export class BinanceExchange implements ExchangeClient {
           : { algoType: "CONDITIONAL" },
       );
 
-      return rows
-        .map((row) => {
-          const orderId = this.parseAlgoOrderId(row);
-          if (!orderId || !row.symbol || !row.side) {
-            return null;
-          }
+      const mapped: Array<AlgoOrderInfo | null> = rows.map((row) => {
+        const orderId = this.parseAlgoOrderId(row);
+        if (!orderId || !row.symbol || !row.side) {
+          return null;
+        }
 
-          const rawType = String(row.type || row.orderType || "");
-          const triggerPrice = parseFloat(
-            row.triggerPrice || row.stopPrice || "0",
-          );
-          const executePrice = parseFloat(
-            row.executePrice || row.price || "0",
-          );
-          const quantity = parseFloat(row.quantity || row.origQty || "0");
+        const rawType = String(row.type || row.orderType || "");
+        const triggerPrice = parseFloat(
+          row.triggerPrice || row.stopPrice || "0",
+        );
+        const executePrice = parseFloat(
+          row.executePrice || row.price || "0",
+        );
+        const quantity = parseFloat(row.quantity || row.origQty || "0");
 
-          return {
-            orderId,
-            symbol: row.symbol,
-            side: row.side,
-            type: this.parseAlgoType(rawType),
-            triggerPrice,
-            executePrice: executePrice || undefined,
-            quantity,
-            status: String(row.algoStatus || row.status || "NEW"),
-            createdAt: row.updateTime || row.time,
-            raw: row,
-          } satisfies AlgoOrderInfo;
-        })
-        .filter((row): row is AlgoOrderInfo => row !== null);
+        return {
+          orderId,
+          symbol: row.symbol,
+          side: row.side,
+          type: this.parseAlgoType(rawType),
+          triggerPrice,
+          executePrice: executePrice || undefined,
+          quantity,
+          status: String(row.algoStatus || row.status || "NEW"),
+          createdAt: row.updateTime || row.time,
+          raw: row,
+        } satisfies AlgoOrderInfo;
+      });
+
+      return mapped.filter((row): row is AlgoOrderInfo => row !== null);
     } catch (error) {
       console.warn(
         `[Binance] Falling back to legacy algo-order discovery for ${normalized || "all symbols"}: ${error instanceof Error ? error.message : String(error)}`,
