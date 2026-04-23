@@ -1091,3 +1091,27 @@ test("okx stop-loss, take-profit, algo cancellation, and specs failures cover re
     /Failed to get instrument specs for DOGE-USDT-SWAP: missing/,
   );
 });
+
+test("okx cancelAlgoOrders and getOrderHistory handle request failures and empty responses", async () => {
+  const exchange = new OkxExchange("key", "secret", "passphrase") as any;
+
+  exchange.getAlgoOrders = async () => [{ orderId: "algo-1" }];
+  exchange.client.post = async () => {
+    throw new Error("network boom");
+  };
+  exchange.client.get = async (path: string) => {
+    assert.match(path, /orders-history-archive\?instType=SWAP&limit=3$/);
+    return {
+      data: {
+        code: "1",
+        msg: "history unavailable",
+      },
+    };
+  };
+
+  assert.deepEqual(await exchange.cancelAlgoOrders("BTCUSDT"), {
+    cancelled: [],
+    errors: ["Failed to cancel algo orders: network boom"],
+  });
+  assert.deepEqual(await exchange.getOrderHistory(undefined, 3), []);
+});

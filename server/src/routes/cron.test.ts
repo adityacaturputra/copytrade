@@ -234,3 +234,55 @@ test("cron route records partial-success signal and TP/SL runs, and position mon
   assert.equal(errorSpy.mock.calls.length >= 1, true);
   errorSpy.mockRestore();
 });
+
+test("cron route handles position-monitor success and tp/sl conflict responses", async () => {
+  const app = createApp();
+
+  cronMocks.tryStart.mockReturnValueOnce(true);
+  cronMocks.runPositionMonitor.mockResolvedValue({
+    checked: 6,
+    actions: 2,
+    errors: [],
+  });
+
+  const position = await request(app).post("/position-monitor");
+  assert.equal(position.status, 200);
+  assert.equal(position.body.success, true);
+  assert.equal(position.body.message, "Position monitor started");
+
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.deepEqual(cronMocks.updateProgress.mock.calls[1], [
+    "position-monitor",
+    "Running position monitor...",
+  ]);
+  assert.deepEqual(cronMocks.updateProgress.mock.calls[2], [
+    "position-monitor",
+    "Done — checked: 6, actions: 2",
+    "success",
+  ]);
+  assert.deepEqual(cronMocks.finishCron.mock.calls[0], [
+    "position-monitor",
+    "success",
+  ]);
+  assert.deepEqual(cronMocks.createTradeLog.mock.calls[1], [
+    {
+      type: "cron",
+      action: "position_monitor_end",
+      details: "Checked: 6, Actions: 2, Errors: 0",
+      result: "success",
+    },
+  ]);
+
+  cronMocks.tryStart.mockReturnValueOnce(false);
+  cronMocks.getCronStatus.mockReturnValue({ running: true, progress: "busy tpsl" });
+
+  const conflict = await request(app).get("/tp-sl-monitor");
+  assert.equal(conflict.status, 409);
+  assert.deepEqual(conflict.body, {
+    success: false,
+    error: "Already running",
+    status: { running: true, progress: "busy tpsl" },
+  });
+});

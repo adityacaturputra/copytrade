@@ -416,3 +416,372 @@ test("position ops get_process_logs validates process id and syncs positions wit
   assert.equal(closedDoc.status, "closed");
   assert.equal(positionOpsMocks.logProcessStep.mock.calls.at(-1)?.[0]?.action, "sync_position_with_exchange");
 });
+
+test("position ops manage_position covers partial close, breakeven, trailing stop, take-profit updates, cancel orders, and validation errors", async () => {
+  const exchange = {
+    closePosition: vi.fn().mockResolvedValue(undefined),
+    placeStopLoss: vi.fn().mockResolvedValue("sl-2"),
+    placeTakeProfit: vi.fn().mockResolvedValue("tp-2"),
+    getOpenOrders: vi.fn().mockResolvedValue([
+      { orderId: "o-1", symbol: "BTCUSDT" },
+      { orderId: "o-2", symbol: "BTCUSDT" },
+    ]),
+    cancelOrder: vi
+      .fn()
+      .mockResolvedValueOnce(true)
+      .mockRejectedValueOnce(new Error("already done")),
+  };
+  const partialDoc = createPositionDoc({
+    _id: "pos-partial",
+    quantity: 4,
+  });
+  const breakevenDoc = createPositionDoc({
+    _id: "pos-be",
+    quantity: 2,
+    entryPrice: 101.239,
+  });
+  const trailingDoc = createPositionDoc({
+    _id: "pos-trail",
+    quantity: 2.5,
+    side: "SHORT",
+  });
+  const moveTpExistingDoc = createPositionDoc({
+    _id: "pos-tp-existing",
+    quantity: 3,
+    takeProfitTargets: [
+      { price: 120, quantity: 3, percentage: 100, status: "pending" },
+    ],
+  });
+  const moveTpAppendDoc = createPositionDoc({
+    _id: "pos-tp-append",
+    quantity: 1.5,
+    takeProfitTargets: [
+      { price: 120, quantity: 1.5, percentage: 100, status: "filled" },
+    ],
+  });
+  const cancelOrdersDoc = createPositionDoc({
+    _id: "pos-cancel",
+    quantity: 1,
+  });
+  const unsupportedDoc = createPositionDoc({
+    _id: "pos-unsupported",
+  });
+
+  positionOpsMocks.findPositionRecord
+    .mockResolvedValueOnce({
+      _id: { toString: () => "pos-partial" },
+      accountId: "acc-1",
+      symbol: "BTCUSDT",
+      quantity: 4,
+      side: "LONG",
+    })
+    .mockResolvedValueOnce({
+      _id: { toString: () => "pos-be" },
+      accountId: "acc-1",
+      symbol: "BTCUSDT",
+      quantity: 2,
+      side: "LONG",
+      entryPrice: 101.239,
+    })
+    .mockResolvedValueOnce({
+      _id: { toString: () => "pos-trail" },
+      accountId: "acc-1",
+      symbol: "ETHUSDT",
+      quantity: 2.5,
+      side: "SHORT",
+    })
+    .mockResolvedValueOnce({
+      _id: { toString: () => "pos-tp-existing" },
+      accountId: "acc-1",
+      symbol: "SOLUSDT",
+      quantity: 3,
+      side: "LONG",
+    })
+    .mockResolvedValueOnce({
+      _id: { toString: () => "pos-tp-append" },
+      accountId: "acc-1",
+      symbol: "XRPUSDT",
+      quantity: 1.5,
+      side: "LONG",
+    })
+    .mockResolvedValueOnce({
+      _id: { toString: () => "pos-cancel" },
+      accountId: "acc-1",
+      symbol: "ADAUSDT",
+      quantity: 1,
+      side: "LONG",
+    })
+    .mockResolvedValueOnce({
+      _id: { toString: () => "pos-unsupported" },
+      accountId: "acc-1",
+      symbol: "DOGEUSDT",
+      quantity: 1,
+      side: "LONG",
+    })
+    .mockResolvedValueOnce({
+      _id: { toString: () => "pos-missing-doc" },
+      accountId: "acc-1",
+      symbol: "BTCUSDT",
+      quantity: 1,
+      side: "LONG",
+    })
+    .mockResolvedValueOnce({
+      _id: { toString: () => "pos-no-action" },
+      accountId: "acc-1",
+      symbol: "BTCUSDT",
+      quantity: 1,
+      side: "LONG",
+    })
+    .mockResolvedValueOnce({
+      _id: { toString: () => "pos-no-price" },
+      accountId: "acc-1",
+      symbol: "BTCUSDT",
+      quantity: 1,
+      side: "LONG",
+    })
+    .mockResolvedValueOnce({
+      _id: { toString: () => "pos-no-tp" },
+      accountId: "acc-1",
+      symbol: "BTCUSDT",
+      quantity: 1,
+      side: "LONG",
+    })
+    .mockResolvedValueOnce({
+      _id: { toString: () => "pos-no-trail" },
+      accountId: "acc-1",
+      symbol: "BTCUSDT",
+      quantity: 1,
+      side: "LONG",
+    });
+
+  positionOpsMocks.positionFindById
+    .mockReturnValueOnce(createQuery(partialDoc))
+    .mockReturnValueOnce(createQuery(breakevenDoc))
+    .mockReturnValueOnce(createQuery(trailingDoc))
+    .mockReturnValueOnce(createQuery(moveTpExistingDoc))
+    .mockReturnValueOnce(createQuery(moveTpAppendDoc))
+    .mockReturnValueOnce(createQuery(cancelOrdersDoc))
+    .mockReturnValueOnce(createQuery(unsupportedDoc))
+    .mockReturnValueOnce(createQuery(null))
+    .mockReturnValueOnce(createQuery(createPositionDoc({ _id: "pos-no-action" })))
+    .mockReturnValueOnce(createQuery(createPositionDoc({ _id: "pos-no-price" })))
+    .mockReturnValueOnce(createQuery(createPositionDoc({ _id: "pos-no-tp" })))
+    .mockReturnValueOnce(createQuery(createPositionDoc({ _id: "pos-no-trail" })));
+
+  positionOpsMocks.getLivePositionSnapshot
+    .mockResolvedValueOnce({
+      exchange,
+      currentPrice: 112,
+      exchangePosition: { positionId: "ex-partial" },
+    })
+    .mockResolvedValueOnce({
+      exchange,
+      currentPrice: 113,
+      exchangePosition: { positionId: "ex-be" },
+    })
+    .mockResolvedValueOnce({
+      exchange,
+      currentPrice: 89,
+      exchangePosition: { positionId: "ex-trail" },
+    })
+    .mockResolvedValueOnce({
+      exchange,
+      currentPrice: 121,
+      exchangePosition: { positionId: "ex-tp-existing" },
+    })
+    .mockResolvedValueOnce({
+      exchange,
+      currentPrice: 122,
+      exchangePosition: { positionId: "ex-tp-append" },
+    })
+    .mockResolvedValueOnce({
+      exchange,
+      currentPrice: 100,
+      exchangePosition: { positionId: "ex-cancel" },
+    })
+    .mockResolvedValueOnce({
+      exchange: {
+        closePosition: vi.fn().mockResolvedValue(undefined),
+        placeStopLoss: vi.fn().mockResolvedValue("sl-x"),
+        placeTakeProfit: vi.fn().mockResolvedValue("tp-x"),
+        getOpenOrders: vi.fn().mockResolvedValue([]),
+        cancelOrder: vi.fn().mockResolvedValue(true),
+      },
+      currentPrice: 100,
+      exchangePosition: { positionId: "ex-unsupported" },
+    })
+    .mockResolvedValueOnce({
+      exchange,
+      currentPrice: 100,
+      exchangePosition: { positionId: "ex-no-action" },
+    })
+    .mockResolvedValueOnce({
+      exchange,
+      currentPrice: 100,
+      exchangePosition: { positionId: "ex-no-price" },
+    })
+    .mockResolvedValueOnce({
+      exchange,
+      currentPrice: 100,
+      exchangePosition: { positionId: "ex-no-tp" },
+    })
+    .mockResolvedValueOnce({
+      exchange,
+      currentPrice: 100,
+      exchangePosition: { positionId: "ex-no-trail" },
+    });
+
+  const partial = JSON.parse(
+    await positionOpsToolImplementations.manage_position({
+      positionId: "pos-partial",
+      action: "partial_close",
+      quantity: 1.5,
+    }),
+  );
+  const breakeven = JSON.parse(
+    await positionOpsToolImplementations.manage_position({
+      positionId: "pos-be",
+      action: "move_stop_loss_to_breakeven",
+    }),
+  );
+  const trailing = JSON.parse(
+    await positionOpsToolImplementations.manage_position({
+      positionId: "pos-trail",
+      action: "trail_stop",
+      newPrice: 88.888,
+    }),
+  );
+  const movedTpExisting = JSON.parse(
+    await positionOpsToolImplementations.manage_position({
+      positionId: "pos-tp-existing",
+      action: "move_take_profit",
+      newPrice: 130.126,
+    }),
+  );
+  const movedTpAppend = JSON.parse(
+    await positionOpsToolImplementations.manage_position({
+      positionId: "pos-tp-append",
+      action: "move_take_profit",
+      newPrice: 140.555,
+    }),
+  );
+  const cancelled = JSON.parse(
+    await positionOpsToolImplementations.manage_position({
+      positionId: "pos-cancel",
+      action: "cancel_all_orders",
+    }),
+  );
+
+  assert.equal(partial.closedQuantity, 1.5);
+  assert.equal(partial.remainingQuantity, 2.5);
+  assert.equal(partialDoc.quantity, 2.5);
+  assert.equal(breakeven.stopLossPrice, 101.24);
+  assert.equal(trailing.stopLossPrice, 88.89);
+  assert.equal(exchange.placeStopLoss.mock.calls[1][3], "BUY");
+  assert.equal(movedTpExisting.takeProfitPrice, 130.13);
+  assert.equal(moveTpExistingDoc.takeProfitTargets[0].price, 130.13);
+  assert.equal(movedTpAppend.takeProfitPrice, 140.56);
+  assert.equal(moveTpAppendDoc.takeProfitTargets.length, 2);
+  assert.equal(cancelled.cancelled, 1);
+  assert.equal(cancelled.failed, 1);
+  assert.equal(cancelled.results[1].error, "already done");
+
+  await assert.rejects(
+    () =>
+      positionOpsToolImplementations.manage_position({
+        positionId: "pos-unsupported",
+        action: "unsupported",
+      }),
+    /Unsupported manage_position action/,
+  );
+  await assert.rejects(
+    () =>
+      positionOpsToolImplementations.manage_position({
+        positionId: "pos-missing-doc",
+        action: "close",
+      }),
+    /Position document not found/,
+  );
+  await assert.rejects(
+    () =>
+      positionOpsToolImplementations.manage_position({
+        positionId: "pos-no-action",
+      }),
+    /manage_position requires an action/,
+  );
+  await assert.rejects(
+    () =>
+      positionOpsToolImplementations.manage_position({
+        positionId: "pos-no-price",
+        action: "move_stop_loss",
+      }),
+    /move_stop_loss requires newPrice/,
+  );
+  await assert.rejects(
+    () =>
+      positionOpsToolImplementations.manage_position({
+        positionId: "pos-no-tp",
+        action: "move_take_profit",
+      }),
+    /move_take_profit requires newPrice/,
+  );
+  await assert.rejects(
+    () =>
+      positionOpsToolImplementations.manage_position({
+        positionId: "pos-no-trail",
+        action: "trail_stop",
+      }),
+    /trail_stop requires newPrice/,
+  );
+});
+
+test("position ops review_signal_thread falls back across anchors and handles position-based lookups", async () => {
+  positionOpsMocks.parseOptionalString.mockImplementation((value) =>
+    typeof value === "string" && value.trim() ? value.trim() : undefined,
+  );
+
+  positionOpsMocks.positionFindById
+    .mockReturnValueOnce(createQuery(null))
+    .mockReturnValueOnce(
+      createQuery({
+        _id: { toString: () => "pos-2" },
+        accountId: "acc-2",
+        messageId: "msg-3",
+        channelId: "chan-3",
+        processId: null,
+      }),
+    );
+  positionOpsMocks.processedMessageFind
+    .mockReturnValueOnce(createQuery([{ processId: "proc-from-processed", messageId: "msg-2" }]))
+    .mockReturnValueOnce(createQuery([]));
+  positionOpsMocks.draftTradeFind
+    .mockReturnValueOnce(createQuery([{ processId: "proc-from-draft", messageId: "msg-2" }]))
+    .mockReturnValueOnce(createQuery([]));
+  positionOpsMocks.positionFind
+    .mockReturnValueOnce(createQuery([]))
+    .mockReturnValueOnce(createQuery([{ _id: "linked-1" }]));
+  positionOpsMocks.getProcessTradeLogs
+    .mockResolvedValueOnce([{ action: "proc-log" }])
+    .mockResolvedValueOnce([]);
+
+  const byMessage = JSON.parse(
+    await positionOpsToolImplementations.review_signal_thread({
+      messageId: "msg-2",
+      accountId: "acc-1",
+      limit: 500,
+      processId: "proc-explicit",
+    }),
+  );
+  const discordFailure = JSON.parse(
+    await positionOpsToolImplementations.review_signal_thread({
+      positionId: "pos-2",
+      limit: -1,
+    }),
+  );
+
+  assert.equal(byMessage.anchor.processId, "proc-explicit");
+  assert.deepEqual(byMessage.sourceContextMessages, []);
+  assert.equal(discordFailure.anchor.processId, null);
+  assert.deepEqual(discordFailure.sourceContextMessages, []);
+  assert.equal(discordFailure.linkedPositions.length, 0);
+});

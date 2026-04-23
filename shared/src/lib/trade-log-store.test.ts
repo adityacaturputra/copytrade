@@ -369,6 +369,38 @@ test("getProcessTradeLogs merges file and mongo logs, normalizes mongo records, 
   });
 });
 
+test("getProcessTradeLogs warns and falls back to files when mongo process reads fail", async () => {
+  setEnv({
+    PROCESS_LOG_STORAGE: "dual",
+    PROCESS_LOG_DIR: "/tmp/copytrade-read-fallback",
+  });
+  storeMocks.mongooseConnection.readyState = 1;
+  storeMocks.stat.mockResolvedValue({});
+  storeMocks.readFile.mockResolvedValue(
+    JSON.stringify({
+      _id: "file-proc-only",
+      accountId: "acc-1",
+      processId: "proc-fallback",
+      type: "executor",
+      action: "BUY",
+      createdAt: "2026-01-02T00:00:00.000Z",
+    }),
+  );
+  storeMocks.tradeLogFind.mockReturnValue(createMongoQuery(new Error("mongo process read failed")));
+  const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+  const logs = await getProcessTradeLogs({
+    processId: "proc-fallback",
+    order: "asc",
+  });
+
+  assert.deepEqual(logs.map((log) => log._id), ["file-proc-only"]);
+  assert.match(
+    String(warnSpy.mock.calls[0]?.[0]),
+    /Failed to read Mongo process logs for proc-fallback: mongo process read failed/,
+  );
+});
+
 test("listTradeLogs filters file logs, hides cron noise, and paginates descending results", async () => {
   setEnv({
     PROCESS_LOG_STORAGE: "file",
@@ -425,6 +457,111 @@ test("listTradeLogs filters file logs, hides cron noise, and paginates descendin
   assert.equal(result.page, 2);
   assert.equal(result.limit, 1);
   assert.equal(result.logs[0]?._id, "keep-1");
+});
+
+test("listTradeLogs filters by processId without dropping accountId=all records", async () => {
+  setEnv({
+    PROCESS_LOG_STORAGE: "file",
+    PROCESS_LOG_DIR: "/tmp/copytrade-list-process",
+  });
+  storeMocks.readFile.mockResolvedValue(
+    [
+      JSON.stringify({
+        _id: "keep-proc",
+        accountId: "acc-1",
+        processId: "proc-keep",
+        type: "executor",
+        action: "BUY",
+        createdAt: "2026-01-02T00:00:00.000Z",
+      }),
+      JSON.stringify({
+        _id: "drop-proc",
+        accountId: "acc-2",
+        processId: "proc-drop",
+        type: "executor",
+        action: "SELL",
+        createdAt: "2026-01-03T00:00:00.000Z",
+      }),
+    ].join("\n"),
+  );
+
+  const result = await listTradeLogs({
+    accountId: "all",
+    processId: "proc-keep",
+    hideCronNoise: false,
+  });
+
+  assert.equal(result.totalCount, 1);
+  assert.deepEqual(result.logs.map((log) => log._id), ["keep-proc"]);
+});
+
+test("listTradeLogs warns and falls back to file logs when reading all mongo logs fails", async () => {
+  setEnv({
+    PROCESS_LOG_STORAGE: "dual",
+    PROCESS_LOG_DIR: "/tmp/copytrade-list-mongo-fallback",
+  });
+  storeMocks.mongooseConnection.readyState = 1;
+  storeMocks.readFile.mockResolvedValue(
+    JSON.stringify({
+      _id: "file-global-only",
+      accountId: "acc-1",
+      processId: "proc-1",
+      type: "executor",
+      action: "SELL",
+      createdAt: "2026-01-04T00:00:00.000Z",
+    }),
+  );
+  storeMocks.tradeLogFind.mockReturnValue(createMongoQuery(new Error("mongo list failed")));
+  const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+  const result = await listTradeLogs({
+    hideCronNoise: false,
+  });
+
+  assert.equal(result.totalCount, 1);
+  assert.deepEqual(result.logs.map((log) => log._id), ["file-global-only"]);
+  assert.match(
+    String(warnSpy.mock.calls[0]?.[0]),
+    /Failed to read Mongo logs: mongo list failed/,
+  );
+});
+
+test("listTradeLogs normalizes mongo ids and createdAt variants on successful global reads", async () => {
+  setEnv({
+    PROCESS_LOG_STORAGE: "mongo",
+  });
+  storeMocks.mongooseConnection.readyState = 1;
+  storeMocks.readFile.mockResolvedValue("");
+  storeMocks.tradeLogFind.mockReturnValue(
+    createMongoQuery([
+      {
+        _id: { toString: () => "mongo-date" },
+        accountId: 1,
+        processId: 2,
+        type: "executor",
+        action: "BUY",
+        createdAt: new Date("2026-01-05T00:00:00.000Z"),
+      },
+      {
+        _id: null,
+        accountId: null,
+        processId: null,
+        type: "cron",
+        action: "tick",
+      },
+    ]),
+  );
+
+  const result = await listTradeLogs({
+    hideCronNoise: false,
+    order: "asc",
+  });
+
+  assert.equal(result.totalCount, 2);
+  assert.equal(result.logs[0]?._id, "mongo-date");
+  assert.equal(result.logs[0]?.createdAt, "2026-01-05T00:00:00.000Z");
+  assert.match(String(result.logs[1]?._id), /^mongo_12345678123456781234567812345678$/);
+  assert.ok(Date.parse(String(result.logs[1]?.createdAt)));
 });
 
 test("remote backend mode proxies create, list, count, and recent-log requests", async () => {
@@ -619,5 +756,28 @@ test("remote backend mode surfaces request failures", async () => {
         page: 1,
       }),
     /backend unavailable/,
+  );
+});
+
+test("createTradeLog warns when mongo create throws a non-Error value in dual mode", async () => {
+  setEnv({
+    PROCESS_LOG_STORAGE: "dual",
+    PROCESS_LOG_DIR: "/tmp/copytrade-dual-mongo-string",
+  });
+  storeMocks.mongooseConnection.readyState = 1;
+  storeMocks.tradeLogCreate.mockRejectedValue("mongo exploded");
+  const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+  const record = await createTradeLog({
+    processId: "proc-mongo-string",
+    type: "executor",
+    action: "BUY",
+  });
+
+  assert.equal(record.processId, "proc-mongo-string");
+  assert.equal(storeMocks.appendFile.mock.calls.length, 2);
+  assert.match(
+    String(warnSpy.mock.calls.at(-1)?.[0]),
+    /Mongo log write failed: mongo exploded/,
   );
 });

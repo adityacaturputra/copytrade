@@ -698,6 +698,87 @@ test("getOrderHistory returns empty for no symbols and sorts combined results by
   ]);
 });
 
+test("Binance cancelAlgoOrders records per-order fallback errors and getOrderHistory supports an explicit symbol", async () => {
+  const exchange = createExchange(DEFAULT_SPECS) as any;
+
+  exchange.getAlgoOrders = async () => [
+    {
+      orderId: "algo-bad-1",
+      symbol: "BTCUSDT",
+      side: "SELL",
+      type: "sl",
+      triggerPrice: 61000,
+      quantity: 1,
+      status: "NEW",
+    },
+  ];
+  exchange.signedRequest = async (
+    _method: string,
+    path: string,
+    params: RequestParams = {},
+  ) => {
+    if (path === "/fapi/v1/algoOpenOrders") {
+      throw new Error("bulk delete failed");
+    }
+    if (path === "/fapi/v1/algoOrder") {
+      throw "single delete raw failure";
+    }
+    if (path === "/fapi/v1/allOrders") {
+      assert.equal(params.symbol, "BTCUSDT");
+      assert.equal(params.limit, 1);
+      return [
+        {
+          orderId: 99,
+          symbol: "BTCUSDT",
+          side: "SELL",
+          type: "LIMIT",
+          price: "62000",
+          avgPrice: "0",
+          origQty: "0.5",
+          executedQty: "0.1",
+          status: "NEW",
+          time: 7,
+          updateTime: 8,
+        },
+      ];
+    }
+    throw new Error(`Unexpected path ${path}`);
+  };
+
+  assert.deepEqual(await exchange.cancelAlgoOrders("BTCUSDT"), {
+    cancelled: [],
+    errors: ["algo-bad-1: Unknown error"],
+  });
+  assert.deepEqual(await exchange.getOrderHistory("btc-usdt", 1), [
+    {
+      orderId: "99",
+      symbol: "BTCUSDT",
+      side: "SELL",
+      type: "LIMIT",
+      price: 62000,
+      quantity: 0.5,
+      filledQuantity: 0.1,
+      fee: 0,
+      status: "NEW",
+      createdAt: 7,
+      updatedAt: 8,
+      raw: {
+        orderId: 99,
+        symbol: "BTCUSDT",
+        side: "SELL",
+        type: "LIMIT",
+        price: "62000",
+        avgPrice: "0",
+        origQty: "0.5",
+        executedQty: "0.1",
+        status: "NEW",
+        time: 7,
+        updateTime: 8,
+      },
+    },
+  ]);
+});
+
 test("instrument specs cache and missing-instrument branches work as expected", async () => {
   const exchange = new BinanceExchange("key", "secret") as any;
   let calls = 0;

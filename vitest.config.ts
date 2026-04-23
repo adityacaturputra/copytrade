@@ -17,6 +17,8 @@ export default defineConfig({
       reportsDirectory: path.resolve(__dirname, "coverage"),
       exclude: [
         "**/*.d.ts",
+        "**/types.ts",
+        "**/executor-types.ts",
         "**/dist/**",
         "**/node_modules/**",
         "**/.next/**",

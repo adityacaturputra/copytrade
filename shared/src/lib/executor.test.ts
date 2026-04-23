@@ -279,6 +279,17 @@ test("checkDuplicatePosition returns new, exact duplicate, updated, and no-updat
   );
 });
 
+test("checkDuplicatePosition treats different entry prices as a new signal", async () => {
+  executorMocks.positionFindOne.mockResolvedValueOnce(
+    createDoc({ entryPrice: 100, stopLossPrice: 95, takeProfitTargets: [{ price: 110 }] }),
+  );
+
+  assert.deepEqual(
+    await checkDuplicatePosition("BTCUSDT", "LONG", "chan-1", 105, [110], 95),
+    { type: "new" },
+  );
+});
+
 test("executeSignal skips BUY/SELL when max positions are reached", async () => {
   executorMocks.resolveEffectiveRiskConfig.mockResolvedValue({
     defaultLeverage: 10,
@@ -1025,6 +1036,120 @@ test("executeTrade uses account exchange credentials for limit orders and skips 
   assert.equal(position.side, "SHORT");
 });
 
+test("executeTrade falls back to paper provider credentials when account exchangeData cannot be converted", async () => {
+  const exchange = {
+    name: "paper-via-account",
+    getAccountInfo: vi.fn().mockResolvedValue({ availableBalance: 250, totalBalance: 300 }),
+    setLeverage: vi.fn().mockResolvedValue(3),
+    placeOrder: vi.fn().mockResolvedValue({
+      orderId: "fallback-paper-order",
+      price: 50,
+      quantity: 2,
+    }),
+    getInstrumentSpecs: vi.fn(),
+    placeTakeProfit: vi.fn(),
+    placeStopLoss: vi.fn(),
+  };
+  executorMocks.accountFindById.mockReturnValue(
+    mockLean({
+      tradingPlatform: "binance",
+      exchangeData: { apiKey: "bad-shape" },
+    }),
+  );
+  executorMocks.buildExchangeCredentials.mockReturnValue(null);
+  executorMocks.getClientForAccount.mockReturnValue(exchange);
+  executorMocks.calculateRiskBasedPosition.mockResolvedValue({
+    applied: false,
+    skipReason: "kept requested sizing",
+  });
+  executorMocks.positionCreate.mockImplementation(async (payload) => ({
+    _id: { toString: () => "paper-creds-pos" },
+    side: payload.side,
+    ...payload,
+  }));
+
+  const position = await executeTrade({
+    symbol: "SOLUSDT",
+    action: "BUY",
+    entryPrice: 50,
+    stopLoss: 45,
+    takeProfitTargets: [60],
+    leverage: 3,
+    quantity: 2,
+    orderType: "LIMIT",
+    channelId: "chan-paper-creds",
+    accountId: "acc-paper-creds",
+    signalData: "{}",
+  } as never);
+
+  assert.equal(position._id.toString(), "paper-creds-pos");
+  assert.deepEqual(executorMocks.getClientForAccount.mock.calls[0]?.[0], {
+    provider: "paper",
+  });
+  assert.equal(
+    executorMocks.logExecutorWarn.mock.calls.some((call) =>
+      String(call[0]).includes("has no exchangeData"),
+    ),
+    false,
+  );
+});
+
+test("executeTrade warns and uses paper exchange when an account has no exchangeData", async () => {
+  const exchange = {
+    name: "paper",
+    getAccountInfo: vi.fn().mockResolvedValue({ availableBalance: 150, totalBalance: 200 }),
+    setLeverage: vi.fn().mockResolvedValue(2),
+    placeOrder: vi.fn().mockResolvedValue({
+      orderId: "no-exchange-data-order",
+      price: 25,
+      quantity: 1,
+    }),
+    getInstrumentSpecs: vi.fn(),
+    placeTakeProfit: vi.fn(),
+    placeStopLoss: vi.fn(),
+  };
+  executorMocks.accountFindById.mockReturnValue(
+    mockLean({
+      tradingPlatform: "okx",
+    }),
+  );
+  executorMocks.getPaperClient.mockReturnValue(exchange);
+  executorMocks.calculateRiskBasedPosition.mockResolvedValue({
+    applied: false,
+    skipReason: "kept requested sizing",
+  });
+  executorMocks.positionCreate.mockImplementation(async (payload) => ({
+    _id: { toString: () => "paper-no-data-pos" },
+    side: payload.side,
+    ...payload,
+  }));
+
+  const position = await executeTrade({
+    symbol: "XRPUSDT",
+    action: "SELL",
+    entryPrice: 25,
+    stopLoss: 26,
+    takeProfitTargets: [20],
+    leverage: 2,
+    quantity: 1,
+    orderType: "LIMIT",
+    channelId: "chan-paper-no-data",
+    accountId: "acc-paper-no-data",
+    processId: "proc-paper-no-data",
+    signalData: "{}",
+  } as never);
+
+  assert.equal(position._id.toString(), "paper-no-data-pos");
+  assert.equal(executorMocks.getPaperClient.mock.calls.length, 1);
+  assert.ok(
+    executorMocks.logExecutorWarn.mock.calls.some(
+      (call) =>
+        String(call[0]).includes("Account acc-paper-no-data has no exchangeData") &&
+        call[1]?.action === "console_exchange_fallback",
+    ),
+  );
+});
+
 test("executeTrade warns and still saves the position when market stop-loss placement fails", async () => {
   const exchange = {
     name: "paper",
@@ -1317,4 +1442,212 @@ test("runSignalCheck handles provider errors and auto-mode cancel signals that r
   assert.equal(openPosition.status, "closed");
   assert.match(String(openPosition.closeReason), /Cancel request by Trader/);
   assert.equal(exchange.closePosition.mock.calls.length, 1);
+});
+
+test("runSignalCheck auto-executes signals, resolves drafts, and marks messages executed", async () => {
+  const fetchMessages = vi.fn().mockResolvedValue([
+    {
+      messageId: "auto-1",
+      channelId: "chan-auto",
+      author: "Trader",
+      content: "buy btc",
+      sourceId: "acc-auto",
+      sourceName: "Auto Desk",
+      messageUrl: "https://discord.example/1",
+      imageUrls: [],
+    },
+  ]);
+  const exchange = {
+    name: "paper",
+    getAccountInfo: vi.fn().mockResolvedValue({ availableBalance: 1000, totalBalance: 1000 }),
+    setLeverage: vi.fn().mockResolvedValue(10),
+    placeOrder: vi.fn().mockResolvedValue({
+      orderId: "auto-open-1",
+      price: 100,
+      quantity: 1,
+    }),
+    getInstrumentSpecs: vi.fn().mockResolvedValue({ lotSz: 0.01, qtyDecimals: 2 }),
+    placeTakeProfit: vi.fn().mockResolvedValue("tp-1"),
+    placeStopLoss: vi.fn().mockResolvedValue("sl-1"),
+  };
+  executorMocks.getTradingMode.mockResolvedValue("auto");
+  executorMocks.getSignalConfig.mockResolvedValue({
+    fetchLimit: 10,
+    timeWindowHours: 12,
+    batchSize: 5,
+  });
+  executorMocks.processedMessageFind
+    .mockReturnValueOnce(mockLean([]))
+    .mockReturnValueOnce(mockLean([]));
+  executorMocks.accountFind.mockReturnValue(
+    mockSortedLean([
+      {
+        _id: { toString: () => "acc-auto" },
+        name: "Auto Desk",
+        sourceType: "discord",
+        channelIds: ["chan-auto"],
+        disabledChannelIds: [],
+        sourceData: { token: "abc" },
+      },
+    ]),
+  );
+  executorMocks.sourceGetProvider.mockReturnValue({ fetchMessages });
+  executorMocks.analyzeMessagesWithAI.mockResolvedValue([
+    {
+      messageId: "auto-1",
+      signal: {
+        action: "BUY",
+        symbol: "BTCUSDT",
+        entryPrice: 100,
+        stopLoss: 95,
+        takeProfitTargets: [110],
+      },
+    },
+  ]);
+  executorMocks.createTradeProcessId.mockReturnValue("proc-auto-1");
+  executorMocks.createDraft.mockResolvedValue({ _id: { toString: () => "draft-auto-1" } });
+  executorMocks.resolveDraftWithExecution.mockResolvedValue({
+    status: "accepted",
+    result: "executed",
+    positionId: "pos-auto-1",
+  });
+  executorMocks.positionFindOne.mockResolvedValue(null);
+  executorMocks.accountFindById.mockReturnValue(
+    mockLean({
+      tradingPlatform: "bybit",
+    }),
+  );
+  executorMocks.buildExchangeCredentials.mockReturnValue(null);
+  executorMocks.getPaperClient.mockReturnValue(exchange);
+  executorMocks.calculateRiskBasedPosition.mockResolvedValue({
+    applied: false,
+    skipReason: "kept requested sizing",
+  });
+  executorMocks.positionCreate.mockImplementation(async (payload) => ({
+    _id: { toString: () => "pos-auto-1" },
+    side: payload.side,
+    ...payload,
+  }));
+
+  const result = await runSignalCheck();
+
+  assert.deepEqual(result, {
+    checked: 1,
+    newSignals: 1,
+    executed: 1,
+    drafted: 0,
+    errors: [],
+    sources: [{ name: "Auto Desk", channels: 1, healthy: true }],
+  });
+  assert.equal(executorMocks.createDraft.mock.calls.length, 1);
+  assert.equal(executorMocks.resolveDraftWithExecution.mock.calls.length, 1);
+  assert.ok(
+    executorMocks.processedMessageUpdateOne.mock.calls.some(
+      (call) =>
+        call[0]?.messageId === "auto-1" && call[1]?.status === "executed",
+    ),
+  );
+  assert.ok(
+    executorMocks.logProcessStep.mock.calls.some(
+      (call) => call[0]?.action === "auto_execution_completed",
+    ),
+  );
+});
+
+test("runSignalCheck rejects pending auto drafts and marks messages failed when processing throws", async () => {
+  const fetchMessages = vi.fn().mockResolvedValue([
+    {
+      messageId: "auto-fail-1",
+      channelId: "chan-auto-fail",
+      author: "Trader",
+      content: "buy eth",
+      sourceId: "acc-auto-fail",
+      sourceName: "Auto Fail Desk",
+      messageUrl: "https://discord.example/2",
+      imageUrls: [],
+      processId: "proc-auto-fail-1",
+    },
+  ]);
+  const pendingDraft = {
+    _id: { toString: () => "draft-pending-1" },
+    status: "pending",
+    save: vi.fn().mockResolvedValue(undefined),
+  };
+  executorMocks.getTradingMode.mockResolvedValue("auto");
+  executorMocks.getSignalConfig.mockResolvedValue({
+    fetchLimit: 10,
+    timeWindowHours: 12,
+    batchSize: 5,
+  });
+  executorMocks.processedMessageFind
+    .mockReturnValueOnce(mockLean([]))
+    .mockReturnValueOnce(mockLean([]));
+  executorMocks.accountFind.mockReturnValue(
+    mockSortedLean([
+      {
+        _id: { toString: () => "acc-auto-fail" },
+        name: "Auto Fail Desk",
+        sourceType: "discord",
+        channelIds: ["chan-auto-fail"],
+        disabledChannelIds: [],
+        sourceData: { token: "abc" },
+      },
+    ]),
+  );
+  executorMocks.sourceGetProvider.mockReturnValue({ fetchMessages });
+  executorMocks.analyzeMessagesWithAI.mockResolvedValue([
+    {
+      messageId: "auto-fail-1",
+      signal: { action: "BUY", symbol: "ETHUSDT" },
+    },
+  ]);
+  executorMocks.createTradeProcessId.mockReturnValue("proc-auto-fail-1");
+  executorMocks.createDraft.mockRejectedValue(new Error("draft create failed"));
+  executorMocks.draftFindOne.mockResolvedValue(pendingDraft);
+  executorMocks.rejectDraftWithReason.mockResolvedValue({
+    status: "rejected",
+    result: "rejected",
+    message: "draft create failed",
+    error: "draft create failed",
+  });
+
+  const result = await runSignalCheck();
+
+  assert.deepEqual(result.errors, ["Message auto-fail-1: draft create failed"]);
+  assert.ok(
+    executorMocks.processedMessageUpdateOne.mock.calls.some(
+      (call) =>
+        call[0]?.messageId === "auto-fail-1" && call[1]?.status === "failed",
+    ),
+  );
+  assert.equal(executorMocks.rejectDraftWithReason.mock.calls.length, 1);
+  assert.ok(
+    executorMocks.logProcessStep.mock.calls.some(
+      (call) =>
+        call[0]?.action === "process_failed" && call[0]?.error === "draft create failed",
+    ),
+  );
+  assert.ok(
+    executorMocks.logExecutorError.mock.calls.some(
+      (call) =>
+        String(call[0]).includes("Error processing message auto-fail-1: draft create failed") &&
+        call[1]?.action === "console_process_error",
+    ),
+  );
+});
+
+test("runSignalCheck records a general error when top-level execution throws", async () => {
+  executorMocks.getTradingMode.mockRejectedValue(new Error("db exploded"));
+
+  const result = await runSignalCheck();
+
+  assert.equal(result.checked, 0);
+  assert.deepEqual(result.errors, ["General: db exploded"]);
+  assert.ok(
+    executorMocks.logExecutorError.mock.calls.some(
+      (call) =>
+        String(call[0]).includes("Signal check error: db exploded") &&
+        call[1]?.action === "console_signal_check_error",
+    ),
+  );
 });

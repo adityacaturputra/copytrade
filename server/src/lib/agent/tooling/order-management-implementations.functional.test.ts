@@ -185,4 +185,82 @@ describe("orderManagementToolImplementations", () => {
     expect(exchange.getAlgoOrders).toHaveBeenCalledWith("BTCUSDT");
     expect(JSON.parse(raw)).toEqual(algoOrders);
   });
+
+  it("proxies open-order reads, single-order cancels, algo cancels, and order history", async () => {
+    const openOrders: OpenOrderInfo[] = [
+      {
+        orderId: "open-1",
+        symbol: "BTCUSDT",
+        side: "BUY",
+        type: "LIMIT",
+        quantity: 1,
+        filledQuantity: 0,
+        status: "NEW",
+      },
+    ];
+    vi.mocked(exchange.getOpenOrders).mockResolvedValue(openOrders);
+    vi.mocked(exchange.cancelOrder).mockResolvedValue(true);
+    vi.mocked(exchange.cancelAlgoOrders).mockResolvedValue({
+      cancelled: ["algo-1"],
+      errors: [],
+    });
+    vi.mocked(exchange.getOrderHistory).mockResolvedValue([
+      {
+        orderId: "hist-1",
+        symbol: "BTCUSDT",
+        side: "SELL",
+        type: "MARKET",
+        price: 62000,
+        quantity: 1,
+        filledQuantity: 1,
+        fee: 12,
+        status: "FILLED",
+        createdAt: 123,
+      },
+    ]);
+
+    const openRaw = await orderManagementToolImplementations.get_open_orders({
+      symbol: "BTCUSDT",
+    });
+    const cancelRaw = await orderManagementToolImplementations.cancel_order({
+      orderId: "open-1",
+      symbol: "BTCUSDT",
+    });
+    const cancelAlgoRaw = await orderManagementToolImplementations.cancel_algo_orders({
+      symbol: "BTCUSDT",
+    });
+    const historyRaw = await orderManagementToolImplementations.get_order_history({
+      symbol: "BTCUSDT",
+      limit: 5,
+    });
+
+    expect(exchange.getOpenOrders).toHaveBeenCalledWith("BTCUSDT");
+    expect(exchange.cancelOrder).toHaveBeenCalledWith("open-1", "BTCUSDT");
+    expect(exchange.cancelAlgoOrders).toHaveBeenCalledWith("BTCUSDT");
+    expect(exchange.getOrderHistory).toHaveBeenCalledWith("BTCUSDT", 5);
+    expect(JSON.parse(openRaw)).toEqual(openOrders);
+    expect(JSON.parse(cancelRaw)).toEqual({
+      success: true,
+      orderId: "open-1",
+      symbol: "BTCUSDT",
+    });
+    expect(JSON.parse(cancelAlgoRaw)).toEqual({
+      cancelled: ["algo-1"],
+      errors: [],
+    });
+    expect(JSON.parse(historyRaw)).toEqual([
+      {
+        orderId: "hist-1",
+        symbol: "BTCUSDT",
+        side: "SELL",
+        type: "MARKET",
+        price: 62000,
+        quantity: 1,
+        filledQuantity: 1,
+        fee: 12,
+        status: "FILLED",
+        createdAt: 123,
+      },
+    ]);
+  });
 });

@@ -976,3 +976,60 @@ test("Bybit cancelAlgoOrders records stop-order and trading-stop failures, and m
     /Instrument not found on Bybit: DOGEUSDT/,
   );
 });
+
+test("Bybit cancelAlgoOrders skips positions without TP/SL and getInstrumentSpecs falls back to quote-stripped base coin", async () => {
+  const exchange = createExchange() as any;
+
+  exchange.fetchRealtimeOrders = async () => [];
+  exchange.fetchPositions = async () => [
+    {
+      symbol: "BTCUSDT",
+      side: "Buy",
+      size: "1",
+      positionIdx: 1,
+      takeProfit: "0",
+      stopLoss: "0",
+    },
+    {
+      symbol: "BTCUSDT",
+      side: "Sell",
+      size: "2",
+      positionIdx: 2,
+      takeProfit: "65000",
+      stopLoss: "0",
+    },
+  ];
+  const cleared: number[] = [];
+  exchange.clearTradingStopsForPosition = async (_symbol: string, positionIdx: number) => {
+    cleared.push(positionIdx);
+  };
+  exchange.publicRequest = async () => ({
+    list: [
+      {
+        symbol: "ETHUSDT",
+        lotSizeFilter: {
+          qtyStep: "0.01",
+          minOrderQty: "0.05",
+        },
+        priceFilter: {
+          tickSize: "0.1",
+        },
+      },
+    ],
+  });
+
+  assert.deepEqual(await exchange.cancelAlgoOrders("BTCUSDT"), {
+    cancelled: ["position-tp:BTCUSDT:2"],
+    errors: [],
+  });
+  assert.deepEqual(cleared, [2]);
+  assert.deepEqual(await exchange.getInstrumentSpecs("ETHUSDT"), {
+    ctVal: 1,
+    lotSz: 0.01,
+    minSz: 0.05,
+    ctValCcy: "ETH",
+    tickSz: 0.1,
+    qtyDecimals: 2,
+    priceDecimals: 1,
+  });
+});
