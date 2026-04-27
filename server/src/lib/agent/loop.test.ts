@@ -551,3 +551,147 @@ test("runAgentLoopStreaming executes approved mutating tools and supports provid
     defaultHeaders: { "X-Pat": "1" },
   });
 });
+
+test("runAgentLoopStreaming aborts resumed turns without emitting an error event", async () => {
+  loopMocks.loadAgentTurn.mockResolvedValueOnce({
+    sessionId: "session-abort",
+    status: "awaiting_approval",
+    userMessage: "resume",
+    history: [],
+    provider: "glm",
+    messages: [],
+    pendingToolCalls: [],
+    assistantResponse: "",
+    toolTraces: [],
+  });
+
+  const controller = new AbortController();
+  controller.abort();
+
+  const events: Array<Record<string, unknown>> = [];
+  for await (const event of runAgentLoopStreaming({
+    sessionId: "session-abort",
+    role: "viewer",
+    processId: "proc-abort",
+    signal: controller.signal,
+  })) {
+    events.push(event);
+  }
+
+  assert.deepEqual(events, []);
+  assert.equal(
+    loopMocks.updateAgentTurnState.mock.calls.some(
+      (call) => call[0] === "proc-abort" && call[1]?.status === "aborted",
+    ),
+    true,
+  );
+  assert.equal(
+    loopMocks.logAgentTurnEvent.mock.calls.some(
+      (call) => call[0]?.action === "turn_aborted" && call[0]?.processId === "proc-abort",
+    ),
+    true,
+  );
+});
+
+test("runAgentLoopStreaming reports missing provider keys and uses kimi provider fallbacks", async () => {
+  const originalKey = process.env.GLM_API_KEY;
+  delete process.env.GLM_API_KEY;
+
+  try {
+    const noKeyEvents: Array<Record<string, unknown>> = [];
+    for await (const event of runAgentLoopStreaming({
+      sessionId: "session-no-key",
+      role: "viewer",
+      userMessage: "hello",
+      provider: "glm",
+    })) {
+      noKeyEvents.push(event);
+    }
+
+    assert.equal(noKeyEvents.at(-1)?.type, "error");
+    assert.match(
+      String(noKeyEvents.at(-1)?.error),
+      /No valid API keys configured for the selected AI provider/,
+    );
+  } finally {
+    process.env.GLM_API_KEY = originalKey;
+  }
+
+  process.env.ANTHROPIC_API_KEY = "kimi-bad,kimi-good";
+  delete process.env.ANTHROPIC_BASE_URL;
+  delete process.env.ANTHROPIC_MODEL;
+  loopMocks.openaiCreate
+    .mockRejectedValueOnce(new Error("token expired"))
+    .mockResolvedValueOnce(streamFromDeltas([{ content: "kimi ok" }]));
+
+  const kimiEvents: Array<Record<string, unknown>> = [];
+  for await (const event of runAgentLoopStreaming({
+    sessionId: "session-kimi",
+    role: "viewer",
+    userMessage: "hello",
+    provider: "kimi",
+  })) {
+    kimiEvents.push(event);
+  }
+
+  assert.equal(kimiEvents.at(-1)?.type, "done");
+  assert.deepEqual(loopMocks.providerClients.at(-2), {
+    apiKey: "kimi-bad",
+    baseURL: "https://api.kimi.com/coding/",
+  });
+  assert.deepEqual(loopMocks.providerClients.at(-1), {
+    apiKey: "kimi-good",
+    baseURL: "https://api.kimi.com/coding/",
+  });
+});
+
+test("runAgentLoopStreaming records explicit approval rejections before continuing", async () => {
+  loopMocks.getAgentApprovalRequired.mockReturnValue(true);
+  loopMocks.getAgentToolPolicy.mockReturnValue({
+    mode: "mutating",
+    minimumRole: "operator",
+    requiresApproval: true,
+  });
+  loopMocks.loadAgentTurn.mockResolvedValueOnce({
+    sessionId: "session-reject",
+    status: "awaiting_approval",
+    userMessage: "x",
+    history: [],
+    provider: "glm",
+    messages: [],
+    pendingToolCalls: [{ id: "call-reject", name: "cancel_order", arguments: '{"orderId":"1"}' }],
+    assistantResponse: "",
+    toolTraces: [],
+  });
+  loopMocks.openaiCreate.mockResolvedValueOnce(
+    streamFromDeltas([{ content: "rejection handled" }]),
+  );
+
+  const events: Array<Record<string, unknown>> = [];
+  for await (const event of runAgentLoopStreaming({
+    sessionId: "session-reject",
+    role: "operator",
+    processId: "proc-reject",
+    decision: "reject",
+  })) {
+    events.push(event);
+  }
+
+  assert.equal(events.at(-1)?.type, "done");
+  assert.equal(
+    events.some(
+      (event) =>
+        event.type === "step" &&
+        String(event.step?.content).includes('"approvalRejected":true'),
+    ),
+    true,
+  );
+  assert.equal(
+    loopMocks.logAgentTurnEvent.mock.calls.some(
+      (call) =>
+        call[0]?.action === "tool_approval_rejected" &&
+        call[0]?.processId === "proc-reject",
+    ),
+    true,
+  );
+});

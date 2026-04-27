@@ -199,3 +199,118 @@ test("PaperExchange throws when closing a missing position", async () => {
     /No paper position found/,
   );
 });
+
+test("PaperExchange account info, symbol-only close, and filtered order helpers cover remaining branches", async () => {
+  const exchange = new PaperExchange() as any;
+  const priceSpy = vi
+    .spyOn(exchange, "getTickerPrice")
+    .mockImplementation(async (symbol: string) => {
+      if (symbol === "BTCUSDT") return 120;
+      if (symbol === "ETHUSDT") return 40;
+      return 100;
+    });
+
+  exchange.positions.set("1", {
+    symbol: "BTCUSDT",
+    positionId: "1",
+    side: "LONG",
+    leverage: 2,
+    marginType: "cross",
+    entryPrice: 100,
+    quantity: 1,
+    margin: 50,
+    liquidationPrice: 0,
+    createdAt: new Date(),
+  });
+  exchange.positions.set("2", {
+    symbol: "ETHUSDT",
+    positionId: "2",
+    side: "SHORT",
+    leverage: 2,
+    marginType: "cross",
+    entryPrice: 50,
+    quantity: 1,
+    margin: 25,
+    liquidationPrice: 0,
+    createdAt: new Date(),
+  });
+
+  const account = await exchange.getAccountInfo();
+  assert.equal(account.unrealizedPnl, 30);
+  assert.equal(account.totalBalance, 10030);
+
+  exchange.algoOrders = [
+    {
+      orderId: "algo-btc",
+      symbol: "BTCUSDT",
+      side: "SELL",
+      type: "sl",
+      triggerPrice: 90,
+      quantity: 1,
+      status: "NEW",
+    },
+    {
+      orderId: "algo-eth",
+      symbol: "ETHUSDT",
+      side: "BUY",
+      type: "tp",
+      triggerPrice: 45,
+      quantity: 1,
+      status: "NEW",
+    },
+  ];
+  exchange.orderHistory = [
+    {
+      orderId: "hist-eth",
+      symbol: "ETHUSDT",
+      side: "SELL",
+      type: "MARKET",
+      price: 50,
+      quantity: 1,
+      filledQuantity: 1,
+      fee: 0,
+      status: "FILLED",
+      createdAt: 1,
+    },
+  ];
+
+  assert.deepEqual(
+    (await exchange.getAlgoOrders("ETHUSDT")).map((row: { orderId: string }) => row.orderId),
+    ["algo-eth"],
+  );
+  assert.deepEqual(
+    (await exchange.getOrderHistory("ETHUSDT")).map((row: { orderId: string }) => row.orderId),
+    ["hist-eth"],
+  );
+
+  await exchange.closePosition("BTCUSDT");
+  assert.equal((await exchange.getOpenPositions()).some((row: { symbol: string }) => row.symbol === "BTCUSDT"), false);
+
+  priceSpy.mockRestore();
+});
+
+test("PaperExchange closeAllPositions records unknown close failures", async () => {
+  const exchange = new PaperExchange() as any;
+
+  exchange.positions.set("1", {
+    symbol: "BTCUSDT",
+    positionId: "1",
+    side: "LONG",
+    leverage: 2,
+    marginType: "cross",
+    entryPrice: 100,
+    quantity: 1,
+    margin: 50,
+    liquidationPrice: 0,
+    createdAt: new Date(),
+  });
+
+  exchange.closePosition = async () => {
+    throw "boom";
+  };
+
+  assert.deepEqual(await exchange.closeAllPositions(), {
+    closed: [],
+    errors: ["BTCUSDT: Unknown"],
+  });
+});

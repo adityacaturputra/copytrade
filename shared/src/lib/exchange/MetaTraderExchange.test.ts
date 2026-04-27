@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { MetaTraderExchange } from "./MetaTraderExchange";
 import { ExchangeOrderType, OrderSide } from "../enums";
 
@@ -466,4 +466,456 @@ test("metatrader algo orders and algo cancellation use position protections", as
     cancelled: [],
     errors: ["bridge down"],
   });
+});
+
+test("metatrader private mappers and extractors cover data-array and fallback branches", () => {
+  const exchange = createExchange();
+  const now = Date.now;
+  Date.now = () => 123456789;
+
+  try {
+    assert.deepEqual(exchange.extractArray({ data: [{ id: 1 }] }, ["orders"]), [{ id: 1 }]);
+    assert.deepEqual(exchange.extractArray("bad-payload", ["orders"]), []);
+    assert.deepEqual(exchange.extractObject("bad-payload", ["account"]), {});
+
+    assert.deepEqual(
+      exchange.mapPosition({
+        ticket: 7,
+        symbol: "eurusd",
+        type: 1,
+        lots: "2",
+        priceOpen: "1.2",
+        priceCurrent: "1.3",
+        profit: "8",
+        leverage: "0",
+      }),
+      {
+        symbol: "EURUSD",
+        positionId: "7",
+        side: "SHORT",
+        leverage: 1,
+        marginType: "cross",
+        entryPrice: 1.2,
+        quantity: 2,
+        margin: 0,
+        unrealizedPnl: 8,
+        liquidationPrice: 0,
+        markPrice: 1.3,
+        raw: {
+          ticket: 7,
+          symbol: "eurusd",
+          type: 1,
+          lots: "2",
+          priceOpen: "1.2",
+          priceCurrent: "1.3",
+          profit: "8",
+          leverage: "0",
+        },
+      },
+    );
+
+    assert.deepEqual(
+      exchange.mapOpenOrder({
+        ticket: 8,
+        symbol: "eurusd",
+        type: "sell_stop",
+        openPrice: "1.1",
+        lots: "3",
+        executedQty: "1.2",
+        state: "pending",
+        time: "100",
+      }),
+      {
+        orderId: "8",
+        symbol: "EURUSD",
+        side: "SELL",
+        type: "sell_stop",
+        price: 1.1,
+        quantity: 3,
+        filledQuantity: 1.2,
+        status: "pending",
+        createdAt: 100,
+        raw: {
+          ticket: 8,
+          symbol: "eurusd",
+          type: "sell_stop",
+          openPrice: "1.1",
+          lots: "3",
+          executedQty: "1.2",
+          state: "pending",
+          time: "100",
+        },
+      },
+    );
+
+    assert.deepEqual(
+      exchange.mapHistoricalOrder({
+        ticket: 9,
+        symbol: "eurusd",
+        side: "buy",
+        openPrice: "1.05",
+        volume: "4",
+        commission: "1",
+        pnl: "5",
+        state: "done",
+      }),
+      {
+        orderId: "9",
+        symbol: "EURUSD",
+        side: "BUY",
+        type: "unknown",
+        price: 1.05,
+        quantity: 4,
+        filledQuantity: 4,
+        fee: 1,
+        realizedPnl: 5,
+        status: "done",
+        createdAt: 123456789,
+        updatedAt: undefined,
+        raw: {
+          ticket: 9,
+          symbol: "eurusd",
+          side: "buy",
+          openPrice: "1.05",
+          volume: "4",
+          commission: "1",
+          pnl: "5",
+          state: "done",
+        },
+      },
+    );
+  } finally {
+    Date.now = now;
+  }
+});
+
+test("metatrader fallback account and instrument branches return normalized defaults", async () => {
+  const exchange = createExchange();
+
+  exchange.client.request = async ({
+    method,
+    url,
+  }: {
+    method: string;
+    url: string;
+  }) => {
+    if (method === "GET" && url === "/account") {
+      return {
+        data: {
+          account: {
+            balance: "1200",
+            marginFree: "900",
+            profit: "12",
+          },
+        },
+      };
+    }
+
+    if (method === "GET" && url === "/positions") {
+      return {
+        data: {
+          positions: [
+            {
+              positionId: "p1",
+              symbol: "eurusd",
+              quantity: "1",
+              side: "buy",
+            },
+          ],
+        },
+      };
+    }
+
+    if (url === "/instruments/EURUSD") {
+      return {
+        data: {
+          instrument: {
+            ctVal: "1000",
+            lotSz: "0.1",
+            minSz: "0.2",
+            tickSz: "0.01",
+            profitCurrency: "USD",
+          },
+        },
+      };
+    }
+
+    return {
+      data: {
+        instrument: {
+          ctVal: "1000",
+          lotSz: "0.1",
+          minSz: "0.2",
+          tickSz: "0.01",
+        },
+      },
+    };
+  };
+
+  assert.deepEqual(await exchange.getAccountInfo(), {
+    totalBalance: 1200,
+    availableBalance: 900,
+    unrealizedPnl: 12,
+    currency: "USD",
+  });
+  assert.deepEqual(await exchange.cancelAlgoOrders("eurusd"), {
+    cancelled: [],
+    errors: [],
+  });
+  assert.deepEqual(await exchange.getInstrumentSpecs("eurusd"), {
+    ctVal: 1000,
+    lotSz: 0.1,
+    minSz: 0.2,
+    ctValCcy: "USD",
+    tickSz: 0.01,
+    qtyDecimals: 1,
+    priceDecimals: 2,
+  });
+  assert.deepEqual(await exchange.getInstrumentSpecs("gbpjpy"), {
+    ctVal: 1000,
+    lotSz: 0.1,
+    minSz: 0.2,
+    ctValCcy: "GBP",
+    tickSz: 0.01,
+    qtyDecimals: 1,
+    priceDecimals: 2,
+  });
+  assert.equal(await exchange.clearSyntheticProtectionOrder("plain", "eurusd"), false);
+  assert.equal(await exchange.clearSyntheticProtectionOrder("mt-sl:", "eurusd"), false);
+});
+
+test("metatrader constructor attaches proxy agents and handles proxy lookup failures", async () => {
+  vi.resetModules();
+  const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const proxyAgent = { agent: "proxy" };
+
+  try {
+    vi.doMock("../proxy/ProxyFactory", () => ({
+      getProxyAgent: vi
+        .fn()
+        .mockResolvedValueOnce(proxyAgent)
+        .mockRejectedValueOnce(new Error("proxy unavailable")),
+    }));
+
+    const { MetaTraderExchange: MockedMetaTraderExchange } = await import(
+      "./MetaTraderExchange"
+    );
+    const exchange = new MockedMetaTraderExchange({
+      baseUrl: "https://mt.example.com/",
+      login: "login",
+      password: "password",
+      server: "server",
+      platform: "MT5",
+      bridgeToken: "token",
+    }) as any;
+
+    const interceptor = exchange.client.interceptors.request.handlers[0];
+    const first = await interceptor.fulfilled({ headers: {} });
+    assert.equal(first.httpsAgent, proxyAgent);
+    assert.equal(first.httpAgent, proxyAgent);
+
+    const second = await interceptor.fulfilled({ headers: {} });
+    assert.equal(second.httpsAgent, undefined);
+    assert.equal(second.httpAgent, undefined);
+    assert.equal(
+      warnSpy.mock.calls.some((call) =>
+        String(call[0]).includes("Proxy agent not available"),
+      ),
+      true,
+    );
+  } finally {
+    warnSpy.mockRestore();
+    vi.doUnmock("../proxy/ProxyFactory");
+    vi.resetModules();
+  }
+});
+
+test("metatrader order and algo fallbacks cover volume-based rows and fatal cancel errors", async () => {
+  const exchange = createExchange();
+  const now = Date.now;
+  Date.now = () => 123456;
+
+  try {
+    exchange.client.request = async ({ url }: { url: string }) => {
+      if (url === "/orders") {
+        return {
+          data: {
+            result: {
+              id: 11,
+              volume: "1.25",
+              status: "queued",
+            },
+          },
+        };
+      }
+
+      if (url === "/orders/history") {
+        return {
+          data: {
+            result: [
+              {
+                id: 4,
+                symbol: "xauusd",
+                type: "buy",
+                lots: "0.3",
+                status: "closed",
+                openPrice: "2500",
+              },
+            ],
+          },
+        };
+      }
+
+      throw new Error(`Unexpected request for ${url}`);
+    };
+
+    exchange.getPositionsRaw = async () => [
+      {
+        ticket: 9,
+        symbol: "xauusd",
+        type: "sell",
+        volume: "0.4",
+        sl: "2400",
+        tp: "2600",
+        time: "2026-01-03T00:00:00Z",
+      },
+      {
+        id: 10,
+        symbol: "eurusd",
+        side: "sell",
+        lots: "0.2",
+        stopLoss: "1.05",
+        takeProfit: "1.15",
+      },
+    ];
+
+    assert.deepEqual(
+      await exchange.placeOrder({
+        symbol: "xauusd",
+        side: OrderSide.SELL,
+        type: ExchangeOrderType.MARKET,
+        quantity: 2,
+      }),
+      {
+        orderId: "11",
+        price: 0,
+        quantity: 1.25,
+        status: "queued",
+        raw: { id: 11, volume: "1.25", status: "queued" },
+      },
+    );
+
+    assert.deepEqual(await exchange.getOrderHistory("xauusd", 5), [
+      {
+        orderId: "4",
+        symbol: "XAUUSD",
+        side: "BUY",
+        type: "buy",
+        price: 2500,
+        quantity: 0.3,
+        filledQuantity: 0.3,
+        fee: 0,
+        realizedPnl: 0,
+        status: "closed",
+        createdAt: 123456,
+        updatedAt: undefined,
+        raw: {
+          id: 4,
+          symbol: "xauusd",
+          type: "buy",
+          lots: "0.3",
+          status: "closed",
+          openPrice: "2500",
+        },
+      },
+    ]);
+
+    assert.deepEqual(await exchange.getAlgoOrders(), [
+      {
+        orderId: "mt-sl:9",
+        symbol: "XAUUSD",
+        side: "BUY",
+        type: "sl",
+        triggerPrice: 2400,
+        quantity: 0.4,
+        status: "active",
+        createdAt: Date.parse("2026-01-03T00:00:00Z"),
+        raw: {
+          ticket: 9,
+          symbol: "xauusd",
+          type: "sell",
+          volume: "0.4",
+          sl: "2400",
+          tp: "2600",
+          time: "2026-01-03T00:00:00Z",
+        },
+      },
+      {
+        orderId: "mt-tp:9",
+        symbol: "XAUUSD",
+        side: "BUY",
+        type: "tp",
+        triggerPrice: 2600,
+        quantity: 0.4,
+        status: "active",
+        createdAt: Date.parse("2026-01-03T00:00:00Z"),
+        raw: {
+          ticket: 9,
+          symbol: "xauusd",
+          type: "sell",
+          volume: "0.4",
+          sl: "2400",
+          tp: "2600",
+          time: "2026-01-03T00:00:00Z",
+        },
+      },
+      {
+        orderId: "mt-sl:10",
+        symbol: "EURUSD",
+        side: "BUY",
+        type: "sl",
+        triggerPrice: 1.05,
+        quantity: 0.2,
+        status: "active",
+        createdAt: undefined,
+        raw: {
+          id: 10,
+          symbol: "eurusd",
+          side: "sell",
+          lots: "0.2",
+          stopLoss: "1.05",
+          takeProfit: "1.15",
+        },
+      },
+      {
+        orderId: "mt-tp:10",
+        symbol: "EURUSD",
+        side: "BUY",
+        type: "tp",
+        triggerPrice: 1.15,
+        quantity: 0.2,
+        status: "active",
+        createdAt: undefined,
+        raw: {
+          id: 10,
+          symbol: "eurusd",
+          side: "sell",
+          lots: "0.2",
+          stopLoss: "1.05",
+          takeProfit: "1.15",
+        },
+      },
+    ]);
+
+    exchange.request = async () => {
+      throw new Error("fatal");
+    };
+
+    await assert.rejects(
+      () => exchange.cancelOrder("broker-order", "eurusd"),
+      /fatal/,
+    );
+  } finally {
+    Date.now = now;
+  }
 });

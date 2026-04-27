@@ -116,3 +116,21 @@ test("executor console helpers log to console and persist normalized process log
     error: "error message",
   });
 });
+
+test("logExecutorError uses default error action and result when context omits them", async () => {
+  const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+  await logExecutorError("default error");
+
+  assert.equal(errorSpy.mock.calls[0][0], "default error");
+  assert.deepEqual(logMocks.createTradeLog.mock.calls[0][0], {
+    accountId: null,
+    processId: null,
+    type: "executor_console",
+    action: "console_error",
+    symbol: null,
+    details: "default error",
+    result: "error",
+    error: "default error",
+  });
+});

@@ -138,3 +138,25 @@ test("preprocessImagesWithVision enhances content with extracted signal text and
     },
   ]);
 });
+
+test("preprocessImagesWithVision preserves content when vision is enabled but finds no signal text", async () => {
+  imageMocks.geminiAnalyzer.isEnabled.mockResolvedValue(true);
+  imageMocks.geminiAnalyzer.analyzeImage.mockResolvedValue({
+    isSignal: false,
+    extractedText: "",
+    rawResponse: "raw-none",
+  });
+
+  const result = await preprocessImagesWithVision("plain", ["https://img/none"]);
+
+  assert.deepEqual(result, {
+    enhancedContent: "plain",
+    visionResults: [
+      {
+        isSignal: false,
+        extractedText: "",
+        rawResponse: "raw-none",
+      },
+    ],
+  });
+});

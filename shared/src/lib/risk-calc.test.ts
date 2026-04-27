@@ -1,6 +1,6 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
-import { calculateRisk } from "./risk-calc";
+import { calculateMaxSafeLeverage, calculateRisk } from "./risk-calc";
 
 test("calculateRisk preserves small crypto quantities", () => {
   const result = calculateRisk({
@@ -18,4 +18,9 @@ test("calculateRisk preserves small crypto quantities", () => {
   assert.ok(result.quantity < 0.001);
   assert.equal(result.quantity, 0.000453285002266);
   assert.equal(result.leverage, 23);
+});
+
+test("calculateMaxSafeLeverage handles short-side fallback denominators safely", () => {
+  assert.equal(calculateMaxSafeLeverage(100, 100.05, "SHORT", 0.0005), 1);
+  assert.equal(calculateMaxSafeLeverage(0, 50, "LONG"), 1);
 });

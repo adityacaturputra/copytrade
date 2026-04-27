@@ -1,4 +1,4 @@
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import assert from "node:assert/strict";
 import { BinanceExchange } from "./BinanceExchange";
 import { ExchangeOrderType, OrderSide } from "../enums";
@@ -1074,4 +1074,350 @@ test("setLeverage treats marginType -4046 as informational and still applies lev
     console.info = originalInfo;
     console.error = originalError;
   }
+});
+
+test("Binance private helpers cover precision parsing, algo parsing, and payload-free normalization", () => {
+  const exchange = new BinanceExchange("key", "secret") as any;
+
+  assert.equal(exchange.countDecimals(Number.NaN), 0);
+  assert.equal(exchange.countDecimals(0.000001), 6);
+  assert.equal(exchange.countDecimals(1e-7), 7);
+  assert.equal(exchange.precisionFromStepString(undefined), undefined);
+  assert.equal(exchange.precisionFromStepString("1"), 0);
+  assert.equal(exchange.precisionFromStepString("0.001000"), 3);
+  assert.equal(exchange.pickPrecision(undefined, "0.0100", 1), 2);
+  assert.equal(exchange.pickPrecision(4, undefined, 1), 4);
+  assert.equal(exchange.pickPrecision(undefined, undefined, 0.125), 3);
+
+  assert.equal(exchange.parseAlgoType("TRAILING_STOP_MARKET"), "sl");
+  assert.equal(exchange.parseAlgoType("LIMIT"), "conditional");
+  assert.equal(exchange.parseAlgoOrderId({ algoId: "", clientAlgoId: "" }), null);
+  assert.equal(exchange.parseAlgoOrderId({ clientAlgoId: "client-1" }), "client-1");
+
+  assert.match(
+    exchange.normalizeError(new Error("boom"), "GET /x").message,
+    /\[Binance\] GET \/x failed: boom/,
+  );
+  assert.match(
+    exchange.normalizeError(
+      {
+        isAxiosError: true,
+        message: "axios boom",
+        response: { data: { code: -1000 } },
+      },
+      "POST /y",
+    ).message,
+    /\[Binance\] POST \/y failed code=-1000: axios boom/,
+  );
+  assert.equal(
+    exchange.isIgnorableMarginTypeError(
+      { response: { data: { msg: "No need to change margin type." } } },
+      "/fapi/v1/marginType",
+    ),
+    true,
+  );
+  assert.equal(
+    exchange.isIgnorableMarginTypeError(
+      { isAxiosError: true, response: { data: { code: -4046 } } },
+      "/fapi/v1/marginType",
+    ),
+    true,
+  );
+  assert.equal(
+    exchange.isIgnorableMarginTypeError(
+      { isAxiosError: true, response: { data: { code: -9999 } } },
+      "/fapi/v1/marginType",
+    ),
+    false,
+  );
+  assert.equal(
+    exchange.isIgnorableMarginTypeError(
+      { response: {} },
+      "/fapi/v1/marginType",
+    ),
+    false,
+  );
+});
+
+test("Binance constructor proxy interceptor attaches agents and tolerates proxy lookup failures", async () => {
+  vi.resetModules();
+  const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const proxyAgent = { agent: "proxy" };
+
+  try {
+    vi.doMock("../proxy/ProxyFactory", () => ({
+      getProxyAgent: vi
+        .fn()
+        .mockResolvedValueOnce(proxyAgent)
+        .mockRejectedValueOnce(new Error("proxy unavailable")),
+    }));
+
+    const { BinanceExchange: MockedBinanceExchange } = await import("./BinanceExchange");
+    const exchange = new MockedBinanceExchange(" key ", " secret ") as any;
+    const interceptor = exchange.client.interceptors.request.handlers[0];
+
+    const first = await interceptor.fulfilled({ headers: {} });
+    assert.equal(first.httpsAgent, proxyAgent);
+    assert.equal(first.httpAgent, proxyAgent);
+
+    const second = await interceptor.fulfilled({ headers: {} });
+    assert.equal(second.httpsAgent, undefined);
+    assert.equal(second.httpAgent, undefined);
+    assert.equal(exchange.apiKey, "key");
+    assert.equal(exchange.secretKey, "secret");
+    assert.equal(
+      warnSpy.mock.calls.some((call) => String(call[0]).includes("Proxy agent not available")),
+      true,
+    );
+  } finally {
+    warnSpy.mockRestore();
+    vi.doUnmock("../proxy/ProxyFactory");
+    vi.resetModules();
+  }
+});
+
+test("Binance request logging covers axios messages without bodies and non-axios failures", () => {
+  const exchange = new BinanceExchange("key", "secret") as any;
+  const errorLogs: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => errorLogs.push(args.join(" "));
+
+  try {
+    exchange.logSignedRequestError(
+      {
+        isAxiosError: true,
+        message: "timeout",
+        response: { status: 504 },
+      },
+      "POST",
+      "/fapi/v1/order",
+      { symbol: "BTCUSDT" },
+    );
+    exchange.logSignedRequestError(
+      "plain failure",
+      "DELETE",
+      "/fapi/v1/order",
+      { symbol: "BTCUSDT" },
+    );
+
+    assert.equal(errorLogs.some((line) => line.includes("timeout")), true);
+    assert.equal(errorLogs.some((line) => line.includes("plain failure")), true);
+  } finally {
+    console.error = originalError;
+  }
+});
+
+test("Binance helper requests and leverage bracket logic cover success and error branches", async () => {
+  const exchange = new BinanceExchange("key", "secret") as any;
+
+  exchange.client.get = async (path: string, config?: { params?: RequestParams }) => {
+    if (path === "/public-ok") {
+      assert.deepEqual(config?.params, { symbol: "BTCUSDT" });
+      return { data: { ok: true } };
+    }
+    throw new Error("public down");
+  };
+
+  assert.deepEqual(await exchange.publicRequest("/public-ok", { symbol: "BTCUSDT" }), {
+    ok: true,
+  });
+  await assert.rejects(
+    () => exchange.publicRequest("/public-bad"),
+    /\[Binance\] GET \/public-bad failed: public down/,
+  );
+
+  exchange.signedRequest = async (_method: string, path: string) => {
+    if (path === "/fapi/v1/leverageBracket") {
+      return [
+        {
+          symbol: "ETHUSDT",
+          brackets: [{ initialLeverage: "7" }, { initialLeverage: "21" }],
+        },
+      ];
+    }
+    throw new Error("bracket down");
+  };
+
+  assert.equal(await exchange.getMaxAllowedLeverage("ETHUSDT"), 21);
+
+  exchange.signedRequest = async () => {
+    throw new Error("bracket down");
+  };
+  assert.equal(await exchange.getMaxAllowedLeverage("ETHUSDT"), null);
+});
+
+test("Binance conditional and market order fallbacks cover missing algo ids and local quantity fallback", async () => {
+  const exchange = createExchange(DEFAULT_SPECS) as any;
+
+  exchange.signedRequest = async (_method: string, path: string, params: RequestParams = {}) => {
+    if (path === "/fapi/v1/algoOrder") {
+      return { symbol: params.symbol };
+    }
+    if (path === "/fapi/v1/order") {
+      return {
+        orderId: 55,
+        status: "NEW",
+        avgPrice: "0",
+        price: "0",
+      };
+    }
+    throw new Error(`Unexpected path ${path}`);
+  };
+  exchange.getTickerPrice = async () => 64000;
+
+  await assert.rejects(
+    () => exchange.placeStopLoss("BTCUSDT", 61000, 61000, OrderSide.SELL, 2),
+    /Conditional order accepted but no algoId returned/,
+  );
+
+  const result = await exchange.placeOrder({
+    symbol: "BTCUSDT",
+    side: OrderSide.BUY,
+    type: ExchangeOrderType.MARKET,
+    quantity: 2.789,
+  });
+
+  assert.deepEqual(result, {
+    orderId: "55",
+    price: 64000,
+    quantity: 2,
+    status: "NEW",
+    raw: {
+      orderId: 55,
+      status: "NEW",
+      avgPrice: "0",
+      price: "0",
+    },
+  });
+});
+
+test("setLeverage falls back to the reported max leverage when bracket data is available", async () => {
+  const exchange = createExchange(DEFAULT_SPECS) as any;
+  const attempts: number[] = [];
+
+  exchange.getMaxAllowedLeverage = async () => 17;
+  exchange.signedRequest = async (
+    _method: string,
+    path: string,
+    params: RequestParams = {},
+  ) => {
+    if (path === "/fapi/v1/marginType") {
+      return {};
+    }
+    if (path === "/fapi/v1/leverage") {
+      attempts.push(Number(params.leverage));
+      if (attempts.length === 1) {
+        throw new Error(
+          "[Binance] POST /fapi/v1/leverage failed code=-4028: leverage adjustment not allowed",
+        );
+      }
+      return {};
+    }
+    throw new Error(`Unexpected path ${path}`);
+  };
+
+  const applied = await exchange.setLeverage("XRPUSDT", 25);
+
+  assert.equal(applied, 17);
+  assert.deepEqual(attempts, [25, 17]);
+});
+
+test("Binance leverage fallback covers 20x, 10x, and unrecoverable failures", async () => {
+  const exchange = createExchange(DEFAULT_SPECS) as any;
+
+  const attempts20: number[] = [];
+  exchange.getMaxAllowedLeverage = async () => null;
+  exchange.signedRequest = async (
+    _method: string,
+    path: string,
+    params: RequestParams = {},
+  ) => {
+    if (path === "/fapi/v1/marginType") return {};
+    if (path === "/fapi/v1/leverage") {
+      attempts20.push(Number(params.leverage));
+      if (attempts20.length === 1) {
+        throw new Error(
+          "[Binance] POST /fapi/v1/leverage failed code=-4028: leverage adjustment not allowed",
+        );
+      }
+      return {};
+    }
+    throw new Error(`Unexpected path ${path}`);
+  };
+  assert.equal(await exchange.setLeverage("BTCUSDT", 25), 20);
+  assert.deepEqual(attempts20, [25, 20]);
+
+  const attempts10: number[] = [];
+  exchange.signedRequest = async (
+    _method: string,
+    path: string,
+    params: RequestParams = {},
+  ) => {
+    if (path === "/fapi/v1/marginType") return {};
+    if (path === "/fapi/v1/leverage") {
+      attempts10.push(Number(params.leverage));
+      if (attempts10.length === 1) {
+        throw new Error(
+          "[Binance] POST /fapi/v1/leverage failed code=-4028: leverage adjustment not allowed",
+        );
+      }
+      return {};
+    }
+    throw new Error(`Unexpected path ${path}`);
+  };
+  assert.equal(await exchange.setLeverage("ETHUSDT", 15), 10);
+  assert.deepEqual(attempts10, [15, 10]);
+
+  exchange.signedRequest = async (_method: string, path: string) => {
+    if (path === "/fapi/v1/marginType") return {};
+    throw new Error("hard fail");
+  };
+  await assert.rejects(() => exchange.setLeverage("XRPUSDT", 5), /hard fail/);
+});
+
+test("Binance placeOrder applies leverage when requested and algo cancel fallback can surface only the bulk error", async () => {
+  const exchange = createExchange(DEFAULT_SPECS) as any;
+  const leverageCalls: Array<{ symbol: string; leverage: number }> = [];
+
+  exchange.setLeverage = async (symbol: string, leverage: number) => {
+    leverageCalls.push({ symbol, leverage });
+    return leverage;
+  };
+  exchange.signedRequest = async (_method: string, path: string, params: RequestParams = {}) => {
+    if (path === "/fapi/v1/order") {
+      return {
+        orderId: 321,
+        status: "FILLED",
+        price: "65010",
+        origQty: String(params.quantity || ""),
+      };
+    }
+    throw new Error(`Unexpected path ${path}`);
+  };
+
+  const order = await exchange.placeOrder({
+    symbol: "btcusdt",
+    side: OrderSide.BUY,
+    type: ExchangeOrderType.MARKET,
+    quantity: 2.4,
+    leverage: 6,
+  });
+
+  assert.deepEqual(leverageCalls, [{ symbol: "BTCUSDT", leverage: 6 }]);
+  assert.equal(order.orderId, "321");
+
+  const weirdAlgoOrders: any = [{ orderId: "ghost-1" }];
+  weirdAlgoOrders[Symbol.iterator] = function* () {};
+  exchange.getAlgoOrders = async () => weirdAlgoOrders;
+  exchange.signedRequest = async (_method: string, path: string) => {
+    if (path === "/fapi/v1/algoOpenOrders") {
+      throw "bulk cancelled nothing";
+    }
+    throw new Error(`Unexpected path ${path}`);
+  };
+
+  assert.deepEqual(await exchange.cancelAlgoOrders("BTCUSDT"), {
+    cancelled: [],
+    errors: ["Unknown error"],
+  });
 });

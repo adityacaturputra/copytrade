@@ -116,6 +116,97 @@ test("cron route returns conflict when a job is already running and reports stat
   });
 });
 
+test("cron route returns conflict for signal-check and records error flows when background work fails", async () => {
+  const app = createApp();
+  cronMocks.tryStart.mockReturnValueOnce(false);
+  cronMocks.getCronStatus.mockReturnValueOnce({
+    running: true,
+    progress: "signal busy",
+  });
+
+  const conflict = await request(app).get("/signal-check");
+  assert.equal(conflict.status, 409);
+  assert.deepEqual(conflict.body, {
+    success: false,
+    error: "Already running",
+    status: { running: true, progress: "signal busy" },
+  });
+
+  cronMocks.tryStart.mockReturnValueOnce(true);
+  cronMocks.connectDB.mockResolvedValueOnce(undefined);
+  cronMocks.runSignalCheck.mockRejectedValueOnce(new Error("signal crashed"));
+  cronMocks.connectDB.mockRejectedValueOnce(new Error("db offline"));
+
+  const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  const res = await request(app).post("/signal-check");
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.success, true);
+
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.deepEqual(cronMocks.updateProgress.mock.calls.at(-1), [
+    "signal-check",
+    "Error: signal crashed",
+    "error",
+  ]);
+  assert.deepEqual(cronMocks.finishCron.mock.calls.at(-1), [
+    "signal-check",
+    "error",
+    "signal crashed",
+  ]);
+  assert.equal(cronMocks.createTradeLog.mock.calls.length, 1);
+  assert.deepEqual(cronMocks.createTradeLog.mock.calls[0], [
+    {
+      type: "cron",
+      action: "signal_check_start",
+      details: "Starting Discord signal check cron job",
+      result: "started",
+    },
+  ]);
+  assert.equal(errorSpy.mock.calls.some((call) => call.includes("[Cron] Signal check error:")), true);
+  errorSpy.mockRestore();
+});
+
+test("cron route persists signal-check error logs when catch-path logging succeeds", async () => {
+  const app = createApp();
+  cronMocks.tryStart.mockReturnValueOnce(true);
+  cronMocks.connectDB.mockResolvedValue(undefined);
+  cronMocks.runSignalCheck.mockRejectedValueOnce(new Error("signal catch path"));
+
+  const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  const res = await request(app).get("/signal-check");
+
+  assert.equal(res.status, 200);
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.deepEqual(cronMocks.createTradeLog.mock.calls, [
+    [
+      {
+        type: "cron",
+        action: "signal_check_start",
+        details: "Starting Discord signal check cron job",
+        result: "started",
+      },
+    ],
+    [
+      {
+        type: "cron",
+        action: "signal_check_error",
+        error: "signal catch path",
+      },
+    ],
+  ]);
+  assert.deepEqual(cronMocks.finishCron.mock.calls.at(-1), [
+    "signal-check",
+    "error",
+    "signal catch path",
+  ]);
+  errorSpy.mockRestore();
+});
+
 test("cron route starts jobs and runs success and error background flows", async () => {
   cronMocks.tryStart.mockReturnValue(true);
   cronMocks.runSignalCheck.mockResolvedValue({

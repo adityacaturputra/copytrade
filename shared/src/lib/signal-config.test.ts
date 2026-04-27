@@ -95,3 +95,35 @@ test("setSignalConfig persists only provided fields and normalizes optional flag
     visionAIEnabled: false,
   });
 });
+
+test("setSignalConfig persists time window and vision flags when provided", async () => {
+  const leanMock = vi.fn().mockResolvedValue({
+    fetchLimit: 10,
+    timeWindowHours: 6,
+    batchSize: 5,
+    includeImageUrls: false,
+    visionAIEnabled: true,
+  });
+  dbMocks.findOneAndUpdate.mockReturnValue({ lean: leanMock });
+
+  const config = await setSignalConfig({
+    timeWindowHours: 6,
+    visionAIEnabled: true,
+  });
+
+  assert.deepEqual(dbMocks.findOneAndUpdate.mock.calls[0], [
+    {},
+    {
+      timeWindowHours: 6,
+      visionAIEnabled: true,
+    },
+    { upsert: true, new: true },
+  ]);
+  assert.deepEqual(config, {
+    fetchLimit: 10,
+    timeWindowHours: 6,
+    batchSize: 5,
+    includeImageUrls: false,
+    visionAIEnabled: true,
+  });
+});

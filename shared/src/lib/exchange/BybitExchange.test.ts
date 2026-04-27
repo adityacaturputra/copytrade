@@ -1,4 +1,4 @@
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import assert from "node:assert/strict";
 import { BybitExchange } from "./BybitExchange";
 import { ExchangeOrderType, OrderSide } from "../enums";
@@ -925,6 +925,237 @@ test("Bybit closeAllPositions aggregates per-position and fetch-level failures",
   });
 });
 
+test("Bybit private helpers cover symbol normalization, precision handling, and error hints", () => {
+  const simulated = new BybitExchange("key", "secret", true) as any;
+  const production = new BybitExchange("key", "secret") as any;
+
+  assert.equal(simulated.toSymbol("btc-usdt-swap"), "BTCUSDT");
+  assert.equal(simulated.toSymbol("eth_usdt"), "ETHUSDT");
+  assert.equal(simulated.countDecimals(0.000001), 6);
+  assert.equal(simulated.countDecimals(1e-7), 7);
+  assert.equal(simulated.clampToStep(1.2345, 0, 2), 1.23);
+  assert.equal(simulated.getPositionAlgoSide("Buy"), "SELL");
+  assert.equal(simulated.getPositionAlgoSide("Sell"), "BUY");
+  assert.equal(simulated.parseAlgoType("TakeProfit"), "tp");
+  assert.equal(simulated.parseAlgoType("Stop"), "sl");
+  assert.equal(simulated.parseAlgoType("Trailing"), "conditional");
+  assert.equal(simulated.parseAlgoTypeFromOrder({ orderLinkId: "ct_sl_demo" }), "sl");
+  assert.equal(
+    simulated.isIgnorableMarginModeError("same tp sl mode on uta2.0 account"),
+    true,
+  );
+  assert.equal(simulated.isIgnorableMarginModeError("hard failure"), false);
+  assert.match(simulated.buildAlgoOrderLinkId("tp"), /^ct_tp_[a-z0-9]+_[a-z0-9]{6}$/);
+
+  const generic = production.normalizeError(new Error("boom"), "GET /x");
+  assert.match(generic.message, /\[Bybit\] GET \/x failed: boom/);
+
+  const demoAuth = simulated.normalizeError(
+    {
+      isAxiosError: true,
+      message: "Request failed with status code 401",
+      response: { status: 401, data: { retCode: 10003, retMsg: "invalid key" } },
+    },
+    "GET /auth",
+  );
+  assert.match(demoAuth.message, /api-demo\.bybit\.com/);
+
+  const prodAuth = production.normalizeError(
+    {
+      isAxiosError: true,
+      message: "Request failed with status code 401",
+      response: { status: 401, data: { retCode: 10003, retMsg: "invalid key" } },
+    },
+    "GET /auth",
+    { symbol: "BTCUSDT" },
+  );
+  assert.match(prodAuth.message, /api\.bybit\.com/);
+  assert.match(prodAuth.message, /payload=\{"symbol":"BTCUSDT"\}/);
+});
+
+test("Bybit constructor request interceptor attaches proxy agents and tolerates proxy lookup failures", async () => {
+  vi.resetModules();
+  const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const proxyAgent = { agent: "proxy" };
+
+  try {
+    vi.doMock("../proxy/ProxyFactory", () => ({
+      getProxyAgent: vi
+        .fn()
+        .mockResolvedValueOnce(proxyAgent)
+        .mockRejectedValueOnce(new Error("proxy unavailable")),
+    }));
+
+    const { BybitExchange: MockedBybitExchange } = await import("./BybitExchange");
+    const exchange = new MockedBybitExchange("key", "secret") as any;
+    const interceptor = exchange.client.interceptors.request.handlers[0];
+
+    const first = await interceptor.fulfilled({ headers: {} });
+    assert.equal(first.httpsAgent, proxyAgent);
+    assert.equal(first.httpAgent, proxyAgent);
+
+    const second = await interceptor.fulfilled({ headers: {} });
+    assert.equal(second.httpsAgent, undefined);
+    assert.equal(second.httpAgent, undefined);
+    assert.equal(
+      warnSpy.mock.calls.some((call) => String(call[0]).includes("Proxy agent not available")),
+      true,
+    );
+  } finally {
+    warnSpy.mockRestore();
+    vi.doUnmock("../proxy/ProxyFactory");
+    vi.resetModules();
+  }
+});
+
+test("Bybit target-position and trading-stop helpers prefer explicit hedge legs and ignore benign mode errors", async () => {
+  const exchange = createExchange() as any;
+  const calls: Array<{ path: string; payload: RequestParams }> = [];
+
+  exchange.fetchPositions = async () => [
+    { symbol: "BTCUSDT", side: "Buy", size: "1", positionIdx: 0 },
+    { symbol: "BTCUSDT", side: "Buy", size: "2", positionIdx: 1 },
+    { symbol: "BTCUSDT", side: "Sell", size: "3", positionIdx: 2 },
+  ];
+
+  assert.deepEqual(await exchange.fetchTargetPosition("BTCUSDT", "SELL"), {
+    symbol: "BTCUSDT",
+    side: "Buy",
+    size: "2",
+    positionIdx: 1,
+  });
+  assert.deepEqual(await exchange.fetchTargetPosition("BTCUSDT", "BUY"), {
+    symbol: "BTCUSDT",
+    side: "Sell",
+    size: "3",
+    positionIdx: 2,
+  });
+
+  exchange.signedRequest = async (
+    _method: string,
+    path: string,
+    payload: RequestParams = {},
+  ) => {
+    calls.push({ path, payload });
+    throw new Error("position mode is not modified");
+  };
+
+  await exchange.ensureAccountMarginMode("cross");
+  await exchange.ensureSymbolMarginMode("BTCUSDT", 5, "cross");
+
+  exchange.signedRequest = async (
+    _method: string,
+    path: string,
+    payload: RequestParams = {},
+  ) => {
+    calls.push({ path, payload });
+    return {};
+  };
+
+  await exchange.clearTradingStopsForPosition("btc-usdt", 2);
+
+  assert.deepEqual(calls.at(-1), {
+    path: "/v5/position/trading-stop",
+    payload: {
+      category: "linear",
+      symbol: "BTCUSDT",
+      positionIdx: 2,
+      tpslMode: "Full",
+      takeProfit: "0",
+      stopLoss: "0",
+    },
+  });
+});
+
+test("Bybit account and order helpers cover fallback balances, limit price clamping, and missing order ids", async () => {
+  const exchange = createExchange(DEFAULT_SPECS) as any;
+  const payloads: RequestParams[] = [];
+
+  exchange.signedRequest = async (
+    _method: string,
+    path: string,
+    params: RequestParams = {},
+  ) => {
+    if (path === "/v5/account/wallet-balance") {
+      return {
+        list: [
+          {
+            coin: [
+              {
+                coin: "USDT",
+                walletBalance: "900",
+                availableToWithdraw: "700",
+                unrealisedPnl: "15",
+              },
+            ],
+          },
+        ],
+      };
+    }
+
+    if (path === "/v5/order/create") {
+      payloads.push(params);
+      return payloads.length === 1 ? { orderLinkId: "linked-order" } : {};
+    }
+
+    throw new Error(`Unexpected path: ${path}`);
+  };
+
+  assert.deepEqual(await exchange.getAccountInfo(), {
+    totalBalance: 900,
+    availableBalance: 700,
+    unrealizedPnl: 15,
+    currency: "USDT",
+  });
+
+  const limitOrder = await exchange.placeOrder({
+    symbol: "BTCUSDT",
+    side: OrderSide.SELL,
+    type: ExchangeOrderType.LIMIT,
+    quantity: 1.29,
+    price: 65000.74,
+  });
+
+  assert.deepEqual(limitOrder, {
+    orderId: "linked-order",
+    price: 65000.74,
+    quantity: 1.2,
+    status: "submitted",
+    raw: { orderLinkId: "linked-order" },
+  });
+  assert.deepEqual(payloads[0], {
+    category: "linear",
+    symbol: "BTCUSDT",
+    side: "Sell",
+    orderType: "Limit",
+    qty: "1.2",
+    price: "65000.5",
+    timeInForce: "GTC",
+  });
+
+  await assert.rejects(
+    () =>
+      exchange.placeOrder({
+        symbol: "BTCUSDT",
+        side: OrderSide.BUY,
+        type: ExchangeOrderType.MARKET,
+        quantity: 0.04,
+      }),
+    /Order quantity too small for BTCUSDT/,
+  );
+
+  await assert.rejects(
+    () =>
+      exchange.placeOrder({
+        symbol: "BTCUSDT",
+        side: OrderSide.BUY,
+        type: ExchangeOrderType.MARKET,
+        quantity: 1,
+      }),
+    /\[Bybit\] Order accepted but no orderId returned/,
+  );
+});
+
 test("Bybit setLeverage tolerates not-modified responses and cross margin mode", async () => {
   const exchange = createExchange() as any;
   const calls: Array<{ path: string; payload: Record<string, unknown> }> = [];
@@ -1086,4 +1317,91 @@ test("Bybit cancelAlgoOrders skips positions without TP/SL and getInstrumentSpec
     qtyDecimals: 2,
     priceDecimals: 1,
   });
+});
+
+test("Bybit edge branches cover generic formatting, wallet fallbacks, runtime order fallback pricing, and hard failures", async () => {
+  const exchange = createExchange(DEFAULT_SPECS) as any;
+
+  const genericAxios = exchange.normalizeError(
+    {
+      isAxiosError: true,
+      message: "transport failed",
+      response: { data: { retCode: 10001, retMsg: "bad request" } },
+    },
+    "GET /generic",
+  );
+  assert.match(genericAxios.message, /\[Bybit\] GET \/generic failed code=10001: bad request/);
+  assert.doesNotMatch(genericAxios.message, /status=/);
+  assert.doesNotMatch(genericAxios.message, /hint=/);
+
+  exchange.client.get = async () => ({ data: { retCode: 10001, result: null } });
+  await assert.rejects(
+    () => exchange.publicRequest("/unknown-retmsg"),
+    /Unknown Bybit error/,
+  );
+  await assert.rejects(
+    () => exchange.signedRequest("GET", "/unknown-signed-retmsg"),
+    /Unknown Bybit error/,
+  );
+
+  exchange.signedRequest = async (_method: string, path: string) => {
+    if (path === "/v5/account/wallet-balance") {
+      return {
+        list: [
+          {
+            coin: [{ coin: "BTC", walletBalance: "321" }],
+          },
+        ],
+      };
+    }
+
+    if (path === "/v5/order/create") {
+      return { orderId: "runtime-order" };
+    }
+
+    throw new Error(`Unexpected path: ${path}`);
+  };
+
+  assert.deepEqual(await exchange.getAccountInfo(), {
+    totalBalance: 321,
+    availableBalance: 321,
+    unrealizedPnl: 0,
+    currency: "USDT",
+  });
+
+  const runtimeOrder = await exchange.placeOrder({
+    symbol: "BTCUSDT",
+    side: OrderSide.BUY,
+    type: "STOP" as ExchangeOrderType,
+    quantity: 1.2,
+  });
+  assert.deepEqual(runtimeOrder, {
+    orderId: "runtime-order",
+    price: 0,
+    quantity: 1.2,
+    status: "submitted",
+    raw: { orderId: "runtime-order" },
+  });
+
+  assert.equal(
+    exchange.parseAlgoTypeFromOrder({ stopOrderType: "StopLoss" }),
+    "sl",
+  );
+
+  exchange.signedRequest = async () => {
+    throw new Error("hard failure");
+  };
+
+  await assert.rejects(
+    () => exchange.ensureAccountMarginMode("isolated"),
+    /hard failure/,
+  );
+  await assert.rejects(
+    () => exchange.ensureSymbolMarginMode("BTCUSDT", 4, "cross"),
+    /hard failure/,
+  );
+  await assert.rejects(
+    () => exchange.setLeverage("BTCUSDT", 4),
+    /hard failure/,
+  );
 });

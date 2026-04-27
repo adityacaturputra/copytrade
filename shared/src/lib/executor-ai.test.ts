@@ -195,3 +195,29 @@ test("analyzeMessagesWithAI falls back to per-message parsing and records vision
   assert.match(String(aiMocks.logExecutorWarn.mock.calls[0]?.[0]), /Vision AI failed/);
   assert.match(String(aiMocks.logExecutorWarn.mock.calls[1]?.[0]), /Bulk AI call failed/);
 });
+
+test("analyzeMessagesWithAI records Error parse messages during individual fallback", async () => {
+  aiMocks.parseBulkSignals.mockRejectedValue(new Error("bulk offline"));
+  aiMocks.buildMessageAnalysisContext.mockResolvedValueOnce("CTX_ERROR");
+  aiMocks.parseSignal.mockRejectedValueOnce(new Error("parse exploded"));
+
+  const results = await analyzeMessagesWithAI([
+    {
+      messageId: "msg-err",
+      channelId: "chan-err",
+      author: "Trader",
+      content: "bad parse",
+      imageUrls: [],
+      sourceId: "acc-err",
+      processId: "proc-err",
+    },
+  ] as never);
+
+  assert.deepEqual(results, [
+    {
+      messageId: "msg-err",
+      signal: null,
+      parseError: "parse exploded",
+    },
+  ]);
+});

@@ -1,4 +1,4 @@
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import assert from "node:assert/strict";
 import { OkxExchange } from "./OkxExchange";
 import { ExchangeOrderType, OrderSide } from "../enums";
@@ -1186,4 +1186,638 @@ test("okx cancelAlgoOrders and getOrderHistory handle request failures and empty
     errors: ["Failed to cancel algo orders: network boom"],
   });
   assert.deepEqual(await exchange.getOrderHistory(undefined, 3), []);
+});
+
+test("okx private helpers cover symbol conversion, retry heuristics, and rounding fallbacks", () => {
+  const exchange = new OkxExchange("key", "secret", "passphrase") as any;
+
+  assert.equal(exchange.toOkxSymbol("BTC-USDT-SWAP"), "BTC-USDT-SWAP");
+  assert.equal(exchange.toOkxSymbol("BTCUSD"), "BTC-USD-SWAP");
+  assert.equal(exchange.toOkxSymbol("XAU"), "XAU-USDT-SWAP");
+  assert.equal(exchange.fromOkxSymbol("ETH-USDT-SWAP"), "ETHUSDT");
+
+  assert.equal(exchange.formatPayloadForError(undefined), "");
+  assert.equal(exchange.formatPayloadForError('{"a":1}'), '{"a":1}');
+  assert.equal(exchange.formatPayloadForError({ a: "1" }), '{"a":"1"}');
+  assert.equal(exchange.buildPayloadError("plain").message, "plain");
+
+  assert.equal(exchange.isAccountConfigRetryable("51010"), true);
+  assert.equal(
+    exchange.isAccountConfigRetryable("51000", "Parameter posSide error"),
+    true,
+  );
+  assert.equal(exchange.isAccountConfigRetryable("51000", "other"), false);
+
+  assert.equal(exchange.roundToLotSize(1.2, "0", "1"), 1.2);
+  assert.equal(exchange.roundToLotSize(0.4, "1", "1"), 1);
+});
+
+test("okx validateInstrument covers direct success and no-alternative failures", async () => {
+  const exchange = new OkxExchange("key", "secret", "passphrase") as any;
+  let calls = 0;
+
+  exchange.client.get = async (path: string) => {
+    calls += 1;
+    if (calls === 1) {
+      assert.equal(
+        path,
+        "/api/v5/public/instruments?instType=SWAP&instId=BTC-USD-SWAP",
+      );
+      return {
+        data: {
+          code: "0",
+          data: [
+            {
+              instId: "BTC-USD-SWAP",
+              baseCcy: "BTC",
+              quoteCcy: "USD",
+              ctVal: "100",
+              ctValCcy: "USD",
+              ctMult: "1",
+              ctType: "linear",
+              lotSz: "1",
+              minSz: "1",
+              tickSz: "0.1",
+              state: "live",
+              instType: "SWAP",
+            },
+          ],
+        },
+      };
+    }
+    if (calls === 2) {
+      return { data: { code: "0", data: [] } };
+    }
+    return { data: { code: "0", data: [] } };
+  };
+
+  assert.deepEqual(await exchange.validateInstrument("BTCUSD"), {
+    instId: "BTC-USD-SWAP",
+    baseCcy: "BTC",
+    quoteCcy: "USD",
+    ctVal: "100",
+    ctValCcy: "USD",
+    ctMult: "1",
+    ctType: "linear",
+    lotSz: "1",
+    minSz: "1",
+    tickSz: "0.1",
+    state: "live",
+    instType: "SWAP",
+  });
+
+  await assert.rejects(
+    () => exchange.validateInstrument("SOLUSD"),
+    /Instrument "SOL-USD-SWAP" not found on OKX. No alternatives available for SOL/,
+  );
+});
+
+test("okx direct close and config helpers cover success and special-case failures", async () => {
+  const exchange = new OkxExchange("key", "secret", "passphrase") as any;
+  const leverageBodies: Array<Record<string, string>> = [];
+
+  exchange.accountConfigCache = {
+    posMode: "net_mode",
+    ts: Date.now(),
+  };
+  exchange.getOpenPositions = async () => [
+    {
+      symbol: "BTCUSDT",
+      positionId: "pos-1",
+      side: "SHORT",
+      leverage: 3,
+      marginType: "cross",
+      entryPrice: 60000,
+      quantity: 2,
+      margin: 100,
+      unrealizedPnl: 0,
+      liquidationPrice: 0,
+      markPrice: 59900,
+      raw: {},
+    },
+  ];
+
+  exchange.client.post = async (path: string, body: string) => {
+    if (path === "/api/v5/trade/close-position") {
+      return {
+        data: {
+          code: "0",
+          data: [{ sCode: "0" }],
+        },
+      };
+    }
+    if (path === "/api/v5/account/set-position-mode") {
+      return {
+        data: {
+          code: "0",
+        },
+      };
+    }
+    leverageBodies.push(JSON.parse(body));
+    return {
+      data: {
+        code: "1",
+        msg: "warn only",
+      },
+    };
+  };
+
+  await exchange.closePosition("BTCUSDT", "pos-1", 1.25);
+  await exchange.setPositionMode("BTCUSDT", "net_mode");
+  assert.equal(exchange.accountConfigCache.posMode, "net_mode");
+
+  exchange.accountConfigCache = {
+    posMode: "long_short_mode",
+    ts: Date.now(),
+  };
+  assert.equal(await exchange.setLeverage("BTCUSDT", 6, "cross", "SELL"), 6);
+  assert.deepEqual(leverageBodies, [
+    {
+      instId: "BTC-USDT-SWAP",
+      lever: "6",
+      mgnMode: "cross",
+      posSide: "short",
+    },
+  ]);
+
+  delete exchange.getOpenPositions;
+  exchange.client.get = async () => ({ data: { code: "2", msg: "positions denied" } });
+  await assert.rejects(
+    () => exchange.getOpenPositions(),
+    /Failed to get OKX positions: positions denied/,
+  );
+
+  exchange.client.post = async () => {
+    throw {
+      isAxiosError: true,
+      response: { status: 404 },
+    };
+  };
+  await assert.rejects(
+    () => exchange.setAccountMode("2"),
+    /set-account-mode not available \(simulated trading or already configured\)/,
+  );
+});
+
+test("okx constructor interceptors attach proxy agents and log business and http errors", async () => {
+  vi.resetModules();
+  const proxyAgent = { name: "proxy-agent" };
+  const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+  try {
+    vi.doMock("../proxy/ProxyFactory", () => ({
+      getProxyAgent: vi
+        .fn()
+        .mockResolvedValueOnce(proxyAgent)
+        .mockRejectedValueOnce(new Error("proxy down")),
+    }));
+
+    const { OkxExchange: MockedOkxExchange } = await import("./OkxExchange");
+    const exchange = new MockedOkxExchange("key", "secret", "passphrase") as any;
+
+    const requestInterceptor = exchange.client.interceptors.request.handlers[0];
+    const responseInterceptor = exchange.client.interceptors.response.handlers[0];
+
+    const config = await requestInterceptor.fulfilled({ headers: {} });
+    assert.equal(config.httpsAgent, proxyAgent);
+    assert.equal(config.httpAgent, proxyAgent);
+
+    const untouchedConfig = await requestInterceptor.fulfilled({ headers: {} });
+    assert.equal(untouchedConfig.httpsAgent, undefined);
+    assert.equal(untouchedConfig.httpAgent, undefined);
+    assert.equal(
+      warnSpy.mock.calls.some((call) => String(call[0]).includes("Proxy agent not available")),
+      true,
+    );
+
+    const businessResponse = {
+      status: 400,
+      data: { code: "1", msg: "bad request" },
+      config: { method: "post", url: "/api/v5/trade/order", data: '{"x":1}' },
+    };
+    assert.equal(await responseInterceptor.fulfilled(businessResponse), businessResponse);
+
+    const passThroughResponse = {
+      status: 200,
+      data: { code: "0" },
+      config: { method: "get", url: "/api/v5/account/balance" },
+    };
+    assert.equal(await responseInterceptor.fulfilled(passThroughResponse), passThroughResponse);
+
+    const httpError = {
+      isAxiosError: true,
+      response: { status: 429, data: { code: "50011" } },
+      config: { method: "post", url: "/api/v5/trade/order", data: '{"y":2}' },
+    };
+    await assert.rejects(() => responseInterceptor.rejected(httpError), (error: unknown) => {
+      assert.equal(error, httpError);
+      return true;
+    });
+
+    await assert.rejects(() => responseInterceptor.rejected(new Error("plain error")));
+
+    assert.equal(errorSpy.mock.calls.length >= 2, true);
+  } finally {
+    warnSpy.mockRestore();
+    errorSpy.mockRestore();
+    vi.doUnmock("../proxy/ProxyFactory");
+    vi.resetModules();
+  }
+});
+
+test("okx setAccountMode rethrows business and generic failures", async () => {
+  const exchange = new OkxExchange("key", "secret", "passphrase") as any;
+
+  exchange.client.post = async () => ({ data: { code: "51000", msg: "mode denied" } });
+  await assert.rejects(
+    () => exchange.setAccountMode("3"),
+    /Failed to set OKX account mode: mode denied \(code: 51000\)/,
+  );
+
+  exchange.client.post = async () => {
+    throw new Error("socket hang up");
+  };
+  await assert.rejects(() => exchange.setAccountMode("2"), /socket hang up/);
+});
+
+test("okx getOpenPositions covers short posSide and non-negative net positions", async () => {
+  const exchange = new OkxExchange("key", "secret", "passphrase") as any;
+
+  exchange.client.get = async () => ({
+    data: {
+      code: "0",
+      data: [
+        {
+          instId: "SOL-USDT-SWAP",
+          pos: "1.5",
+          posSide: "net",
+          lever: "2",
+          margin: "30",
+          avgPx: "120",
+          upl: "3",
+          liqPx: "80",
+          markPx: "122",
+          mgnMode: "isolated",
+          posId: "net-long",
+        },
+        {
+          instId: "XRP-USDT-SWAP",
+          pos: "4",
+          posSide: "short",
+          lever: "5",
+          margin: "20",
+          avgPx: "0.5",
+          upl: "-1",
+          liqPx: "1",
+          markPx: "0.55",
+          mgnMode: "cross",
+          posId: "short-1",
+        },
+      ],
+    },
+  });
+
+  const positions = await exchange.getOpenPositions();
+
+  assert.equal(positions[0].side, "LONG");
+  assert.equal(positions[1].side, "SHORT");
+});
+
+test("okx setLeverage covers net-mode requests and warning-only request failures", async () => {
+  const exchange = new OkxExchange("key", "secret", "passphrase") as any;
+  const bodies: Array<Record<string, string>> = [];
+  const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+  try {
+    exchange.accountConfigCache = {
+      posMode: "net_mode",
+      ts: Date.now(),
+    };
+    exchange.client.post = async (_path: string, body: string) => {
+      bodies.push(JSON.parse(body));
+      throw new Error("leverage offline");
+    };
+
+    assert.equal(await exchange.setLeverage("BTCUSDT", 4, "isolated"), 4);
+    assert.deepEqual(bodies, [
+      {
+        instId: "BTC-USDT-SWAP",
+        lever: "4",
+        mgnMode: "isolated",
+      },
+    ]);
+    assert.equal(
+      warnSpy.mock.calls.some((call) => String(call[0]).includes("Error setting leverage")),
+      true,
+    );
+  } finally {
+    warnSpy.mockRestore();
+  }
+});
+
+test("okx setLeverage can target only the long side in hedge mode", async () => {
+  const exchange = new OkxExchange("key", "secret", "passphrase") as any;
+  const bodies: Array<Record<string, string>> = [];
+
+  exchange.accountConfigCache = {
+    posMode: "long_short_mode",
+    ts: Date.now(),
+  };
+  exchange.client.post = async (_path: string, body: string) => {
+    bodies.push(JSON.parse(body));
+    return { data: { code: "0" } };
+  };
+
+  assert.equal(await exchange.setLeverage("BTCUSDT", 9, "isolated", "BUY"), 9);
+  assert.deepEqual(bodies, [
+    {
+      instId: "BTC-USDT-SWAP",
+      lever: "9",
+      mgnMode: "isolated",
+      posSide: "long",
+    },
+  ]);
+});
+
+test("okx placeOrder surfaces validation, zero-quantity, rejection, generic failure, and retry failures", async () => {
+  const exchange = new OkxExchange("key", "secret", "passphrase") as any;
+  exchange.accountConfigCache = {
+    posMode: "long_short_mode",
+    ts: Date.now(),
+  };
+  exchange.setLeverage = async () => {};
+  exchange.ensureAccountConfigured = async () => {};
+  exchange.getTickerPrice = async () => 65000;
+
+  exchange.validateInstrument = async () => {
+    throw new Error("instrument missing");
+  };
+  await assert.rejects(
+    () =>
+      exchange.placeOrder({
+        symbol: "DOGEUSDT",
+        side: OrderSide.BUY,
+        type: ExchangeOrderType.MARKET,
+        quantity: 1,
+    }),
+    /instrument missing/,
+  );
+
+  exchange.validateInstrument = async () => {
+    throw "plain validation failure";
+  };
+  await assert.rejects(
+    () =>
+      exchange.placeOrder({
+        symbol: "DOGEUSDT",
+        side: OrderSide.BUY,
+        type: ExchangeOrderType.MARKET,
+        quantity: 1,
+      }),
+    /plain validation failure/,
+  );
+
+  exchange.validateInstrument = async () => ({
+    instId: "BTC-USDT-SWAP",
+    ctVal: "1",
+    lotSz: "1",
+    minSz: "0",
+  });
+  await assert.rejects(
+    () =>
+      exchange.placeOrder({
+        symbol: "BTCUSDT",
+        side: OrderSide.BUY,
+        type: ExchangeOrderType.MARKET,
+        quantity: 0.4,
+      }),
+    /Order quantity too small/,
+  );
+
+  exchange.validateInstrument = async () => ({
+    instId: "BTC-USDT-SWAP",
+    ctVal: "1",
+    lotSz: "1",
+    minSz: "1",
+  });
+  exchange.client.post = async () => ({
+    data: {
+      code: "0",
+      data: [{ sCode: "51008", sMsg: "insufficient margin" }],
+    },
+  });
+  await assert.rejects(
+    () =>
+      exchange.placeOrder({
+        symbol: "BTCUSDT",
+        side: OrderSide.SELL,
+        type: ExchangeOrderType.MARKET,
+        quantity: 1,
+      }),
+    /OKX order rejected: \[51008\] insufficient margin/,
+  );
+
+  exchange.client.post = async () => ({
+    data: {
+      code: "1",
+      msg: "top-level fail",
+      data: [],
+    },
+  });
+  await assert.rejects(
+    () =>
+      exchange.placeOrder({
+        symbol: "BTCUSDT",
+        side: OrderSide.SELL,
+        type: ExchangeOrderType.MARKET,
+        quantity: 1,
+      }),
+    /Failed to place OKX order: \[1\] top-level fail/,
+  );
+
+  let retryCalls = 0;
+  exchange.client.post = async () => {
+    retryCalls += 1;
+    if (retryCalls === 1) {
+      throw {
+        isAxiosError: true,
+        message: "Request failed with status code 400",
+        response: {
+          status: 400,
+          data: {
+            code: "51010",
+            msg: "retry via top-level code",
+            data: [],
+          },
+        },
+      };
+    }
+    return {
+      data: {
+        code: "1",
+        msg: "still bad",
+        data: [{ sCode: "51100", sMsg: "still bad" }],
+      },
+    };
+  };
+  await assert.rejects(
+    () =>
+      exchange.placeOrder({
+        symbol: "BTCUSDT",
+        side: OrderSide.BUY,
+        type: ExchangeOrderType.MARKET,
+        quantity: 1,
+      }),
+    /OKX order retry request failed: OKX order failed after auto-fix: \[51100\] still bad/,
+  );
+
+  retryCalls = 0;
+  exchange.client.post = async () => {
+    retryCalls += 1;
+    if (retryCalls === 1) {
+      return {
+        data: {
+          code: "1",
+          msg: "needs auto-fix",
+          data: [{ sCode: "51010", sMsg: "needs auto-fix" }],
+        },
+      };
+    }
+    throw {
+      isAxiosError: true,
+      response: {
+        status: 429,
+        data: { code: "50011", msg: "rate limited" },
+      },
+    };
+  };
+  await assert.rejects(
+    () =>
+      exchange.placeOrder({
+        symbol: "BTCUSDT",
+        side: OrderSide.BUY,
+        type: ExchangeOrderType.MARKET,
+        quantity: 1,
+      }),
+    /OKX order retry request failed: \[object Object\]/,
+  );
+});
+
+test("okx closePosition request failures still fall back with short hedge sides", async () => {
+  const exchange = new OkxExchange("key", "secret", "passphrase") as any;
+  const calls: Array<{ path: string; payload: Record<string, string> }> = [];
+
+  exchange.accountConfigCache = {
+    posMode: "long_short_mode",
+    ts: Date.now(),
+  };
+  exchange.getOpenPositions = async () => [
+    {
+      symbol: "BTCUSDT",
+      positionId: "short-pos",
+      side: "SHORT",
+      leverage: 4,
+      marginType: "cross",
+      entryPrice: 60000,
+      quantity: 1.2,
+      margin: 50,
+      unrealizedPnl: 0,
+      liquidationPrice: 65000,
+      markPrice: 59000,
+      raw: {},
+    },
+  ];
+  exchange.client.post = async (path: string, body: string) => {
+    calls.push({ path, payload: JSON.parse(body) });
+    if (path === "/api/v5/trade/close-position") {
+      throw new Error("close endpoint offline");
+    }
+    return {
+      data: {
+        code: "0",
+        data: [{ sCode: "0" }],
+      },
+    };
+  };
+
+  await exchange.closePosition("BTCUSDT", "short-pos", 0.5);
+
+  assert.deepEqual(calls, [
+    {
+      path: "/api/v5/trade/close-position",
+      payload: {
+        instId: "BTC-USDT-SWAP",
+        mgnMode: "cross",
+        type: "market",
+        sz: "0.5",
+        side: "buy",
+        tdMode: "cross",
+        posSide: "short",
+      },
+    },
+    {
+      path: "/api/v5/trade/order",
+      payload: {
+        instId: "BTC-USDT-SWAP",
+        tdMode: "cross",
+        side: "buy",
+        ordType: "market",
+        sz: "0.5",
+        reduceOnly: "true",
+        posSide: "short",
+      },
+    },
+  ]);
+});
+
+test("okx stop loss and take profit cover both hedge-side mappings", async () => {
+  const exchange = new OkxExchange("key", "secret", "passphrase") as any;
+  const payloads: Array<Record<string, string>> = [];
+
+  exchange.accountConfigCache = {
+    posMode: "long_short_mode",
+    ts: Date.now(),
+  };
+  exchange.client.post = async (_path: string, body: string) => {
+    payloads.push(JSON.parse(body));
+    return {
+      data: {
+        code: "0",
+        data: [{ algoId: `hedge-${payloads.length}` }],
+      },
+    };
+  };
+
+  assert.equal(
+    await exchange.placeStopLoss("BTCUSDT", 61000, 0, OrderSide.BUY, 1),
+    "hedge-1",
+  );
+  assert.equal(
+    await exchange.placeTakeProfit("BTCUSDT", 69000, 0, OrderSide.SELL, 2),
+    "hedge-2",
+  );
+
+  assert.deepEqual(payloads, [
+    {
+      instId: "BTC-USDT-SWAP",
+      tdMode: "isolated",
+      side: "buy",
+      ordType: "conditional",
+      sz: "1",
+      slTriggerPx: "61000",
+      slOrdPx: "61000",
+      posSide: "short",
+    },
+    {
+      instId: "BTC-USDT-SWAP",
+      tdMode: "isolated",
+      side: "sell",
+      ordType: "conditional",
+      sz: "2",
+      tpTriggerPx: "69000",
+      tpOrdPx: "69000",
+      posSide: "long",
+    },
+  ]);
 });

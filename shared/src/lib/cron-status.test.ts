@@ -80,3 +80,12 @@ test("cron-status no-ops for unknown jobs on progress or finish", () => {
   finishCron("missing", "success");
   assert.equal(getCronStatus("missing").steps.length, 0);
 });
+
+test("cron-status can start a brand-new job without prior reads", () => {
+  assert.equal(tryStart("fresh-job"), true);
+
+  const status = getCronStatus("fresh-job");
+  assert.equal(status.running, true);
+  assert.equal(status.steps.length, 1);
+  assert.equal(status.steps[0]?.message, "Job started");
+});

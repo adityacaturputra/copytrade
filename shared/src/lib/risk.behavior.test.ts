@@ -125,6 +125,49 @@ test("setRiskConfig persists provided fields and normalizes missing optional val
   });
 });
 
+test("setRiskConfig persists all remaining override fields", async () => {
+  riskMocks.riskFindOneAndUpdate.mockReturnValue({
+    lean: vi.fn().mockResolvedValue({
+      riskPerTradePercent: 1,
+      maxLeverage: 40,
+      minLeverage: 3,
+      skipNoSL: false,
+      defaultRR: 2.5,
+      defaultPositionSize: 125,
+      defaultLeverage: 7,
+      maxPositions: 9,
+    }),
+  });
+
+  const config = await setRiskConfig({
+    minLeverage: 3,
+    skipNoSL: false,
+    defaultRR: 2.5,
+    defaultPositionSize: 125,
+    defaultLeverage: 7,
+    maxPositions: 9,
+  });
+
+  assert.deepEqual(riskMocks.riskFindOneAndUpdate.mock.calls.at(-1), [
+    {},
+    {
+      minLeverage: 3,
+      skipNoSL: false,
+      defaultRR: 2.5,
+      defaultPositionSize: 125,
+      defaultLeverage: 7,
+      maxPositions: 9,
+    },
+    { upsert: true, new: true },
+  ]);
+  assert.equal(config.minLeverage, 3);
+  assert.equal(config.skipNoSL, false);
+  assert.equal(config.defaultRR, 2.5);
+  assert.equal(config.defaultPositionSize, 125);
+  assert.equal(config.defaultLeverage, 7);
+  assert.equal(config.maxPositions, 9);
+});
+
 test("resolveEffectiveRiskConfig merges global, account, and channel overrides", async () => {
   riskMocks.riskFindOne.mockReturnValue({
     sort: vi.fn().mockReturnValue({
@@ -197,6 +240,71 @@ test("resolveEffectiveRiskConfig returns global config when no accountId is prov
   assert.equal(merged.riskPerTradePercent, 1.5);
   assert.equal(merged.sources.riskPerTradePercent, "global");
   assert.equal(riskMocks.accountFindById.mock.calls.length, 0);
+});
+
+test("resolveEffectiveRiskConfig handles map-based channel configs and empty channel ids", async () => {
+  riskMocks.riskFindOne.mockReturnValue({
+    sort: vi.fn().mockReturnValue({
+      lean: vi.fn().mockResolvedValue({
+        riskPerTradePercent: 1,
+        maxLeverage: 20,
+        minLeverage: 1,
+        skipNoSL: true,
+        defaultRR: 3,
+        defaultPositionSize: 50,
+        defaultLeverage: 10,
+        maxPositions: 5,
+      }),
+    }),
+  });
+
+  riskMocks.accountFindById.mockReturnValue({
+    select: vi.fn().mockReturnValue({
+      lean: vi.fn().mockReturnValue({
+        exec: vi.fn().mockResolvedValue({
+          riskOverrides: {
+            riskPerTradePercent: Number.NaN,
+            skipNoSL: false,
+          },
+          channelConfigs: new Map([
+            [
+              "room-1",
+              {
+                riskOverrides: {
+                  defaultLeverage: 12,
+                  maxPositions: 1,
+                  skipNoSL: true,
+                },
+              },
+            ],
+          ]),
+        }),
+      }),
+    }),
+  });
+
+  const withMap = await resolveEffectiveRiskConfig({
+    accountId: "acc-map",
+    channelId: "room-1",
+  });
+  assert.equal(withMap.skipNoSL, true);
+  assert.equal(withMap.defaultLeverage, 12);
+  assert.equal(withMap.maxPositions, 1);
+  assert.equal(withMap.sources.skipNoSL, "source_chat");
+
+  const emptyChannel = await resolveEffectiveRiskConfig({
+    accountId: "acc-map",
+    channelId: "   ",
+  });
+  assert.equal(emptyChannel.skipNoSL, false);
+  assert.equal(emptyChannel.defaultLeverage, 10);
+  assert.equal(emptyChannel.sources.skipNoSL, "account");
+
+  const missingChannel = await resolveEffectiveRiskConfig({
+    accountId: "acc-map",
+  });
+  assert.equal(missingChannel.skipNoSL, false);
+  assert.equal(missingChannel.defaultLeverage, 10);
 });
 
 test("calculateRiskBasedPosition handles invalid balances and missing stop losses", async () => {
