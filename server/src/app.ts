@@ -13,6 +13,7 @@ import cronRoutes from "./routes/cron";
 import agentRoutes from "./routes/agent";
 import draftsRoutes from "./routes/drafts";
 import logsRoutes from "./routes/logs";
+import { startAppCronScheduler } from "./lib/cron/scheduler";
 
 export function loadServerEnvironment(): void {
   const serverDir = path.resolve(__dirname, "..");
@@ -110,6 +111,11 @@ export function startServer(app: Express = createApp()) {
         "[Config] CRON_SECRET contains leading/trailing spaces. It has been trimmed for comparison.",
       );
     }
+
+    startAppCronScheduler({
+      baseUrl: `http://127.0.0.1:${port}`,
+      authorizationHeader: cronSecret ? `Bearer ${cronSecret}` : undefined,
+    });
 
     console.log(`
 ╔════════════════════════════════════════════════════════════╗

@@ -10,6 +10,10 @@ import {
   type ExchangeProviderConfig,
 } from "@copytrade/shared/lib/exchange/provider-config";
 import {
+  CRON_PROVIDER_OPTIONS,
+  type CronProvider,
+} from "@copytrade/shared/lib/cron-settings";
+import {
   buildExchangeDataPayload,
   buildExchangeDataPreview,
   buildExchangeFormValues,
@@ -235,6 +239,8 @@ export default function SettingsPage() {
   const [signalSuccess, setSignalSuccess] = useState(false);
 
   // ─── Cron state ───────────────────────────────────────────
+  const [cronProvider, setCronProvider] =
+    useState<CronProvider>("cron-job.org");
   const [cronBaseUrl, setCronBaseUrl] = useState("");
   const [cronJobs, setCronJobs] = useState<
     Array<{
@@ -287,7 +293,11 @@ export default function SettingsPage() {
       title: string;
       enabled: boolean;
       url: string;
-      status: "active" | "missing";
+      status: "active" | "missing" | "disabled";
+      running?: boolean;
+      result?: "success" | "error" | null;
+      progress?: string;
+      lastExecution?: string;
     }>
   >([]);
 
@@ -408,7 +418,10 @@ export default function SettingsPage() {
       const res = await fetch("/api/cron-settings");
       const json = await res.json();
       if (json.success) {
-        if (json.settings?.baseUrl) setCronBaseUrl(json.settings.baseUrl);
+        if (json.settings?.provider) setCronProvider(json.settings.provider);
+        if ("baseUrl" in (json.settings || {})) {
+          setCronBaseUrl(json.settings.baseUrl || "");
+        }
         if (json.settings?.jobs?.length > 0) setCronJobs(json.settings.jobs);
         if (json.liveStatus) setCronLiveStatus(json.liveStatus);
       }
@@ -828,7 +841,10 @@ export default function SettingsPage() {
   };
 
   const handleCronSave = async () => {
-    if (!cronBaseUrl || !cronBaseUrl.startsWith("http")) {
+    if (
+      cronProvider === "cron-job.org" &&
+      (!cronBaseUrl || !cronBaseUrl.startsWith("http"))
+    ) {
       setCronError(
         "Base URL is required. Click '☁️ Sync from Cloud' first to auto-detect your deployment URL, or enter it manually.",
       );
@@ -841,11 +857,20 @@ export default function SettingsPage() {
       const res = await fetch("/api/cron-settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ baseUrl: cronBaseUrl, jobs: cronJobs }),
+        body: JSON.stringify({
+          provider: cronProvider,
+          baseUrl: cronBaseUrl,
+          jobs: cronJobs,
+        }),
       });
       const json = await res.json();
       if (json.success) {
         setCronSuccess(true);
+        setCronError(
+          Array.isArray(json.errors) && json.errors.length > 0
+            ? json.errors.join("; ")
+            : null,
+        );
         if (json.settings?.jobs) setCronJobs(json.settings.jobs);
         await fetchCronSettings();
         setTimeout(() => setCronSuccess(false), 3000);
@@ -860,6 +885,10 @@ export default function SettingsPage() {
   };
 
   const handleCronPull = async () => {
+    if (cronProvider !== "cron-job.org") {
+      setCronError("Cloud sync is only available for the cron-job.org provider.");
+      return;
+    }
     setCronPulling(true);
     setCronError(null);
     setCronSuccess(false);
@@ -867,7 +896,9 @@ export default function SettingsPage() {
       const res = await fetch("/api/cron-settings", { method: "PUT" });
       const json = await res.json();
       if (json.success) {
-        if (json.settings?.baseUrl) setCronBaseUrl(json.settings.baseUrl);
+        if ("baseUrl" in (json.settings || {})) {
+          setCronBaseUrl(json.settings.baseUrl || "");
+        }
         if (json.settings?.jobs) setCronJobs(json.settings.jobs);
         if (json.liveStatus) setCronLiveStatus(json.liveStatus);
         setCronSuccess(true);
@@ -1996,30 +2027,67 @@ export default function SettingsPage() {
                 ⏰ Cron Jobs (Scheduled Tasks)
               </h2>
 
-              {/* Base URL */}
-              <div className="mb-4">
-                <label className="block text-xs text-slate-400 mb-1">
-                  Deployment Base URL
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    type="url"
-                    value={cronBaseUrl}
-                    onChange={(e) => setCronBaseUrl(e.target.value)}
-                    placeholder="https://your-app.vercel.app"
-                    className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none"
-                  />
-                  <button
-                    onClick={handleCronPull}
-                    disabled={cronPulling}
-                    className="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 px-3 py-2 rounded-lg text-sm transition whitespace-nowrap"
-                  >
-                    {cronPulling ? "..." : "☁️ Sync from Cloud"}
-                  </button>
+              <div className="mb-4 space-y-3">
+                <div>
+                  <label className="block text-xs text-slate-400 mb-2">
+                    Cron Provider
+                  </label>
+                  <div className="grid gap-2 md:grid-cols-2">
+                    {CRON_PROVIDER_OPTIONS.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => setCronProvider(option.value)}
+                        className={`rounded-lg border px-3 py-3 text-left transition ${
+                          cronProvider === option.value
+                            ? "border-primary-500 bg-primary-500/10"
+                            : "border-slate-700 bg-slate-800/50 hover:border-slate-600"
+                        }`}
+                      >
+                        <div className="text-sm font-medium text-white">
+                          {option.label}
+                        </div>
+                        <div className="mt-1 text-xs text-slate-400">
+                          {option.description}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
                 </div>
+
+                {cronProvider === "cron-job.org" ? (
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">
+                      Deployment Base URL
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="url"
+                        value={cronBaseUrl}
+                        onChange={(e) => setCronBaseUrl(e.target.value)}
+                        placeholder="https://your-app.vercel.app"
+                        className="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none"
+                      />
+                      <button
+                        onClick={handleCronPull}
+                        disabled={cronPulling}
+                        className="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 px-3 py-2 rounded-lg text-sm transition whitespace-nowrap"
+                      >
+                        {cronPulling ? "..." : "☁️ Sync from Cloud"}
+                      </button>
+                    </div>
+                    <p className="mt-2 text-xs text-slate-500">
+                      Use this when cron-job.org should call your deployed app.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-slate-700 bg-slate-800/50 px-3 py-3 text-xs text-slate-400">
+                    The backend app will run these schedules itself on your VPS.
+                    No third-party cron service is required.
+                  </div>
+                )}
               </div>
 
-              {/* Jobs */}
               <div className="space-y-3">
                 {cronJobs.map((job, idx) => {
                   const recommended =
@@ -2051,13 +2119,30 @@ export default function SettingsPage() {
                             {job.title}
                           </span>
                           {liveJob && (
-                            <span
-                              className={`text-xs px-1.5 py-0.5 rounded ${liveJob.status === "active" ? "bg-emerald-700/50 text-emerald-300" : "bg-red-700/50 text-red-300"}`}
-                            >
-                              {liveJob.status === "active"
-                                ? "LIVE"
-                                : "NOT FOUND"}
-                            </span>
+                            <>
+                              <span
+                                className={`text-xs px-1.5 py-0.5 rounded ${
+                                  liveJob.status === "active"
+                                    ? "bg-emerald-700/50 text-emerald-300"
+                                    : liveJob.status === "disabled"
+                                      ? "bg-slate-700 text-slate-300"
+                                      : "bg-red-700/50 text-red-300"
+                                }`}
+                              >
+                                {liveJob.status === "active"
+                                  ? cronProvider === "app"
+                                    ? "APP"
+                                    : "LIVE"
+                                  : liveJob.status === "disabled"
+                                    ? "DISABLED"
+                                    : "NOT FOUND"}
+                              </span>
+                              {liveJob.running && (
+                                <span className="text-xs px-1.5 py-0.5 rounded bg-amber-700/50 text-amber-300">
+                                  RUNNING
+                                </span>
+                              )}
+                            </>
                           )}
                         </div>
                         <div className="flex items-center gap-2">
@@ -2086,6 +2171,11 @@ export default function SettingsPage() {
                           </span>
                         </div>
                       </div>
+                      {liveJob?.progress && (
+                        <p className="mt-2 text-xs text-slate-500">
+                          {liveJob.progress}
+                        </p>
+                      )}
                     </div>
                   );
                 })}
@@ -2096,7 +2186,10 @@ export default function SettingsPage() {
               )}
               {cronSuccess && (
                 <p className="text-emerald-400 text-xs mt-2">
-                  ✅ Cron jobs synced
+                  ✅{" "}
+                  {cronProvider === "cron-job.org"
+                    ? "Cron jobs synced"
+                    : "Cron provider saved"}
                 </p>
               )}
               <button
@@ -2104,7 +2197,11 @@ export default function SettingsPage() {
                 disabled={cronSaving}
                 className="mt-3 bg-primary-600 hover:bg-primary-700 disabled:opacity-50 px-4 py-2 rounded-lg text-sm font-medium transition"
               >
-                {cronSaving ? "Syncing..." : "🔄 Sync Cron Jobs to Cloud"}
+                {cronSaving
+                  ? "Saving..."
+                  : cronProvider === "cron-job.org"
+                    ? "🔄 Sync Cron Jobs to Cloud"
+                    : "💾 Save App Cron Provider"}
               </button>
             </div>
 

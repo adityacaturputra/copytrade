@@ -1,106 +1,19 @@
-import { connectDB } from "@copytrade/shared/lib/database";
-import mongoose, { Schema, Document, models, Model } from "mongoose";
+import {
+  CRON_PROVIDER_OPTIONS,
+  DEFAULT_CRON_JOBS,
+  KNOWN_CRON_JOB_TYPES,
+  getCronSettings,
+  setCronSettings,
+  type CronJobConfig,
+  type CronSettingsType,
+} from "@copytrade/shared/lib/cron-settings";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-export interface CronJobConfig {
-  id: string; // cron-job.org job ID
-  type: string; // "signal-check" | "position-monitor" | "tp-sl-monitor"
-  enabled: boolean;
-  title: string;
-  url: string;
-  schedule: {
-    minutes: number;
-    hours: number[];
-    mdays: number[];
-    months: number[];
-    wdays: number[];
-  };
-}
-
-export interface CronSettingsType {
-  baseUrl: string;
-  jobs: CronJobConfig[];
-}
-
-interface ICronSettings extends Document {
-  baseUrl: string;
-  jobs: CronJobConfig[];
-  updatedAt: Date;
-}
-
-// ─── Schema ───────────────────────────────────────────────────────────────────
-
-const CronSettingsSchema = new Schema<ICronSettings>(
-  {
-    baseUrl: { type: String, default: "" },
-    jobs: [
-      {
-        id: { type: String, default: "" },
-        type: { type: String, required: true },
-        enabled: { type: Boolean, default: true },
-        title: { type: String, required: true },
-        url: { type: String, default: "" },
-        schedule: {
-          minutes: { type: Number, default: 5 },
-          hours: { type: [Number], default: [] },
-          mdays: { type: [Number], default: [] },
-          months: { type: [Number], default: [] },
-          wdays: { type: [Number], default: [] },
-        },
-      },
-    ],
-  },
-  { timestamps: true },
-);
-
-export const CronSettings: Model<ICronSettings> =
-  models.CronSettings ||
-  mongoose.model<ICronSettings>("CronSettings", CronSettingsSchema);
-
-// ─── Default job templates ────────────────────────────────────────────────────
-
-export const DEFAULT_CRON_JOBS: Omit<CronJobConfig, "id">[] = [
-  {
-    type: "signal-check",
-    enabled: true,
-    title: "CopyTrade — Signal Check",
-    url: "/api/cron/signal-check",
-    schedule: {
-      minutes: 5,
-      hours: [],
-      mdays: [],
-      months: [],
-      wdays: [],
-    },
-  },
-  {
-    type: "position-monitor",
-    enabled: true,
-    title: "CopyTrade — Position Monitor",
-    url: "/api/cron/position-monitor",
-    schedule: {
-      minutes: 30,
-      hours: [],
-      mdays: [],
-      months: [],
-      wdays: [],
-    },
-  },
-  {
-    type: "tp-sl-monitor",
-    enabled: true,
-    title: "CopyTrade — TP/SL Monitor",
-    url: "/api/cron/tp-sl-monitor",
-    schedule: {
-      minutes: 5,
-      hours: [],
-      mdays: [],
-      months: [],
-      wdays: [],
-    },
-  },
-];
+export {
+  CRON_PROVIDER_OPTIONS,
+  DEFAULT_CRON_JOBS,
+  getCronSettings,
+  setCronSettings,
+};
 
 // ─── Recommended schedule labels ──────────────────────────────────────────────
 
@@ -122,42 +35,6 @@ export const RECOMMENDED_SCHEDULES: Record<
     description: "Place TP/SL for filled limit orders. Recommended: 5 min.",
   },
 };
-
-// ─── DB Helpers ───────────────────────────────────────────────────────────────
-
-export async function getCronSettings(): Promise<CronSettingsType> {
-  try {
-    await connectDB();
-    const doc = await CronSettings.findOne().sort({ updatedAt: -1 }).lean();
-    if (doc) {
-      return {
-        baseUrl: doc.baseUrl || "",
-        jobs: doc.jobs || [],
-      };
-    }
-  } catch (err) {
-    console.warn(
-      "Failed to fetch cron settings from DB:",
-      err instanceof Error ? err.message : String(err),
-    );
-  }
-  return { baseUrl: "", jobs: [] };
-}
-
-export async function setCronSettings(
-  settings: Partial<CronSettingsType>,
-): Promise<CronSettingsType> {
-  await connectDB();
-  const doc = await CronSettings.findOneAndUpdate(
-    {},
-    { $set: settings },
-    { upsert: true, new: true },
-  ).lean();
-  return {
-    baseUrl: doc.baseUrl || "",
-    jobs: doc.jobs || [],
-  };
-}
 
 // ─── cron-job.org API ────────────────────────────────────────────────────────
 
@@ -261,6 +138,39 @@ async function deleteJob(jobId: number): Promise<void> {
   }
 }
 
+function buildExistingCloudJobPayload(cloudJob: any, enabled: boolean) {
+  const rawSchedule = cloudJob?.schedule || {};
+
+  return {
+    job: {
+      enabled,
+      title: cloudJob?.title || "CopyTrade Cron Job",
+      url: cloudJob?.url || "",
+      requestMethod:
+        typeof cloudJob?.requestMethod === "number" ? cloudJob.requestMethod : 0,
+      schedule: {
+        minutes: Array.isArray(rawSchedule.minutes)
+          ? rawSchedule.minutes
+          : [-1],
+        hours: Array.isArray(rawSchedule.hours) ? rawSchedule.hours : [-1],
+        mdays: Array.isArray(rawSchedule.mdays) ? rawSchedule.mdays : [-1],
+        months: Array.isArray(rawSchedule.months) ? rawSchedule.months : [-1],
+        wdays: Array.isArray(rawSchedule.wdays) ? rawSchedule.wdays : [-1],
+      },
+      extendedData:
+        typeof cloudJob?.extendedData === "boolean"
+          ? cloudJob.extendedData
+          : true,
+      overlap:
+        typeof cloudJob?.overlap === "boolean" ? cloudJob.overlap : false,
+      timezone:
+        typeof cloudJob?.timezone === "string" && cloudJob.timezone
+          ? cloudJob.timezone
+          : "Asia/Jakarta",
+    },
+  };
+}
+
 // Build the cron-job.org job payload from our config
 function buildJobPayload(config: CronJobConfig): any {
   return {
@@ -343,6 +253,48 @@ export async function syncCronJobs(settings: CronSettingsType): Promise<{
   return { synced, errors };
 }
 
+export async function disableManagedCloudCronJobs(): Promise<{
+  disabled: number;
+  errors: string[];
+}> {
+  const errors: string[] = [];
+  let disabled = 0;
+
+  let existingJobs: any[] = [];
+  try {
+    existingJobs = await listJobs();
+  } catch (error) {
+    errors.push(
+      `Failed to list cron-job.org jobs: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return { disabled, errors };
+  }
+
+  for (const type of KNOWN_CRON_JOB_TYPES) {
+    const cloudJob = existingJobs.find((job) => {
+      const url = typeof job?.url === "string" ? job.url : "";
+      return url.includes(`/api/cron/${type}`);
+    });
+
+    if (!cloudJob) continue;
+
+    try {
+      const jobId = Number(cloudJob.jobId || cloudJob.id);
+      if (!Number.isFinite(jobId)) {
+        throw new Error(`Invalid job ID for ${type}`);
+      }
+      await updateJob(jobId, buildExistingCloudJobPayload(cloudJob, false));
+      disabled++;
+    } catch (error) {
+      errors.push(
+        `Disable ${type}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  return { disabled, errors };
+}
+
 // ─── Pull: fetch current jobs from cron-job.org ─────────────────────────────
 
 export async function pullCronJobStatus(): Promise<{
@@ -379,9 +331,7 @@ export async function pullCronJobStatus(): Promise<{
   }
 
   // Check each expected cron type
-  const knownTypes = ["signal-check", "position-monitor", "tp-sl-monitor"];
-
-  for (const type of knownTypes) {
+  for (const type of KNOWN_CRON_JOB_TYPES) {
     const match = existingJobs.find((j: any) => {
       const url = j.url || "";
       return url.includes(`/api/cron/${type}`);
@@ -453,9 +403,7 @@ export async function pullCloudJobConfigs(): Promise<{
   }
 
   // Also check all known types — create entries even for missing jobs
-  const knownTypes = ["signal-check", "position-monitor", "tp-sl-monitor"];
-
-  for (const type of knownTypes) {
+  for (const type of KNOWN_CRON_JOB_TYPES) {
     const match = existingJobs.find((j: any) => {
       const url = j.url || "";
       return url.includes(`/api/cron/${type}`);
@@ -529,7 +477,9 @@ export async function pullCloudJobConfigs(): Promise<{
   // Also include any extra cloud jobs not in known types (for visibility)
   for (const cloudJob of existingJobs) {
     const url: string = cloudJob.url || "";
-    const isKnown = knownTypes.some((t) => url.includes(`/api/cron/${t}`));
+    const isKnown = KNOWN_CRON_JOB_TYPES.some((t) =>
+      url.includes(`/api/cron/${t}`),
+    );
     if (!isKnown) {
       const rawSchedule = cloudJob.schedule || {};
       const minutesArr = rawSchedule.minutes || [-1];

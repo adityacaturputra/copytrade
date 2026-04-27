@@ -15,6 +15,10 @@ vi.mock("./routes/cron", () => {
 vi.mock("./routes/agent", () => ({ default: express.Router() }));
 vi.mock("./routes/drafts", () => ({ default: express.Router() }));
 vi.mock("./routes/logs", () => ({ default: express.Router() }));
+const schedulerMocks = vi.hoisted(() => ({
+  startAppCronScheduler: vi.fn(),
+}));
+vi.mock("./lib/cron/scheduler", () => schedulerMocks);
 
 import { createApp, loadServerEnvironment, startServer } from "./app";
 
@@ -23,6 +27,8 @@ beforeEach(() => {
   delete process.env.CRON_SECRET;
   delete process.env.PORT;
   delete process.env.FRONTEND_URL;
+  delete process.env.NODE_ENV;
+  schedulerMocks.startAppCronScheduler.mockReset();
 });
 
 test("loadServerEnvironment loads each existing env candidate", () => {
@@ -37,6 +43,18 @@ test("loadServerEnvironment loads each existing env candidate", () => {
 
   assert.equal(existsSpy.mock.calls.length, 2);
   assert.equal(dotenvSpy.mock.calls.length, 2);
+});
+
+test("loadServerEnvironment skips missing env files", () => {
+  const existsSpy = vi.spyOn(fs, "existsSync").mockReturnValue(false);
+  const dotenvSpy = vi
+    .spyOn(dotenv, "config")
+    .mockImplementation(() => ({ parsed: {} }));
+
+  loadServerEnvironment();
+
+  assert.equal(existsSpy.mock.calls.length, 2);
+  assert.equal(dotenvSpy.mock.calls.length, 0);
 });
 
 test("createApp serves health checks, 404s, and the error handler", async () => {
@@ -63,6 +81,30 @@ test("createApp serves health checks, 404s, and the error handler", async () => 
   assert.equal(boom.body.error, "Internal server error");
   assert.equal(boom.body.message, "boom");
   assert.equal(errorSpy.mock.calls.length > 0, true);
+
+  delete process.env.NODE_ENV;
+  const boomProd = await request(app).get("/api/cron/boom").set("authorization", "Bearer x");
+  assert.equal(boomProd.status, 500);
+  assert.equal("message" in boomProd.body, false);
+});
+
+test("createApp also works with an explicit FRONTEND_URL override", async () => {
+  process.env.FRONTEND_URL = "https://frontend.example.com";
+  const app = createApp();
+
+  const health = await request(app).get("/health");
+
+  assert.equal(health.status, 200);
+  assert.equal(health.body.status, "ok");
+});
+
+test("createApp falls back when FRONTEND_URL is blank", async () => {
+  process.env.FRONTEND_URL = "";
+  const app = createApp();
+
+  const health = await request(app).get("/health");
+
+  assert.equal(health.status, 200);
 });
 
 test("startServer listens and logs trimmed cron-secret warnings", () => {
@@ -81,7 +123,37 @@ test("startServer listens and logs trimmed cron-secret warnings", () => {
   const server = startServer(app);
 
   assert.equal(listenSpy.mock.calls[0][0], "4321");
+  assert.deepEqual(schedulerMocks.startAppCronScheduler.mock.calls[0], [
+    {
+      baseUrl: "http://127.0.0.1:4321",
+      authorizationHeader: "Bearer secret",
+    },
+  ]);
   assert.equal(warnSpy.mock.calls.length, 1);
   assert.equal(logSpy.mock.calls.length, 1);
+  assert.ok(server);
+});
+
+test("startServer defaults port, disables cron auth banner, and omits auth header for scheduler", () => {
+  const listenSpy = vi.fn((port: number, callback: () => void) => {
+    callback();
+    return { close: vi.fn() };
+  });
+  const app = { listen: listenSpy } as unknown as express.Express;
+  const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+  const server = startServer(app);
+
+  assert.equal(listenSpy.mock.calls[0][0], 3001);
+  assert.deepEqual(schedulerMocks.startAppCronScheduler.mock.calls[0], [
+    {
+      baseUrl: "http://127.0.0.1:3001",
+      authorizationHeader: undefined,
+    },
+  ]);
+  assert.equal(warnSpy.mock.calls.length, 0);
+  assert.equal(logSpy.mock.calls.length, 1);
+  assert.ok(String(logSpy.mock.calls[0]?.[0]).includes("disabled (CRON_SECRET not set)"));
   assert.ok(server);
 });
