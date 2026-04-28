@@ -259,7 +259,7 @@ function isMongoReady() {
 }
 
 async function loadDatabaseModule(): Promise<typeof import("./database")> {
-  return import("./database" as string) as Promise<typeof import("./database")>;
+  return require("./database") as typeof import("./database");
 }
 
 function normalizeMongoRecord(record: Record<string, unknown>): TradeLogRecord {
