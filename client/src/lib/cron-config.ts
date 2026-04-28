@@ -50,10 +50,86 @@ function getAuthHeaders() {
 }
 
 interface CronJobOrgResponse {
-  ok: boolean;
   error?: string;
+  jobId?: number | string;
+  id?: number | string;
   job?: any;
   jobs?: any[];
+}
+
+function normalizeCronSchedulePart(values: unknown): number[] {
+  return Array.isArray(values) && values.length > 0 ? values : [-1];
+}
+
+function buildMinuteValues(intervalMinutes: number): number[] {
+  if (!Number.isFinite(intervalMinutes) || intervalMinutes <= 1) {
+    return [-1];
+  }
+
+  const step = Math.max(1, Math.floor(intervalMinutes));
+  if (step >= 60) {
+    return [0];
+  }
+
+  const values: number[] = [];
+  for (let minute = 0; minute < 60; minute += step) {
+    values.push(minute);
+  }
+
+  return values.length > 0 ? values : [0];
+}
+
+function parseCloudMinuteInterval(values: unknown): number {
+  if (!Array.isArray(values) || values.length === 0) {
+    return 1;
+  }
+
+  const numericValues = values
+    .filter((value): value is number => typeof value === "number")
+    .sort((a, b) => a - b);
+
+  if (numericValues.length === 0) {
+    return 1;
+  }
+
+  if (numericValues.length === 1) {
+    return numericValues[0] === -1 ? 1 : Math.max(1, numericValues[0]);
+  }
+
+  const [first, second] = numericValues;
+  if (first === 0 && second > 0) {
+    return second;
+  }
+
+  return Math.max(1, first);
+}
+
+async function readCronApiBody(res: Response): Promise<unknown> {
+  const text = await res.text();
+  if (!text) return null;
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+async function readCronApiError(res: Response, fallback: string): Promise<string> {
+  const payload = await readCronApiBody(res);
+
+  if (payload && typeof payload === "object" && "error" in payload) {
+    const message = (payload as { error?: unknown }).error;
+    if (typeof message === "string" && message.trim()) {
+      return message;
+    }
+  }
+
+  if (typeof payload === "string" && payload.trim()) {
+    return payload;
+  }
+
+  return fallback;
 }
 
 async function listJobs(): Promise<any[]> {
@@ -111,9 +187,16 @@ async function createJob(payload: any): Promise<any> {
     headers: getAuthHeaders(),
     body: JSON.stringify(payload),
   });
-  const json: CronJobOrgResponse = await res.json();
-  if (!json.ok) throw new Error(json.error || "Failed to create job");
-  return json.job;
+  if (!res.ok) {
+    throw new Error(await readCronApiError(res, "Failed to create job"));
+  }
+
+  const json = (await readCronApiBody(res)) as CronJobOrgResponse | null;
+  if (!json || (json.jobId === undefined && json.id === undefined && !json.job)) {
+    return {};
+  }
+
+  return json.job || json;
 }
 
 async function updateJob(jobId: number, payload: any): Promise<any> {
@@ -122,9 +205,12 @@ async function updateJob(jobId: number, payload: any): Promise<any> {
     headers: getAuthHeaders(),
     body: JSON.stringify(payload),
   });
-  const json: CronJobOrgResponse = await res.json();
-  if (!json.ok) throw new Error(json.error || "Failed to update job");
-  return json.job;
+  if (!res.ok) {
+    throw new Error(await readCronApiError(res, "Failed to update job"));
+  }
+
+  const json = await readCronApiBody(res);
+  return json && typeof json === "object" ? json : {};
 }
 
 async function deleteJob(jobId: number): Promise<void> {
@@ -139,34 +225,9 @@ async function deleteJob(jobId: number): Promise<void> {
 }
 
 function buildExistingCloudJobPayload(cloudJob: any, enabled: boolean) {
-  const rawSchedule = cloudJob?.schedule || {};
-
   return {
     job: {
       enabled,
-      title: cloudJob?.title || "CopyTrade Cron Job",
-      url: cloudJob?.url || "",
-      requestMethod:
-        typeof cloudJob?.requestMethod === "number" ? cloudJob.requestMethod : 0,
-      schedule: {
-        minutes: Array.isArray(rawSchedule.minutes)
-          ? rawSchedule.minutes
-          : [-1],
-        hours: Array.isArray(rawSchedule.hours) ? rawSchedule.hours : [-1],
-        mdays: Array.isArray(rawSchedule.mdays) ? rawSchedule.mdays : [-1],
-        months: Array.isArray(rawSchedule.months) ? rawSchedule.months : [-1],
-        wdays: Array.isArray(rawSchedule.wdays) ? rawSchedule.wdays : [-1],
-      },
-      extendedData:
-        typeof cloudJob?.extendedData === "boolean"
-          ? cloudJob.extendedData
-          : true,
-      overlap:
-        typeof cloudJob?.overlap === "boolean" ? cloudJob.overlap : false,
-      timezone:
-        typeof cloudJob?.timezone === "string" && cloudJob.timezone
-          ? cloudJob.timezone
-          : "Asia/Jakarta",
     },
   };
 }
@@ -180,19 +241,13 @@ function buildJobPayload(config: CronJobConfig): any {
       url: config.url,
       requestMethod: 0, // 0 = GET
       schedule: {
-        // cron-job.org uses special values: -1 means "every"
-        minutes: [config.schedule.minutes], // specific minute interval
-        hours: config.schedule.hours.length > 0 ? config.schedule.hours : [-1],
-        mdays: config.schedule.mdays.length > 0 ? config.schedule.mdays : [-1],
-        months:
-          config.schedule.months.length > 0 ? config.schedule.months : [-1],
-        wdays: config.schedule.wdays.length > 0 ? config.schedule.wdays : [-1],
+        minutes: buildMinuteValues(config.schedule.minutes),
+        hours: normalizeCronSchedulePart(config.schedule.hours),
+        mdays: normalizeCronSchedulePart(config.schedule.mdays),
+        months: normalizeCronSchedulePart(config.schedule.months),
+        wdays: normalizeCronSchedulePart(config.schedule.wdays),
+        timezone: "Asia/Jakarta",
       },
-      extendedData: true,
-      // Run even if previous is still running
-      overlap: false,
-      // Timezone
-      timezone: "Asia/Jakarta",
     },
   };
 }
@@ -413,10 +468,6 @@ export async function pullCloudJobConfigs(): Promise<{
       try {
         // Parse schedule back from cron-job.org format
         const rawSchedule = match.schedule || {};
-        const minutesArr = rawSchedule.minutes || [-1];
-        const minutesVal = Array.isArray(minutesArr)
-          ? minutesArr[0]
-          : minutesArr;
 
         // Extract relative URL from full URL
         const fullUrl: string = match.url || "";
@@ -437,7 +488,7 @@ export async function pullCloudJobConfigs(): Promise<{
             type,
           url: relUrl,
           schedule: {
-            minutes: minutesVal === -1 ? 1 : minutesVal,
+            minutes: parseCloudMinuteInterval(rawSchedule.minutes),
             hours:
               Array.isArray(rawSchedule.hours) && rawSchedule.hours[0] !== -1
                 ? rawSchedule.hours
@@ -482,8 +533,6 @@ export async function pullCloudJobConfigs(): Promise<{
     );
     if (!isKnown) {
       const rawSchedule = cloudJob.schedule || {};
-      const minutesArr = rawSchedule.minutes || [-1];
-      const minutesVal = Array.isArray(minutesArr) ? minutesArr[0] : minutesArr;
 
       jobs.push({
         id: String(cloudJob.jobId || cloudJob.id || ""),
@@ -492,7 +541,7 @@ export async function pullCloudJobConfigs(): Promise<{
         title: cloudJob.title || "Unknown Cloud Job",
         url,
         schedule: {
-          minutes: minutesVal === -1 ? 1 : minutesVal,
+          minutes: parseCloudMinuteInterval(rawSchedule.minutes),
           hours:
             Array.isArray(rawSchedule.hours) && rawSchedule.hours[0] !== -1
               ? rawSchedule.hours
