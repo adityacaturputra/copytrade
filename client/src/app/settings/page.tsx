@@ -337,6 +337,25 @@ export default function SettingsPage() {
     password: "",
   });
 
+  // ─── Log cleanup state ───────────────────────────────────
+  const [logCleanupDays, setLogCleanupDays] = useState("3");
+  const [logCleanupLoading, setLogCleanupLoading] = useState<
+    null | "noisy-json" | "retention"
+  >(null);
+  const [logCleanupResult, setLogCleanupResult] = useState<{
+    success: boolean;
+    message: string;
+    data?: {
+      mode: "noisy-json" | "retention";
+      keepDays?: number;
+      scannedCount: number;
+      deletedCount: number;
+      remainingCount: number;
+      deletedFileCount: number;
+      deletedMongoCount: number;
+    };
+  } | null>(null);
+
   // ─── Reset state ──────────────────────────────────────────
   const [resetLoading, setResetLoading] = useState(false);
   const [resetResult, setResetResult] = useState<{
@@ -965,6 +984,59 @@ export default function SettingsPage() {
       setResetLoading(false);
       setResetShowConfirm(false);
       setResetConfirmText("");
+    }
+  };
+
+  const runLogCleanup = async (mode: "noisy-json" | "retention") => {
+    if (mode === "retention") {
+      const parsedDays = Number.parseInt(logCleanupDays, 10);
+      if (!Number.isFinite(parsedDays) || parsedDays < 1) {
+        setLogCleanupResult({
+          success: false,
+          message: "Keep days must be a number greater than or equal to 1.",
+        });
+        return;
+      }
+    }
+
+    setLogCleanupLoading(mode);
+    setLogCleanupResult(null);
+    try {
+      const payload: Record<string, unknown> = { mode };
+      if (mode === "retention") {
+        payload.keepDays = Number.parseInt(logCleanupDays, 10);
+      }
+
+      const res = await fetch("/api/logs/cleanup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const json = await res.json();
+
+      if (json.success) {
+        const resultData = json.data || null;
+        setLogCleanupResult({
+          success: true,
+          message:
+            mode === "noisy-json"
+              ? `Deleted ${resultData?.deletedCount || 0} noisy log(s).`
+              : `Deleted ${resultData?.deletedCount || 0} log(s) and kept the last ${resultData?.keepDays || payload.keepDays} day(s).`,
+          data: resultData || undefined,
+        });
+      } else {
+        setLogCleanupResult({
+          success: false,
+          message: json.error || "Failed to clean up logs.",
+        });
+      }
+    } catch (err) {
+      setLogCleanupResult({
+        success: false,
+        message: err instanceof Error ? err.message : "Network error",
+      });
+    } finally {
+      setLogCleanupLoading(null);
     }
   };
 
@@ -2360,6 +2432,84 @@ export default function SettingsPage() {
                     {proxySaving ? "Saving..." : "💾 Save Proxy Config"}
                   </button>
                 </>
+              )}
+            </div>
+
+            <div className="card border-amber-700/40">
+              <h2 className="text-lg font-semibold mb-2 text-amber-300">
+                🧹 Log Cleanup
+              </h2>
+              <p className="text-xs text-slate-400 mb-4">
+                Clean up noisy JSON-like logs without touching recent useful
+                entries, or delete old logs while keeping only the last N days.
+              </p>
+
+              <div className="space-y-4">
+                <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-3">
+                  <p className="text-sm text-white mb-2">
+                    Delete noisy JSON logs
+                  </p>
+                  <p className="text-xs text-slate-400 mb-3">
+                    Removes cron start/end noise and logs whose details, result,
+                    or error are large JSON payloads.
+                  </p>
+                  <button
+                    onClick={() => runLogCleanup("noisy-json")}
+                    disabled={logCleanupLoading !== null}
+                    className="bg-amber-600 hover:bg-amber-700 disabled:opacity-50 px-4 py-2 rounded-lg text-sm font-medium transition"
+                  >
+                    {logCleanupLoading === "noisy-json"
+                      ? "Cleaning..."
+                      : "🧹 Delete Noisy Logs"}
+                  </button>
+                </div>
+
+                <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-3">
+                  <p className="text-sm text-white mb-2">
+                    Delete old logs and keep the last N days
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2 mb-3">
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={logCleanupDays}
+                      onChange={(e) => setLogCleanupDays(e.target.value)}
+                      className="w-24 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
+                    />
+                    <span className="text-xs text-slate-400">day(s)</span>
+                  </div>
+                  <button
+                    onClick={() => runLogCleanup("retention")}
+                    disabled={logCleanupLoading !== null}
+                    className="bg-red-600 hover:bg-red-700 disabled:opacity-50 px-4 py-2 rounded-lg text-sm font-medium transition"
+                  >
+                    {logCleanupLoading === "retention"
+                      ? "Cleaning..."
+                      : "🗑️ Delete Old Logs"}
+                  </button>
+                </div>
+              </div>
+
+              {logCleanupResult && (
+                <div
+                  className={`mt-4 rounded-lg p-3 text-sm ${
+                    logCleanupResult.success
+                      ? "bg-emerald-900/30 text-emerald-300"
+                      : "bg-red-900/30 text-red-300"
+                  }`}
+                >
+                  <p>{logCleanupResult.message}</p>
+                  {logCleanupResult.data && (
+                    <p className="mt-2 text-xs">
+                      Scanned: {logCleanupResult.data.scannedCount} | Deleted:{" "}
+                      {logCleanupResult.data.deletedCount} | Remaining:{" "}
+                      {logCleanupResult.data.remainingCount} | File:{" "}
+                      {logCleanupResult.data.deletedFileCount} | Mongo:{" "}
+                      {logCleanupResult.data.deletedMongoCount}
+                    </p>
+                  )}
+                </div>
               )}
             </div>
 

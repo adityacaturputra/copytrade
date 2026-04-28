@@ -1,4 +1,4 @@
-import { mkdir, appendFile, readFile, stat } from "fs/promises";
+import { mkdir, appendFile, readFile, stat, writeFile, rm } from "fs/promises";
 import path from "path";
 import { randomUUID } from "crypto";
 import mongoose from "mongoose";
@@ -45,6 +45,21 @@ export interface TradeLogListResult {
   totalPages: number;
 }
 
+export interface TradeLogCleanupOptions {
+  mode: "noisy-json" | "retention";
+  keepDays?: number;
+}
+
+export interface TradeLogCleanupResult {
+  mode: "noisy-json" | "retention";
+  keepDays?: number;
+  scannedCount: number;
+  deletedCount: number;
+  remainingCount: number;
+  deletedFileCount: number;
+  deletedMongoCount: number;
+}
+
 type LogStorageMode = "file" | "mongo" | "dual";
 
 function isBackendRuntime() {
@@ -68,10 +83,7 @@ async function fetchRemoteLogs<T>(
   pathname: string,
   init?: RequestInit,
 ): Promise<T> {
-  const baseUrl = resolveRemoteBackendBaseUrl();
-  if (!baseUrl) {
-    throw new Error("BACKEND_URL is not configured for remote log access");
-  }
+  const baseUrl = resolveRemoteBackendBaseUrl() as string;
 
   const response = await fetch(`${baseUrl}${pathname}`, {
     ...init,
@@ -361,6 +373,37 @@ function shouldHideCronNoise(log: TradeLogRecord) {
   return log.type === "cron" && /(_start|_end)$/.test(log.action);
 }
 
+function looksLikeStructuredJson(value: string | null | undefined) {
+  if (typeof value !== "string") return false;
+
+  const trimmed = value.trim();
+  if (
+    !trimmed ||
+    !(
+      (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+      (trimmed.startsWith("[") && trimmed.endsWith("]"))
+    )
+  ) {
+    return false;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    return typeof parsed === "object" && parsed !== null;
+  } catch {
+    return false;
+  }
+}
+
+export function isNoisyTradeLog(log: TradeLogRecord) {
+  return (
+    shouldHideCronNoise(log) ||
+    looksLikeStructuredJson(log.details) ||
+    looksLikeStructuredJson(log.result) ||
+    looksLikeStructuredJson(log.error)
+  );
+}
+
 function applyLogFilters(
   logs: TradeLogRecord[],
   options: TradeLogListOptions = {},
@@ -398,6 +441,60 @@ async function readProcessFileLogs(processId: string) {
   const filePath = getProcessLogFilePath(processId);
   if (!(await fileExists(filePath))) return [];
   return readJsonLinesFile(filePath);
+}
+
+async function rewriteAllFileLogs(records: TradeLogRecord[]) {
+  await ensureLogDirs();
+
+  const allLogsContent = records.map((record) => JSON.stringify(record)).join("\n");
+  await writeFile(
+    getAllLogsFilePath(),
+    allLogsContent ? `${allLogsContent}\n` : "",
+    "utf8",
+  );
+
+  const processesDir = path.join(getLogBaseDir(), "processes");
+  await rm(processesDir, { recursive: true, force: true });
+  await mkdir(processesDir, { recursive: true });
+
+  const processLogs = new Map<string, string[]>();
+  for (const record of records) {
+    if (!record.processId) continue;
+    const serialized = JSON.stringify(record);
+    const existing = processLogs.get(record.processId) || [];
+    existing.push(serialized);
+    processLogs.set(record.processId, existing);
+  }
+
+  for (const [processId, serializedLogs] of processLogs.entries()) {
+    await writeFile(
+      getProcessLogFilePath(processId),
+      `${serializedLogs.join("\n")}\n`,
+      "utf8",
+    );
+  }
+}
+
+async function readAllMongoLogsWithIds(): Promise<
+  Array<{ rawId: unknown; record: TradeLogRecord }>
+> {
+  if (!shouldReadMongoLegacy() || !isMongoReady()) return [];
+
+  const { TradeLog } = await loadDatabaseModule();
+  try {
+    const logs = await TradeLog.find().sort({ createdAt: 1 }).lean().exec();
+    return logs.map((item: unknown) => ({
+      rawId: (item as Record<string, unknown>)._id,
+      record: normalizeMongoRecord(item as Record<string, unknown>),
+    }));
+  } catch (error) {
+    console.warn(
+      `[TradeLogStore] Failed to read Mongo logs: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return [];
+  }
 }
 
 export async function createTradeLog(
@@ -577,4 +674,79 @@ export async function getRecentTradeLogs(limit: number = 50) {
     order: "desc",
   });
   return result.logs;
+}
+
+export async function cleanupTradeLogs(
+  options: TradeLogCleanupOptions,
+): Promise<TradeLogCleanupResult> {
+  if (options.mode === "retention") {
+    const keepDays = Math.floor(options.keepDays || 0);
+    if (!Number.isFinite(keepDays) || keepDays < 1) {
+      throw new Error("keepDays must be >= 1 for retention cleanup");
+    }
+  }
+
+  const now = Date.now();
+  const retentionCutoff =
+    options.mode === "retention"
+      ? now - Math.floor((options.keepDays as number) * 24 * 60 * 60 * 1000)
+      : null;
+
+  const shouldKeepLog = (log: TradeLogRecord) => {
+    if (options.mode === "noisy-json") {
+      return !isNoisyTradeLog(log);
+    }
+
+    return new Date(log.createdAt).getTime() >= (retentionCutoff as number);
+  };
+
+  const fileLogs = await readGlobalFileLogs();
+  const mongoLogsWithIds =
+    shouldWriteMongo() || shouldReadMongoLegacy()
+      ? await readAllMongoLogsWithIds()
+      : [];
+  const allLogs = dedupeLogs([
+    ...fileLogs,
+    ...mongoLogsWithIds.map(({ record }) => record),
+  ]);
+  const scannedCount = allLogs.length;
+
+  const retainedFileLogs = fileLogs.filter(shouldKeepLog);
+  const deletedFileCount = shouldWriteFile()
+    ? fileLogs.length - retainedFileLogs.length
+    : 0;
+
+  if (shouldWriteFile()) {
+    await rewriteAllFileLogs(retainedFileLogs);
+  }
+
+  let deletedMongoCount = 0;
+  if (shouldWriteMongo() || shouldReadMongoLegacy()) {
+    if (isMongoReady()) {
+      const { TradeLog } = await loadDatabaseModule();
+      const mongoIdsToDelete = mongoLogsWithIds
+        .filter(({ record }) => !shouldKeepLog(record))
+        .map(({ rawId }) => rawId);
+
+      deletedMongoCount = mongoIdsToDelete.length;
+      if (mongoIdsToDelete.length > 0) {
+        await TradeLog.deleteMany({ _id: { $in: mongoIdsToDelete } });
+      }
+    } else if (shouldWriteMongo()) {
+      throw new Error("MongoDB connection is not ready");
+    }
+  }
+
+  const deletedCount = deletedFileCount + deletedMongoCount;
+  const remainingCount = Math.max(0, scannedCount - deletedCount);
+
+  return {
+    mode: options.mode,
+    keepDays: options.mode === "retention" ? Math.floor(options.keepDays as number) : undefined,
+    scannedCount,
+    deletedCount,
+    remainingCount,
+    deletedFileCount,
+    deletedMongoCount,
+  };
 }

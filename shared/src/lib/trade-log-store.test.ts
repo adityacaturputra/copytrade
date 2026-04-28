@@ -7,10 +7,13 @@ const storeMocks = vi.hoisted(() => {
   const appendFile = vi.fn();
   const readFile = vi.fn();
   const stat = vi.fn();
+  const writeFile = vi.fn();
+  const rm = vi.fn();
   const randomUUID = vi.fn(() => "12345678-1234-5678-1234-567812345678");
   const mongooseConnection = { readyState: 0 };
   const tradeLogCreate = vi.fn();
   const tradeLogFind = vi.fn();
+  const tradeLogDeleteMany = vi.fn();
   const fetchMock = vi.fn();
 
   return {
@@ -18,10 +21,13 @@ const storeMocks = vi.hoisted(() => {
     appendFile,
     readFile,
     stat,
+    writeFile,
+    rm,
     randomUUID,
     mongooseConnection,
     tradeLogCreate,
     tradeLogFind,
+    tradeLogDeleteMany,
     fetchMock,
   };
 });
@@ -31,6 +37,8 @@ vi.mock("fs/promises", () => ({
   appendFile: storeMocks.appendFile,
   readFile: storeMocks.readFile,
   stat: storeMocks.stat,
+  writeFile: storeMocks.writeFile,
+  rm: storeMocks.rm,
 }));
 
 vi.mock("crypto", async () => {
@@ -51,13 +59,16 @@ vi.mock("./database", () => ({
   TradeLog: {
     create: storeMocks.tradeLogCreate,
     find: storeMocks.tradeLogFind,
+    deleteMany: storeMocks.tradeLogDeleteMany,
   },
 }));
 
 import {
+  cleanupTradeLogs,
   countTradeLogs,
   createTradeLog,
   getProcessTradeLogs,
+  isNoisyTradeLog,
   getRecentTradeLogs,
   listTradeLogs,
 } from "./trade-log-store";
@@ -74,7 +85,7 @@ function setEnv(entries: Record<string, string | undefined>) {
   }
 }
 
-function createMongoQuery(results: unknown[] | Error) {
+function createMongoQuery(results: unknown[] | Error | string) {
   const sort = vi.fn();
   const limit = vi.fn();
   const lean = vi.fn();
@@ -90,7 +101,7 @@ function createMongoQuery(results: unknown[] | Error) {
   limit.mockReturnValue(query);
   lean.mockReturnValue(query);
 
-  if (results instanceof Error) {
+  if (results instanceof Error || typeof results === "string") {
     exec.mockRejectedValue(results);
   } else {
     exec.mockResolvedValue(results);
@@ -114,9 +125,12 @@ beforeEach(() => {
   storeMocks.appendFile.mockReset();
   storeMocks.readFile.mockReset();
   storeMocks.stat.mockReset();
+  storeMocks.writeFile.mockReset();
+  storeMocks.rm.mockReset();
   storeMocks.randomUUID.mockClear();
   storeMocks.tradeLogCreate.mockReset();
   storeMocks.tradeLogFind.mockReset();
+  storeMocks.tradeLogDeleteMany.mockReset();
   storeMocks.fetchMock.mockReset();
   storeMocks.mongooseConnection.readyState = 0;
 
@@ -206,6 +220,49 @@ test("createTradeLog writes to mongo mode when the connection is ready", async (
   });
 });
 
+test("createTradeLog stores null processId in mongo when the input processId is empty", async () => {
+  setEnv({
+    PROCESS_LOG_STORAGE: "mongo",
+  });
+  storeMocks.mongooseConnection.readyState = 1;
+  storeMocks.tradeLogCreate.mockResolvedValue({ _id: "mongo-record-null-process" });
+
+  await createTradeLog({
+    accountId: "acc-2",
+    processId: "",
+    type: "executor",
+    action: "BUY",
+  });
+
+  assert.equal(storeMocks.tradeLogCreate.mock.calls.at(-1)?.[0]?.processId, null);
+});
+
+test("createTradeLog normalizes Date and invalid createdAt inputs", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-01-08T12:00:00.000Z"));
+  setEnv({
+    PROCESS_LOG_STORAGE: "file",
+    PROCESS_LOG_DIR: "/tmp/copytrade-created-at",
+  });
+
+  const dated = await createTradeLog({
+    processId: "proc-date",
+    type: "executor",
+    action: "BUY",
+    createdAt: new Date("2026-01-07T00:00:00.000Z"),
+  });
+  const invalid = await createTradeLog({
+    processId: "proc-invalid-date",
+    type: "executor",
+    action: "SELL",
+    createdAt: "not-a-date",
+  });
+
+  assert.equal(dated.createdAt, "2026-01-07T00:00:00.000Z");
+  assert.equal(invalid.createdAt, "2026-01-08T12:00:00.000Z");
+  vi.useRealTimers();
+});
+
 test("createTradeLog warns in dual mode when mongo is unavailable but file writes succeed", async () => {
   setEnv({
     PROCESS_LOG_STORAGE: "dual",
@@ -289,6 +346,42 @@ test("createTradeLog warns when file writes fail but mongo writes succeed in dua
   assert.equal(record.processId, "proc-dual-warn");
   assert.equal(storeMocks.tradeLogCreate.mock.calls.length, 1);
   assert.match(String(warnSpy.mock.calls[0][0]), /File log write failed: readonly fs/);
+});
+
+test("createTradeLog stringifies non-Error file write failures", async () => {
+  setEnv({
+    PROCESS_LOG_STORAGE: "file",
+    PROCESS_LOG_DIR: "/tmp/copytrade-file-string-fail",
+  });
+  storeMocks.appendFile.mockRejectedValueOnce("disk exploded");
+
+  await assert.rejects(
+    () =>
+      createTradeLog({
+        processId: "file-string-fail",
+        type: "executor",
+        action: "BUY",
+      }),
+    /disk exploded/,
+  );
+});
+
+test("createTradeLog throws mongo create errors when mongo-only writes fail after connection is ready", async () => {
+  setEnv({
+    PROCESS_LOG_STORAGE: "mongo",
+  });
+  storeMocks.mongooseConnection.readyState = 1;
+  storeMocks.tradeLogCreate.mockRejectedValueOnce(new Error("mongo create failed"));
+
+  await assert.rejects(
+    () =>
+      createTradeLog({
+        processId: "mongo-create-fail",
+        type: "executor",
+        action: "SELL",
+      }),
+    /mongo create failed/,
+  );
 });
 
 test("getProcessTradeLogs merges file and mongo logs, normalizes mongo records, dedupes, and sorts", async () => {
@@ -399,6 +492,87 @@ test("getProcessTradeLogs warns and falls back to files when mongo process reads
     String(warnSpy.mock.calls[0]?.[0]),
     /Failed to read Mongo process logs for proc-fallback: mongo process read failed/,
   );
+});
+
+test("getProcessTradeLogs stringifies non-Error mongo process read failures and supports descending mongo sort", async () => {
+  setEnv({
+    PROCESS_LOG_STORAGE: "file",
+    PROCESS_LOG_INCLUDE_MONGO_LEGACY: "true",
+    PROCESS_LOG_DIR: "/tmp/copytrade-read-non-error",
+  });
+  storeMocks.mongooseConnection.readyState = 1;
+  storeMocks.stat.mockResolvedValue({});
+  storeMocks.readFile.mockResolvedValue(
+    JSON.stringify({
+      _id: "file-proc-desc",
+      accountId: "acc-1",
+      processId: "proc-non-error",
+      type: "executor",
+      action: "BUY",
+      createdAt: "2026-01-02T00:00:00.000Z",
+    }),
+  );
+  const sortQuery = createMongoQuery([
+    {
+      _id: "mongo-latest",
+      accountId: "acc-1",
+      processId: "proc-sort-desc",
+      type: "executor",
+      action: "SELL",
+      createdAt: "2026-01-03T00:00:00.000Z",
+    },
+  ]);
+  storeMocks.tradeLogFind.mockReturnValueOnce(sortQuery);
+
+  const sortedLogs = await getProcessTradeLogs({
+    processId: "proc-sort-desc",
+    order: "desc",
+  });
+
+  assert.deepEqual(sortedLogs.map((log) => log._id), [
+    "mongo-latest",
+    "file-proc-desc",
+  ]);
+  assert.deepEqual(sortQuery.sort.mock.calls[0][0], { createdAt: -1 });
+
+  storeMocks.tradeLogFind.mockReturnValueOnce(createMongoQuery("mongo process string failure"));
+  const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+  const fallbackLogs = await getProcessTradeLogs({
+    processId: "proc-non-error",
+  });
+
+  assert.deepEqual(fallbackLogs.map((log) => log._id), ["file-proc-desc"]);
+  assert.match(
+    String(warnSpy.mock.calls[0]?.[0]),
+    /Failed to read Mongo process logs for proc-non-error: mongo process string failure/,
+  );
+});
+
+test("getProcessTradeLogs skips legacy mongo reads when mongo is not ready", async () => {
+  setEnv({
+    PROCESS_LOG_STORAGE: "file",
+    PROCESS_LOG_INCLUDE_MONGO_LEGACY: "true",
+    PROCESS_LOG_DIR: "/tmp/copytrade-read-not-ready",
+  });
+  storeMocks.stat.mockResolvedValue({});
+  storeMocks.readFile.mockResolvedValue(
+    JSON.stringify({
+      _id: "file-no-mongo-ready",
+      accountId: "acc-1",
+      processId: "proc-no-mongo-ready",
+      type: "executor",
+      action: "BUY",
+      createdAt: "2026-01-02T00:00:00.000Z",
+    }),
+  );
+
+  const logs = await getProcessTradeLogs({
+    processId: "proc-no-mongo-ready",
+  });
+
+  assert.deepEqual(logs.map((log) => log._id), ["file-no-mongo-ready"]);
+  assert.equal(storeMocks.tradeLogFind.mock.calls.length, 0);
 });
 
 test("listTradeLogs filters file logs, hides cron noise, and paginates descending results", async () => {
@@ -526,6 +700,38 @@ test("listTradeLogs warns and falls back to file logs when reading all mongo log
   );
 });
 
+test("listTradeLogs stringifies non-Error mongo list read failures", async () => {
+  setEnv({
+    PROCESS_LOG_STORAGE: "file",
+    PROCESS_LOG_INCLUDE_MONGO_LEGACY: "true",
+    PROCESS_LOG_DIR: "/tmp/copytrade-list-mongo-string",
+  });
+  storeMocks.mongooseConnection.readyState = 1;
+  storeMocks.readFile.mockResolvedValue(
+    JSON.stringify({
+      _id: "file-global-string",
+      accountId: "acc-1",
+      processId: "proc-1",
+      type: "executor",
+      action: "SELL",
+      createdAt: "2026-01-04T00:00:00.000Z",
+    }),
+  );
+  storeMocks.tradeLogFind.mockReturnValue(createMongoQuery("mongo list string failure"));
+  const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+  const result = await listTradeLogs({
+    hideCronNoise: false,
+  });
+
+  assert.equal(result.totalCount, 1);
+  assert.deepEqual(result.logs.map((log) => log._id), ["file-global-string"]);
+  assert.match(
+    String(warnSpy.mock.calls[0]?.[0]),
+    /Failed to read Mongo logs: mongo list string failure/,
+  );
+});
+
 test("listTradeLogs normalizes mongo ids and createdAt variants on successful global reads", async () => {
   setEnv({
     PROCESS_LOG_STORAGE: "mongo",
@@ -540,14 +746,19 @@ test("listTradeLogs normalizes mongo ids and createdAt variants on successful gl
         processId: 2,
         type: "executor",
         action: "BUY",
+        error: "already-string",
         createdAt: new Date("2026-01-05T00:00:00.000Z"),
       },
       {
         _id: null,
         accountId: null,
         processId: null,
-        type: "cron",
-        action: "tick",
+        type: undefined,
+        action: undefined,
+        symbol: 42,
+        details: { nested: true },
+        result: false,
+        error: 500,
       },
     ]),
   );
@@ -560,8 +771,41 @@ test("listTradeLogs normalizes mongo ids and createdAt variants on successful gl
   assert.equal(result.totalCount, 2);
   assert.equal(result.logs[0]?._id, "mongo-date");
   assert.equal(result.logs[0]?.createdAt, "2026-01-05T00:00:00.000Z");
+  assert.equal(result.logs[0]?.error, "already-string");
   assert.match(String(result.logs[1]?._id), /^mongo_12345678123456781234567812345678$/);
+  assert.equal(result.logs[1]?.type, "");
+  assert.equal(result.logs[1]?.action, "");
+  assert.equal(result.logs[1]?.symbol, "42");
+  assert.equal(result.logs[1]?.details, "[object Object]");
+  assert.equal(result.logs[1]?.result, "false");
+  assert.equal(result.logs[1]?.error, "500");
   assert.ok(Date.parse(String(result.logs[1]?.createdAt)));
+});
+
+test("listTradeLogs skips mongo reads when file mode disables legacy mongo access", async () => {
+  setEnv({
+    PROCESS_LOG_STORAGE: "file",
+    PROCESS_LOG_INCLUDE_MONGO_LEGACY: "false",
+    PROCESS_LOG_DIR: "/tmp/copytrade-list-no-mongo",
+  });
+  storeMocks.readFile.mockResolvedValue(
+    JSON.stringify({
+      _id: "file-only-1",
+      accountId: "acc-1",
+      processId: "proc-1",
+      type: "executor",
+      action: "BUY",
+      createdAt: "2026-01-06T00:00:00.000Z",
+    }),
+  );
+
+  const result = await listTradeLogs({
+    hideCronNoise: false,
+  });
+
+  assert.equal(result.totalCount, 1);
+  assert.deepEqual(result.logs.map((log) => log._id), ["file-only-1"]);
+  assert.equal(storeMocks.tradeLogFind.mock.calls.length, 0);
 });
 
 test("remote backend mode proxies create, list, count, and recent-log requests", async () => {
@@ -701,6 +945,89 @@ test("getProcessTradeLogs supports remote proxy mode and local file-only mode wi
 
   assert.deepEqual(localLogs, []);
   assert.equal(storeMocks.tradeLogFind.mock.calls.length, 0);
+
+  storeMocks.stat.mockRejectedValueOnce(
+    Object.assign(new Error("permission denied"), { code: "EACCES" }),
+  );
+  await assert.rejects(
+    () =>
+      getProcessTradeLogs({
+        processId: "proc-local-error",
+      }),
+    /permission denied/,
+  );
+});
+
+test("getProcessTradeLogs defaults to ascending order for remote and legacy-mongo reads", async () => {
+  setEnv({
+    BACKEND_URL: "https://backend.example.com",
+    NEXT_RUNTIME: "nodejs",
+  });
+  storeMocks.fetchMock.mockResolvedValueOnce({
+    ok: true,
+    json: async () => ({
+      success: true,
+      data: {
+        logs: [{ _id: "remote-default-order" }],
+        totalCount: 1,
+        page: 1,
+        limit: 50,
+        totalPages: 1,
+      },
+    }),
+  });
+
+  const remoteLogs = await getProcessTradeLogs({
+    processId: "proc-remote-default",
+  });
+
+  assert.deepEqual(remoteLogs, [{ _id: "remote-default-order" }]);
+  assert.equal(
+    storeMocks.fetchMock.mock.calls[0][0],
+    "https://backend.example.com/api/logs?processId=proc-remote-default&hideCronNoise=false&order=asc",
+  );
+
+  setEnv({
+    BACKEND_URL: undefined,
+    NEXT_RUNTIME: undefined,
+    PROCESS_LOG_STORAGE: "file",
+    PROCESS_LOG_INCLUDE_MONGO_LEGACY: "true",
+    PROCESS_LOG_DIR: "/tmp/copytrade-process-legacy-default",
+  });
+  storeMocks.mongooseConnection.readyState = 1;
+  storeMocks.stat.mockResolvedValue({});
+  storeMocks.readFile.mockResolvedValue(
+    JSON.stringify({
+      _id: "file-middle",
+      accountId: "acc-1",
+      processId: "proc-legacy-default",
+      type: "executor",
+      action: "BUY",
+      createdAt: "2026-01-02T00:00:00.000Z",
+    }),
+  );
+  const mongoQuery = createMongoQuery([
+    {
+      _id: "mongo-earliest",
+      accountId: "acc-1",
+      processId: "proc-legacy-default",
+      type: "executor",
+      action: "INIT",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    },
+  ]);
+  storeMocks.tradeLogFind.mockReturnValueOnce(mongoQuery);
+
+  const localLogs = await getProcessTradeLogs({
+    processId: "proc-legacy-default",
+  });
+
+  assert.deepEqual(
+    localLogs.map((log) => log._id),
+    ["mongo-earliest", "file-middle"],
+  );
+  assert.deepEqual(mongoQuery.sort.mock.calls[0][0], { createdAt: 1 });
+  assert.equal(mongoQuery.limit.mock.calls[0][0], 1000);
 });
 
 test("countTradeLogs and getRecentTradeLogs use local list mode when no remote backend is active", async () => {
@@ -736,6 +1063,339 @@ test("countTradeLogs and getRecentTradeLogs use local list mode when no remote b
   assert.deepEqual(recent.map((log) => log._id), ["local-2"]);
 });
 
+test("listTradeLogs falls back to file mode for invalid storage config and surfaces non-ENOENT file errors", async () => {
+  setEnv({
+    PROCESS_LOG_STORAGE: "weird-mode",
+    PROCESS_LOG_DIR: "/tmp/copytrade-invalid-storage",
+  });
+  storeMocks.appendFile.mockResolvedValue(undefined);
+
+  const created = await createTradeLog({
+    type: "executor",
+    action: "BUY",
+  });
+  assert.equal(created.type, "executor");
+
+  storeMocks.readFile.mockRejectedValueOnce(
+    Object.assign(new Error("read exploded"), { code: "EIO" }),
+  );
+
+  await assert.rejects(
+    () =>
+      listTradeLogs({
+        hideCronNoise: false,
+      }),
+    /read exploded/,
+  );
+
+  storeMocks.readFile.mockRejectedValueOnce(
+    Object.assign(new Error("missing"), { code: "ENOENT" }),
+  );
+  const empty = await listTradeLogs({
+    hideCronNoise: false,
+  });
+  assert.equal(empty.totalCount, 0);
+});
+
+test("isNoisyTradeLog detects cron noise and structured JSON payloads", () => {
+  assert.equal(
+    isNoisyTradeLog({
+      _id: "cron-noise",
+      type: "cron",
+      action: "signal_check_start",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    }),
+    true,
+  );
+  assert.equal(
+    isNoisyTradeLog({
+      _id: "json-noise",
+      type: "executor",
+      action: "BUY",
+      details: '{"foo":"bar"}',
+      createdAt: "2026-01-01T00:00:00.000Z",
+    }),
+    true,
+  );
+  assert.equal(
+    isNoisyTradeLog({
+      _id: "clean",
+      type: "executor",
+      action: "BUY",
+      details: "simple text",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    }),
+    false,
+  );
+  assert.equal(
+    isNoisyTradeLog({
+      _id: "json-array",
+      type: "executor",
+      action: "TRACE",
+      result: '[{"status":"ok"}]',
+      createdAt: "2026-01-01T00:00:00.000Z",
+    }),
+    true,
+  );
+  assert.equal(
+    isNoisyTradeLog({
+      _id: "invalid-json",
+      type: "executor",
+      action: "BUY",
+      details: "{broken}",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    }),
+    false,
+  );
+});
+
+test("cleanupTradeLogs removes noisy logs and rewrites file storage", async () => {
+  setEnv({
+    PROCESS_LOG_STORAGE: "file",
+    PROCESS_LOG_DIR: "/tmp/copytrade-cleanup",
+  });
+  storeMocks.readFile.mockResolvedValue(
+    [
+      JSON.stringify({
+        _id: "keep-1",
+        type: "executor",
+        action: "BUY",
+        details: "plain text",
+        createdAt: "2026-01-04T00:00:00.000Z",
+      }),
+      JSON.stringify({
+        _id: "drop-1",
+        type: "cron",
+        action: "signal_check_start",
+        createdAt: "2026-01-04T00:05:00.000Z",
+      }),
+      JSON.stringify({
+        _id: "drop-2",
+        processId: "proc-json",
+        type: "executor",
+        action: "TRACE",
+        details: '{"nested":true}',
+        createdAt: "2026-01-04T00:10:00.000Z",
+      }),
+    ].join("\n"),
+  );
+
+  const result = await cleanupTradeLogs({
+    mode: "noisy-json",
+  });
+
+  assert.deepEqual(result, {
+    mode: "noisy-json",
+    keepDays: undefined,
+    scannedCount: 3,
+    deletedCount: 2,
+    remainingCount: 1,
+    deletedFileCount: 2,
+    deletedMongoCount: 0,
+  });
+  assert.equal(storeMocks.writeFile.mock.calls.length, 1);
+  assert.equal(storeMocks.writeFile.mock.calls[0]?.[0], "/tmp/copytrade-cleanup/all.jsonl");
+  assert.match(String(storeMocks.writeFile.mock.calls[0]?.[1]), /"keep-1"/);
+  assert.equal(storeMocks.rm.mock.calls[0]?.[0], path.join("/tmp/copytrade-cleanup", "processes"));
+});
+
+test("cleanupTradeLogs keeps only recent days and deletes matching mongo records", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-01-10T00:00:00.000Z"));
+  setEnv({
+    PROCESS_LOG_STORAGE: "dual",
+    PROCESS_LOG_DIR: "/tmp/copytrade-cleanup-retention",
+  });
+  storeMocks.mongooseConnection.readyState = 1;
+  storeMocks.readFile.mockResolvedValue(
+    [
+      JSON.stringify({
+        _id: "file-old",
+        type: "executor",
+        action: "BUY",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+      JSON.stringify({
+        _id: "file-new",
+        processId: "proc-keep",
+        type: "executor",
+        action: "SELL",
+        createdAt: "2026-01-09T00:00:00.000Z",
+      }),
+    ].join("\n"),
+  );
+  storeMocks.tradeLogFind.mockReturnValue(
+    createMongoQuery([
+      {
+        _id: "mongo-old",
+        type: "executor",
+        action: "TRACE",
+        createdAt: "2026-01-02T00:00:00.000Z",
+      },
+      {
+        _id: "mongo-new",
+        processId: "proc-keep",
+        type: "executor",
+        action: "TP",
+        createdAt: "2026-01-09T12:00:00.000Z",
+      },
+    ]),
+  );
+  storeMocks.tradeLogDeleteMany.mockResolvedValue({ deletedCount: 1 });
+
+  const result = await cleanupTradeLogs({
+    mode: "retention",
+    keepDays: 3,
+  });
+
+  assert.deepEqual(result, {
+    mode: "retention",
+    keepDays: 3,
+    scannedCount: 4,
+    deletedCount: 2,
+    remainingCount: 2,
+    deletedFileCount: 1,
+    deletedMongoCount: 1,
+  });
+  assert.deepEqual(storeMocks.tradeLogDeleteMany.mock.calls[0]?.[0], {
+    _id: { $in: ["mongo-old"] },
+  });
+  assert.equal(storeMocks.writeFile.mock.calls.length, 2);
+  vi.useRealTimers();
+});
+
+test("cleanupTradeLogs validates keepDays and mongo readiness", async () => {
+  await assert.rejects(
+    () =>
+      cleanupTradeLogs({
+        mode: "retention",
+        keepDays: 0,
+      }),
+    /keepDays must be >= 1/,
+  );
+
+  setEnv({
+    PROCESS_LOG_STORAGE: "mongo",
+  });
+  storeMocks.readFile.mockResolvedValue("");
+
+  await assert.rejects(
+    () =>
+      cleanupTradeLogs({
+        mode: "noisy-json",
+      }),
+    /MongoDB connection is not ready/,
+  );
+
+  setEnv({
+    PROCESS_LOG_STORAGE: "file",
+    PROCESS_LOG_INCLUDE_MONGO_LEGACY: "false",
+    PROCESS_LOG_DIR: "/tmp/copytrade-cleanup-no-mongo",
+  });
+  storeMocks.readFile.mockResolvedValue("");
+
+  const noMongoResult = await cleanupTradeLogs({
+    mode: "noisy-json",
+  });
+  assert.equal(noMongoResult.scannedCount, 0);
+});
+
+test("cleanupTradeLogs tolerates mongo legacy read failures in file mode", async () => {
+  setEnv({
+    PROCESS_LOG_STORAGE: "file",
+    PROCESS_LOG_DIR: "/tmp/copytrade-cleanup-legacy",
+  });
+  storeMocks.mongooseConnection.readyState = 1;
+  storeMocks.readFile.mockResolvedValue(
+    JSON.stringify({
+      _id: "file-keep",
+      type: "executor",
+      action: "BUY",
+      createdAt: "2026-01-09T00:00:00.000Z",
+    }),
+  );
+  storeMocks.tradeLogFind.mockReturnValue(
+    createMongoQuery(new Error("mongo cleanup read failed")),
+  );
+  const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+  const result = await cleanupTradeLogs({
+    mode: "noisy-json",
+  });
+
+  assert.equal(result.deletedMongoCount, 0);
+  assert.match(
+    String(warnSpy.mock.calls[0]?.[0]),
+    /Failed to read Mongo logs: mongo cleanup read failed/,
+  );
+});
+
+test("cleanupTradeLogs stringifies non-Error mongo legacy read failures", async () => {
+  setEnv({
+    PROCESS_LOG_STORAGE: "file",
+    PROCESS_LOG_DIR: "/tmp/copytrade-cleanup-legacy-string",
+  });
+  storeMocks.mongooseConnection.readyState = 1;
+  storeMocks.readFile.mockResolvedValue("");
+  storeMocks.tradeLogFind.mockReturnValue(createMongoQuery("mongo cleanup exploded"));
+  const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+  const result = await cleanupTradeLogs({
+    mode: "noisy-json",
+  });
+
+  assert.equal(result.deletedMongoCount, 0);
+  assert.match(
+    String(warnSpy.mock.calls[0]?.[0]),
+    /Failed to read Mongo logs: mongo cleanup exploded/,
+  );
+});
+
+test("remote backend mode also activates via VERCEL and reports missing backend configuration", async () => {
+  setEnv({
+    VERCEL: "1",
+    BACKEND_URL: "https://backend.vercel.example/",
+  });
+  storeMocks.fetchMock.mockResolvedValueOnce({
+    ok: true,
+    json: async () => ({
+      success: true,
+      data: {
+        logs: [],
+        totalCount: 0,
+        page: 1,
+        limit: 1,
+        totalPages: 0,
+      },
+    }),
+  });
+
+  const result = await countTradeLogs();
+  assert.equal(result, 0);
+  assert.equal(
+    storeMocks.fetchMock.mock.calls[0]?.[0],
+    "https://backend.vercel.example/api/logs?page=1&limit=1&hideCronNoise=false&order=desc",
+  );
+});
+
+test("backend runtime bypasses remote proxy mode even when backend URLs are configured", async () => {
+  setEnv({
+    COPYTRADE_RUNTIME: "backend",
+    BACKEND_URL: "https://backend.example.com",
+    NEXT_RUNTIME: "nodejs",
+    PROCESS_LOG_STORAGE: "file",
+    PROCESS_LOG_DIR: "/tmp/copytrade-backend-runtime",
+  });
+  storeMocks.readFile.mockResolvedValue("");
+
+  const result = await listTradeLogs({
+    hideCronNoise: false,
+  });
+
+  assert.equal(result.totalCount, 0);
+  assert.equal(storeMocks.fetchMock.mock.calls.length, 0);
+});
+
 test("remote backend mode surfaces request failures", async () => {
   setEnv({
     NEXT_RUNTIME: "nodejs",
@@ -757,6 +1417,64 @@ test("remote backend mode surfaces request failures", async () => {
       }),
     /backend unavailable/,
   );
+});
+
+test("remote backend mode falls back to HTTP status messages and raw payloads when needed", async () => {
+  setEnv({
+    NEXT_RUNTIME: "nodejs",
+    NEXT_PUBLIC_BACKEND_URL: "https://backend.example.com",
+  });
+  storeMocks.fetchMock
+    .mockResolvedValueOnce({
+      ok: false,
+      status: 502,
+      json: async () => ({
+        success: false,
+      }),
+    })
+    .mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        _id: "payload-record",
+        type: "executor",
+        action: "BUY",
+      }),
+    });
+
+  await assert.rejects(
+    () =>
+      listTradeLogs({
+        page: 1,
+      }),
+    /Remote log request failed: 502/,
+  );
+
+  const created = await createTradeLog({
+    processId: "remote-payload",
+    type: "executor",
+    action: "BUY",
+  });
+
+  assert.deepEqual(created, {
+    _id: "payload-record",
+    type: "executor",
+    action: "BUY",
+  });
+});
+
+test("blank storage mode falls back to file mode", async () => {
+  setEnv({
+    PROCESS_LOG_STORAGE: "",
+    PROCESS_LOG_DIR: "/tmp/copytrade-blank-storage",
+  });
+  storeMocks.readFile.mockResolvedValue("");
+
+  const result = await listTradeLogs({
+    hideCronNoise: false,
+  });
+
+  assert.equal(result.totalCount, 0);
+  assert.equal(storeMocks.tradeLogFind.mock.calls.length, 0);
 });
 
 test("createTradeLog warns when mongo create throws a non-Error value in dual mode", async () => {
