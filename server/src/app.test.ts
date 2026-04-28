@@ -27,6 +27,7 @@ beforeEach(() => {
   delete process.env.CRON_SECRET;
   delete process.env.PORT;
   delete process.env.FRONTEND_URL;
+  delete process.env.FRONTEND_ORIGINS;
   delete process.env.NODE_ENV;
   schedulerMocks.startAppCronScheduler.mockReset();
 });
@@ -107,6 +108,51 @@ test("createApp falls back when FRONTEND_URL is blank", async () => {
   assert.equal(health.status, 200);
 });
 
+test("createApp allows configured Vercel and localhost frontend origins", async () => {
+  process.env.FRONTEND_ORIGINS =
+    "https://copytrade-client-dit.vercel.app, http://localhost:3000";
+  const app = createApp();
+
+  const vercelPreflight = await request(app)
+    .options("/api/agent/auth")
+    .set("Origin", "https://copytrade-client-dit.vercel.app")
+    .set("Access-Control-Request-Method", "POST");
+
+  assert.equal(vercelPreflight.status, 204);
+  assert.equal(
+    vercelPreflight.headers["access-control-allow-origin"],
+    "https://copytrade-client-dit.vercel.app",
+  );
+
+  const localhostPreflight = await request(app)
+    .options("/api/agent/auth")
+    .set("Origin", "http://localhost:3000")
+    .set("Access-Control-Request-Method", "POST");
+
+  assert.equal(localhostPreflight.status, 204);
+  assert.equal(
+    localhostPreflight.headers["access-control-allow-origin"],
+    "http://localhost:3000",
+  );
+});
+
+test("createApp blocks unconfigured origins", async () => {
+  process.env.FRONTEND_URL = "https://frontend.example.com";
+  const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  const app = createApp();
+
+  const preflight = await request(app)
+    .options("/api/agent/auth")
+    .set("Origin", "https://evil.example.com")
+    .set("Access-Control-Request-Method", "POST");
+
+  assert.equal(preflight.status, 500);
+  assert.equal(preflight.body.success, false);
+  assert.equal(preflight.body.error, "Internal server error");
+  assert.equal(errorSpy.mock.calls.length > 0, true);
+  errorSpy.mockRestore();
+});
+
 test("startServer listens and logs trimmed cron-secret warnings", () => {
   process.env.PORT = "4321";
   process.env.FRONTEND_URL = "http://localhost:3000";
@@ -156,4 +202,26 @@ test("startServer defaults port, disables cron auth banner, and omits auth heade
   assert.equal(logSpy.mock.calls.length, 1);
   assert.ok(String(logSpy.mock.calls[0]?.[0]).includes("disabled (CRON_SECRET not set)"));
   assert.ok(server);
+});
+
+test("startServer banner shows multiple configured frontend origins", () => {
+  process.env.FRONTEND_ORIGINS =
+    "https://copytrade-client-dit.vercel.app, http://localhost:3000";
+
+  const listenSpy = vi.fn((port: number, callback: () => void) => {
+    callback();
+    return { close: vi.fn() };
+  });
+  const app = { listen: listenSpy } as unknown as express.Express;
+  const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+  startServer(app);
+
+  assert.equal(
+    String(logSpy.mock.calls[0]?.[0]).includes(
+      "https://copytrade-client-dit.vercel.app, http://localhost:3000",
+    ),
+    true,
+  );
+  logSpy.mockRestore();
 });

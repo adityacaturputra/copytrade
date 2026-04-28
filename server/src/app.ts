@@ -15,6 +15,24 @@ import draftsRoutes from "./routes/drafts";
 import logsRoutes from "./routes/logs";
 import { startAppCronScheduler } from "./lib/cron/scheduler";
 
+function parseFrontendOrigins(): string[] {
+  const configuredOrigins = [
+    process.env.FRONTEND_URL,
+    process.env.FRONTEND_ORIGINS,
+  ]
+    .flatMap((value) => String(value || "").split(","))
+    .map((value) => value.trim().replace(/\/+$/, ""))
+    .filter(Boolean);
+
+  return configuredOrigins.length > 0
+    ? Array.from(new Set(configuredOrigins))
+    : ["http://localhost:3000"];
+}
+
+function resolveFrontendOriginForBanner() {
+  return parseFrontendOrigins().join(", ");
+}
+
 export function loadServerEnvironment(): void {
   const serverDir = path.resolve(__dirname, "..");
   const repoRootDir = path.resolve(serverDir, "..");
@@ -35,12 +53,19 @@ export function createApp(): Express {
 
   const app: Express = express();
   process.env.COPYTRADE_RUNTIME = "backend";
-  const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+  const allowedOrigins = new Set(parseFrontendOrigins());
 
   app.use(helmet());
   app.use(
     cors({
-      origin: frontendUrl,
+      origin(origin, callback) {
+        if (!origin || allowedOrigins.has(origin.replace(/\/+$/, ""))) {
+          callback(null, true);
+          return;
+        }
+
+        callback(new Error(`CORS blocked for origin: ${origin}`));
+      },
       methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
       allowedHeaders: [
         "Content-Type",
@@ -100,7 +125,7 @@ export function createApp(): Express {
 
 export function startServer(app: Express = createApp()) {
   const port = process.env.PORT || 3001;
-  const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+  const frontendUrl = resolveFrontendOriginForBanner();
   const rawCronSecret = process.env.CRON_SECRET;
   const cronSecret = rawCronSecret?.trim() || "";
   const cronAuthEnabled = cronSecret.length > 0;
