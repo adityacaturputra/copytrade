@@ -14,7 +14,7 @@ build/
 .env.*.local
 
 # Logs
-logs/
+/logs/
 *.log
 server/data/process-logs/
 npm-debug.log*
