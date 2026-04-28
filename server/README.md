@@ -20,6 +20,9 @@ npm run build
 npm start
 ```
 
+When running under PM2 in production, start the compiled entrypoint from the `server` directory or set PM2 `cwd` to `server`.
+Starting `pnpm --filter copytrade-backend start` from the monorepo root can make Node resolve `dist/index.js` relative to the wrong directory.
+
 ## API Endpoints
 
 ### Health Check

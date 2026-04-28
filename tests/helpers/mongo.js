@@ -8,7 +8,7 @@ exports.clearTestMongo = clearTestMongo;
 exports.stopTestMongo = stopTestMongo;
 const mongoose_1 = __importDefault(require("mongoose"));
 const mongodb_memory_server_1 = require("mongodb-memory-server");
-const database_1 = require("../../shared/src/lib/database");
+const database_ts_1 = require("../../shared/src/lib/database.ts");
 let mongoServer = null;
 async function startTestMongo() {
     if (!mongoServer) {
@@ -16,9 +16,9 @@ async function startTestMongo() {
     }
     const uri = mongoServer.getUri("copytrade-test");
     process.env.MONGODB_URI = uri;
-    await (0, database_1.disconnectDB)();
-    (0, database_1.resetDBConnectionState)();
-    await (0, database_1.connectDB)();
+    await (0, database_ts_1.disconnectDB)();
+    (0, database_ts_1.resetDBConnectionState)();
+    await (0, database_ts_1.connectDB)();
     return uri;
 }
 async function clearTestMongo() {
@@ -29,8 +29,8 @@ async function clearTestMongo() {
     await Promise.all(collections.map((collection) => collection.deleteMany({})));
 }
 async function stopTestMongo() {
-    await (0, database_1.disconnectDB)();
-    (0, database_1.resetDBConnectionState)();
+    await (0, database_ts_1.disconnectDB)();
+    (0, database_ts_1.resetDBConnectionState)();
     if (mongoServer) {
         await mongoServer.stop();
         mongoServer = null;

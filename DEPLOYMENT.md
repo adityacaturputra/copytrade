@@ -124,7 +124,8 @@ FRONTEND_URL=https://your-vercel-app.vercel.app
 
 ```bash
 # Start with PM2
-pm2 start dist/index.js --name copytrade-backend
+cd /root/apps/copytrade/server
+pm2 start dist/index.js --name copytrade-backend --cwd /root/apps/copytrade/server
 
 # Save PM2 config
 pm2 save
@@ -132,6 +133,9 @@ pm2 save
 # Setup PM2 to start on boot
 pm2 startup systemd
 ```
+
+Do not start the backend with `pm2 start "pnpm --filter copytrade-backend start"` from the monorepo root.
+That keeps the process cwd at the repo root and makes Node look for `dist/index.js` in the wrong place.
 
 ### 6. Setup Nginx (Recommended)
 

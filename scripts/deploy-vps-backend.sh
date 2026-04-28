@@ -97,6 +97,13 @@ if [[ ! -d "$APP_DIR/.git" ]]; then
   die "No git repo found at $APP_DIR. Set --app-dir to your repo path."
 fi
 
+SERVER_DIR="$APP_DIR/server"
+BACKEND_ENTRY="$SERVER_DIR/dist/index.js"
+
+if [[ ! -d "$SERVER_DIR" ]]; then
+  die "Backend package directory not found at $SERVER_DIR"
+fi
+
 if [[ -n "$DOMAIN" && -n "$FREE_DOMAIN_PROVIDER" ]]; then
   die "Use either --domain or --free-domain, not both"
 fi
@@ -278,11 +285,16 @@ install_and_build() {
 
 start_or_restart_pm2() {
   log "Starting/restarting PM2 process: $PROJECT_NAME"
-  if pm2 describe "$PROJECT_NAME" >/dev/null 2>&1; then
-    (cd "$APP_DIR" && pm2 restart "$PROJECT_NAME" --update-env)
-  else
-    (cd "$APP_DIR" && pm2 start "pnpm --filter $BACKEND_FILTER start" --name "$PROJECT_NAME")
+  if [[ ! -f "$BACKEND_ENTRY" ]]; then
+    die "Missing backend build output: $BACKEND_ENTRY. Build step likely failed."
   fi
+
+  if pm2 describe "$PROJECT_NAME" >/dev/null 2>&1; then
+    log "Removing existing PM2 process so the command/cwd can be refreshed."
+    pm2 delete "$PROJECT_NAME"
+  fi
+
+  pm2 start "$BACKEND_ENTRY" --name "$PROJECT_NAME" --cwd "$SERVER_DIR" --update-env
   pm2 save
 }
 
