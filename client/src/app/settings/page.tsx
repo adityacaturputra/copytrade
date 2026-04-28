@@ -12,7 +12,7 @@ import {
 import {
   CRON_PROVIDER_OPTIONS,
   type CronProvider,
-} from "@copytrade/shared/lib/cron-settings";
+} from "@copytrade/shared/lib/cron-settings-client";
 import {
   buildExchangeDataPayload,
   buildExchangeDataPreview,
