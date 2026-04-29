@@ -465,6 +465,7 @@ async function* executeAgentRun(
       await logAgentTurnEvent({
         processId: input.processId!,
         action: "model_stream_started",
+        level: "debug",
         result: "processing",
       });
 

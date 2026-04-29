@@ -6,6 +6,7 @@ export interface TradeLogRecord {
     action: string;
     symbol?: string | null;
     details?: string | null;
+    level?: string | null;
     result?: string | null;
     error?: string | null;
     createdAt: string;
@@ -17,6 +18,7 @@ export interface TradeLogCreateInput {
     action: string;
     symbol?: string | null;
     details?: string | null;
+    level?: string | null;
     result?: string | null;
     error?: string | null;
     createdAt?: string | Date;
@@ -26,6 +28,7 @@ export interface TradeLogListOptions {
     limit?: number;
     accountId?: string | null;
     processId?: string | null;
+    levels?: string[] | null;
     hideCronNoise?: boolean;
     order?: "asc" | "desc";
 }
@@ -50,6 +53,7 @@ export interface TradeLogCleanupResult {
     deletedMongoCount: number;
 }
 export declare function isNoisyTradeLog(log: TradeLogRecord): boolean;
+export declare function isHiddenByDefaultTradeLog(log: TradeLogRecord): boolean;
 export declare function createTradeLog(input: TradeLogCreateInput): Promise<TradeLogRecord>;
 export declare function getProcessTradeLogs(options: {
     processId: string;

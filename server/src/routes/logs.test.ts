@@ -62,7 +62,7 @@ test("logs route lists logs with normalized query params and handles failures", 
 
   const app = createApp();
   const success = await request(app).get(
-    "/?page=0&limit=999&hideCronNoise=false&accountId=acc1&processId=proc1&order=asc",
+    "/?page=0&limit=999&hideCronNoise=false&accountId=acc1&processId=proc1&levels=debug,warning&order=asc",
   );
 
   assert.equal(success.status, 200);
@@ -72,6 +72,7 @@ test("logs route lists logs with normalized query params and handles failures", 
     hideCronNoise: false,
     accountId: "acc1",
     processId: "proc1",
+    levels: ["debug", "warning"],
     order: "asc",
   });
   assert.equal(success.body.success, true);
@@ -122,6 +123,7 @@ test("logs route creates records, validates required fields, and handles failure
     action: "buy",
     symbol: "BTCUSDT",
     details: "placed",
+    level: "debug",
     result: "ok",
     error: null,
     createdAt,
@@ -134,6 +136,7 @@ test("logs route creates records, validates required fields, and handles failure
     action: "buy",
     symbol: "BTCUSDT",
     details: "placed",
+    level: "debug",
     result: "ok",
     error: null,
     createdAt: createdAt.toISOString(),

@@ -4,7 +4,7 @@
   "description": "CopyTrade backend API for long-running cron jobs",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "tsx watch --include ../shared/src src/index.ts",
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/index.js",
     "lint": "tsc -p tsconfig.build.json --noEmit",

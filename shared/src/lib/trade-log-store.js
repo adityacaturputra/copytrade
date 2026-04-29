@@ -3,6 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.isHiddenByDefaultTradeLog = isHiddenByDefaultTradeLog;
 exports.isNoisyTradeLog = isNoisyTradeLog;
 exports.createTradeLog = createTradeLog;
 exports.getProcessTradeLogs = getProcessTradeLogs;
@@ -101,6 +102,7 @@ function normalizeTradeLogRecord(input) {
         action: input.action,
         symbol: input.symbol || null,
         details: input.details || null,
+        level: input.level || input.result || null,
         result: input.result || null,
         error: input.error || null,
         createdAt: normalizeCreatedAt(input.createdAt),
@@ -164,6 +166,7 @@ async function writeLogToMongo(record) {
         action: record.action,
         symbol: record.symbol || null,
         details: record.details || null,
+        level: record.level || null,
         result: record.result || null,
         error: record.error || null,
         createdAt: new Date(record.createdAt),
@@ -194,6 +197,7 @@ function normalizeMongoRecord(record) {
         action: String(record.action || ""),
         symbol: typeof record.symbol === "string" ? record.symbol : record.symbol == null ? null : String(record.symbol),
         details: typeof record.details === "string" ? record.details : record.details == null ? null : String(record.details),
+        level: typeof record.level === "string" ? record.level : record.level == null ? null : String(record.level),
         result: typeof record.result === "string" ? record.result : record.result == null ? null : String(record.result),
         error: typeof record.error === "string" ? record.error : record.error == null ? null : String(record.error),
         createdAt,
@@ -240,6 +244,7 @@ function dedupeLogs(logs) {
             log.action,
             log.symbol || "",
             log.details || "",
+            log.level || "",
             log.result || "",
             log.error || "",
             log.createdAt,
@@ -277,6 +282,9 @@ function isNoisyTradeLog(log) {
         looksLikeStructuredJson(log.result) ||
         looksLikeStructuredJson(log.error));
 }
+function isHiddenByDefaultTradeLog(log) {
+    return log.level === "debug" || shouldHideCronNoise(log);
+}
 function applyLogFilters(logs, options = {}) {
     return logs.filter((log) => {
         if (options.accountId && options.accountId !== "all" && log.accountId !== options.accountId) {
@@ -285,7 +293,10 @@ function applyLogFilters(logs, options = {}) {
         if (options.processId && log.processId !== options.processId) {
             return false;
         }
-        if (options.hideCronNoise && shouldHideCronNoise(log)) {
+        if (options.levels?.length && !options.levels.includes(log.level || "")) {
+            return false;
+        }
+        if (options.hideCronNoise && isHiddenByDefaultTradeLog(log)) {
             return false;
         }
         return true;
@@ -425,6 +436,8 @@ async function listTradeLogs(options = {}) {
             params.set("accountId", options.accountId);
         if (options.processId)
             params.set("processId", options.processId);
+        if (options.levels?.length)
+            params.set("levels", options.levels.join(","));
         return fetchRemoteLogs(`/api/logs?${params.toString()}`);
     }
     const page = Math.max(1, options.page || 1);

@@ -8,6 +8,7 @@ export interface ProcessLogInput {
   action: string;
   symbol?: string | null;
   details?: unknown;
+  level?: string | null;
   result?: string | null;
   error?: string | null;
 }
@@ -18,6 +19,7 @@ export interface ExecutorLogContext {
   symbol?: string | null;
   action?: string;
   type?: string;
+  level?: string | null;
   result?: string | null;
 }
 
@@ -45,6 +47,7 @@ export async function logProcessStep({
   action,
   symbol,
   details,
+  level,
   result,
   error,
 }: ProcessLogInput) {
@@ -55,6 +58,7 @@ export async function logProcessStep({
     action,
     symbol: symbol || null,
     details: serializeProcessLogDetails(details) || null,
+    level: level || result || null,
     result: result || null,
     error: error || null,
   });
@@ -86,6 +90,9 @@ async function logExecutorConsole(
           : "console_info"),
     symbol: context.symbol || undefined,
     details: message,
+    level:
+      context.level ||
+      (level === "error" ? "error" : level === "warn" ? "warning" : "info"),
     result:
       context.result ||
       (level === "error"

@@ -150,6 +150,7 @@ export async function updateAgentTurnState(
 export async function logAgentTurnEvent(input: {
   processId: string;
   action: string;
+  level?: string;
   result?: string;
   error?: string;
   details?: unknown;
@@ -159,6 +160,7 @@ export async function logAgentTurnEvent(input: {
     type: "agent_turn",
     action: input.action,
     details: input.details,
+    ...(input.level ? { level: input.level } : {}),
     result: input.result,
     error: input.error,
   });

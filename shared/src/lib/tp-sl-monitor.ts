@@ -71,6 +71,7 @@ export async function runTpslMonitor(): Promise<{
         {
           type: "tpsl-monitor",
           action: "pending_positions_check",
+          level: "debug",
         },
       );
 
@@ -89,6 +90,7 @@ export async function runTpslMonitor(): Promise<{
               orderId: position.orderId || null,
               currentTime: new Date().toISOString(),
             },
+            level: "debug",
             result: "processing",
           });
 
@@ -104,6 +106,7 @@ export async function runTpslMonitor(): Promise<{
                 symbol: position.symbol,
                 type: "tpsl-monitor",
                 action: "pending_limit_still_live",
+                level: "debug",
               },
             );
             continue;
@@ -215,6 +218,7 @@ export async function runTpslMonitor(): Promise<{
           {
             type: "tpsl-monitor",
             action: "tpsl_placement_started",
+            level: "debug",
           },
         );
       }
@@ -271,6 +275,7 @@ export async function runTpslMonitor(): Promise<{
       {
         type: "tpsl-monitor",
         action: "tpsl_monitor_completed",
+        level: "debug",
       },
     );
   } catch (error) {

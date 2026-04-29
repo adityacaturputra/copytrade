@@ -137,6 +137,7 @@ export interface ITradeLog extends Document {
   action: string;
   symbol?: string;
   details?: string;
+  level?: string;
   result?: string;
   error?: string;
   createdAt: Date;
@@ -433,6 +434,7 @@ const TradeLogSchema = new Schema<ITradeLog>(
     action: { type: String, required: true },
     symbol: { type: String, default: null },
     details: { type: String, default: null },
+    level: { type: String, default: null },
     result: { type: String, default: null },
     error: { type: String, default: null },
   },
@@ -440,6 +442,7 @@ const TradeLogSchema = new Schema<ITradeLog>(
 );
 
 TradeLogSchema.index({ type: 1 });
+TradeLogSchema.index({ level: 1, createdAt: -1 });
 TradeLogSchema.index({ processId: 1, createdAt: 1 });
 TradeLogSchema.index({ createdAt: -1 });
 

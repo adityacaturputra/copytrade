@@ -144,12 +144,13 @@ export async function runSignalCheck(): Promise<{
   try {
     // 1. Get trading mode
     const mode = await getTradingMode();
-    await logExecutorInfo(`🔧 Trading mode: ${mode}`);
+    await logExecutorInfo(`🔧 Trading mode: ${mode}`, { level: "debug" });
 
     // 2. Get signal config (fetchLimit = page size, timeWindowHours)
     const signalConfig = await getSignalConfig();
     await logExecutorInfo(
       `🔧 Signal config: pageSize=${signalConfig.fetchLimit}, timeWindowHours=${signalConfig.timeWindowHours}`,
+      { level: "debug" },
     );
 
     // 3. Load all processed message IDs from DB (for pagination stop condition)
@@ -169,6 +170,7 @@ export async function runSignalCheck(): Promise<{
     }
     await logExecutorInfo(
       `📦 Found ${allProcessedIds.size} previously processed messages in DB (${processedByAccount.size} accounts)`,
+      { level: "debug" },
     );
 
     // 4. Fetch messages from all active accounts via SourceFactory
@@ -181,10 +183,12 @@ export async function runSignalCheck(): Promise<{
     if (!activeAccounts || activeAccounts.length === 0) {
       await logExecutorInfo(
         "⚠️ No active accounts configured — skipping message fetch",
+        { level: "debug" },
       );
     } else {
       await logExecutorInfo(
         `📡 Found ${activeAccounts.length} active accounts, fetching messages...`,
+        { level: "debug" },
       );
 
       for (const account of activeAccounts) {
@@ -199,6 +203,7 @@ export async function runSignalCheck(): Promise<{
             `⏭️ Account "${account.name}": all channels disabled, skipping`,
             {
               accountId: account._id.toString(),
+              level: "debug",
             },
           );
           result.sources.push({
@@ -254,6 +259,7 @@ export async function runSignalCheck(): Promise<{
             `📡 Account "${account.name}" (${account.sourceType}): fetched ${messages.length} messages from ${activeChannelIds.length} channels`,
             {
               accountId: account._id.toString(),
+              level: "debug",
             },
           );
         } catch (error) {
@@ -278,7 +284,9 @@ export async function runSignalCheck(): Promise<{
     }
 
     result.checked = allMessages.length;
-    await logExecutorInfo(`📡 Total messages fetched: ${allMessages.length}`);
+    await logExecutorInfo(`📡 Total messages fetched: ${allMessages.length}`, {
+      level: "debug",
+    });
 
     // Sort ASCENDING (oldest first) for processing — so signals are
     // handled in chronological order.  Discord snowflake IDs are
@@ -314,7 +322,9 @@ export async function runSignalCheck(): Promise<{
       }));
 
     if (newMessages.length === 0) {
-      await logExecutorInfo("📭 No new messages to process");
+      await logExecutorInfo("📭 No new messages to process", {
+        level: "debug",
+      });
     } else {
       await logExecutorInfo(
         `📨 ${newMessages.length} new messages to process (bulk batchSize=${signalConfig.batchSize})`,
@@ -742,6 +752,7 @@ export async function runSignalCheck(): Promise<{
 
   await logExecutorInfo(
     `✅ Signal check complete: ${result.checked} checked, ${result.newSignals} signals, ${result.executed} executed, ${result.drafted} drafted`,
+    { level: "debug" },
   );
   return result;
 }

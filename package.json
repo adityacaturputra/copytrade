@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "packageManager": "pnpm@10.33.0",
   "scripts": {
-    "dev": "pnpm --filter @copytrade/shared build && pnpm --filter copytrade --filter copytrade-backend -r --parallel dev",
+    "dev": "pnpm --filter copytrade --filter copytrade-backend -r --parallel dev",
     "dev:client": "pnpm --filter copytrade dev",
     "dev:server": "pnpm --filter copytrade-backend dev",
     "build": "pnpm --filter @copytrade/shared build && pnpm --filter copytrade --filter copytrade-backend -r build",

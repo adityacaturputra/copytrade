@@ -162,6 +162,7 @@ test("cron route returns conflict for signal-check and records error flows when 
       type: "cron",
       action: "signal_check_start",
       details: "Starting Discord signal check cron job",
+      level: "debug",
       result: "started",
     },
   ]);
@@ -188,6 +189,7 @@ test("cron route persists signal-check error logs when catch-path logging succee
         type: "cron",
         action: "signal_check_start",
         details: "Starting Discord signal check cron job",
+        level: "debug",
         result: "started",
       },
     ],
@@ -291,6 +293,7 @@ test("cron route records partial-success signal and TP/SL runs, and position mon
       type: "cron",
       action: "signal_check_start",
       details: "Starting Discord signal check cron job",
+      level: "debug",
       result: "started",
     },
   ]);
@@ -362,6 +365,7 @@ test("cron route handles position-monitor success and tp/sl conflict responses",
       type: "cron",
       action: "position_monitor_end",
       details: "Checked: 6, Actions: 2, Errors: 0",
+      level: "debug",
       result: "success",
     },
   ]);

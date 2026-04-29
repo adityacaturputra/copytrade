@@ -81,6 +81,7 @@ async function runSignalCheckWork() {
       type: "cron",
       action: "signal_check_start",
       details: "Starting Discord signal check cron job",
+      level: "debug",
       result: "started",
     });
 
@@ -98,6 +99,7 @@ async function runSignalCheckWork() {
       type: "cron",
       action: "signal_check_end",
       details: `Checked: ${result.checked}, Signals: ${result.newSignals}, Executed: ${result.executed}, Errors: ${result.errors.length}`,
+      level: "debug",
       result: result.errors.length > 0 ? "partial" : "success",
     });
 
@@ -158,6 +160,7 @@ async function runPositionMonitorWork() {
       type: "cron",
       action: "position_monitor_start",
       details: "Starting position monitor cron job",
+      level: "debug",
       result: "started",
     });
 
@@ -175,6 +178,7 @@ async function runPositionMonitorWork() {
       type: "cron",
       action: "position_monitor_end",
       details: `Checked: ${result.checked}, Actions: ${result.actions}, Errors: ${result.errors.length}`,
+      level: "debug",
       result: result.errors.length > 0 ? "partial" : "success",
     });
 
@@ -235,6 +239,7 @@ async function runTpSlMonitorWork() {
       type: "cron",
       action: "tpsl_monitor_start",
       details: "Starting TP/SL monitor cron job",
+      level: "debug",
       result: "started",
     });
 
@@ -252,6 +257,7 @@ async function runTpSlMonitorWork() {
       type: "cron",
       action: "tpsl_monitor_end",
       details: `Checked: ${result.checked}, Promoted: ${result.promoted}, TP/SL placed: ${result.tpslPlaced}, Errors: ${result.errors.length}`,
+      level: "debug",
       result: result.errors.length > 0 ? "partial" : "success",
     });
 

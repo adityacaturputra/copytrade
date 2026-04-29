@@ -56,6 +56,7 @@ export interface ITradeLog extends Document {
     action: string;
     symbol?: string;
     details?: string;
+    level?: string;
     result?: string;
     error?: string;
     createdAt: Date;

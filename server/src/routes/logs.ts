@@ -19,6 +19,13 @@ router.get("/", async (req: Request, res: Response) => {
       typeof req.query.accountId === "string" ? req.query.accountId : undefined;
     const processId =
       typeof req.query.processId === "string" ? req.query.processId : undefined;
+    const levels =
+      typeof req.query.levels === "string"
+        ? req.query.levels
+            .split(",")
+            .map((value) => value.trim())
+            .filter(Boolean)
+        : undefined;
     const order = req.query.order === "asc" ? "asc" : "desc";
 
     const result = await listTradeLogs({
@@ -27,6 +34,7 @@ router.get("/", async (req: Request, res: Response) => {
       hideCronNoise,
       accountId,
       processId,
+      levels,
       order,
     });
 
@@ -69,6 +77,7 @@ router.post("/", async (req: Request, res: Response) => {
       symbol: typeof body.symbol === "string" ? body.symbol : body.symbol ?? null,
       details:
         typeof body.details === "string" ? body.details : body.details ?? null,
+      level: typeof body.level === "string" ? body.level : body.level ?? null,
       result: typeof body.result === "string" ? body.result : body.result ?? null,
       error: typeof body.error === "string" ? body.error : body.error ?? null,
       createdAt:

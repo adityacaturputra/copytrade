@@ -65,6 +65,7 @@ export async function runPositionMonitor(): Promise<{
     await logExecutorInfo(`📊 Monitoring ${openPositions.length} open positions`, {
       type: "monitor",
       action: "monitor_started",
+      level: "debug",
     });
 
     // ─── Check pending positions (limit orders waiting to fill) ────────
@@ -75,6 +76,7 @@ export async function runPositionMonitor(): Promise<{
         {
           type: "monitor",
           action: "pending_positions_check",
+          level: "debug",
         },
       );
 
@@ -124,6 +126,7 @@ export async function runPositionMonitor(): Promise<{
                 currentTime: new Date().toISOString(),
                 orderId: position.orderId || null,
               },
+              level: "debug",
               result: "processing",
             });
 
@@ -135,11 +138,12 @@ export async function runPositionMonitor(): Promise<{
                 {
                   accountId: position.accountId,
                   processId,
-                  symbol: position.symbol,
-                  type: "monitor",
-                  action: "pending_limit_still_live",
-                },
-              );
+                symbol: position.symbol,
+                type: "monitor",
+                action: "pending_limit_still_live",
+                level: "debug",
+              },
+            );
               continue;
             }
 
@@ -291,6 +295,7 @@ export async function runPositionMonitor(): Promise<{
       {
         type: "monitor",
         action: "exchange_positions_snapshot",
+        level: "debug",
       },
     );
 
@@ -309,6 +314,7 @@ export async function runPositionMonitor(): Promise<{
             symbol: position.symbol,
             type: "monitor",
             action: "sync_close_detected",
+            level: "debug",
           },
         );
         position.status = "closed";
@@ -349,6 +355,7 @@ export async function runPositionMonitor(): Promise<{
             sourceMessageId: position.messageId || null,
             sourceChannelId: position.channelId || null,
           },
+          level: "debug",
           result: "processing",
         });
 
@@ -648,6 +655,7 @@ export async function runPositionMonitor(): Promise<{
     {
       type: "monitor",
       action: "monitor_completed",
+      level: "debug",
     },
   );
   return result;

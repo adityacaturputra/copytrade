@@ -59,10 +59,37 @@ interface Log {
   action: string;
   symbol?: string;
   details?: string;
+  level?: string;
   result?: string;
   error?: string;
   createdAt?: string;
   created_at?: string;
+}
+
+const LOG_LEVEL_FILTERS = [
+  "debug",
+  "info",
+  "processing",
+  "success",
+  "warning",
+  "error",
+  "executed",
+  "rejected",
+  "partial",
+  "started",
+  "updated",
+  "noop",
+];
+
+function getLogLevelBadgeClass(level: string) {
+  if (level === "success" || level === "executed") return "badge-success";
+  if (level === "error" || level === "rejected" || level === "fatal") {
+    return "badge-danger";
+  }
+  if (level === "warning" || level === "partial") return "badge-warning";
+  if (level === "processing" || level === "started") return "badge-info";
+  if (level === "debug") return "badge-neutral";
+  return "badge-neutral";
 }
 
 interface DraftTrade {
@@ -2833,6 +2860,7 @@ function LogsTab({
   refreshKey: number;
 }) {
   const [hideCronNoise, setHideCronNoise] = useState(true);
+  const [selectedLevels, setSelectedLevels] = useState<string[]>([]);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [logs, setLogs] = useState<Log[]>([]);
@@ -2843,11 +2871,16 @@ function LogsTab({
   const fetchLogs = useCallback(async () => {
     setLoading(true);
     try {
+      const shouldHideRoutineNoise =
+        hideCronNoise && !selectedLevels.includes("debug");
       const params = new URLSearchParams({
         page: String(page),
         limit: String(pageSize),
-        hideCronNoise: String(hideCronNoise),
+        hideCronNoise: String(shouldHideRoutineNoise),
       });
+      if (selectedLevels.length > 0) {
+        params.set("levels", selectedLevels.join(","));
+      }
       if (channelIdFilter !== "all") params.set("channelId", channelIdFilter);
       if (accountIdFilter !== "all") params.set("accountId", accountIdFilter);
       const res = await fetch(`/api/logs?${params}`);
@@ -2859,7 +2892,14 @@ function LogsTab({
       }
     } catch {}
     setLoading(false);
-  }, [page, pageSize, hideCronNoise, channelIdFilter, accountIdFilter]);
+  }, [
+    page,
+    pageSize,
+    hideCronNoise,
+    selectedLevels,
+    channelIdFilter,
+    accountIdFilter,
+  ]);
 
   useEffect(() => {
     fetchLogs();
@@ -2873,7 +2913,7 @@ function LogsTab({
   // Reset to page 1 when filter changes
   useEffect(() => {
     setPage(1);
-  }, [hideCronNoise, pageSize, channelIdFilter, accountIdFilter]);
+  }, [hideCronNoise, selectedLevels, pageSize, channelIdFilter, accountIdFilter]);
 
   if (loading && logs.length === 0) {
     return (
@@ -2914,15 +2954,50 @@ function LogsTab({
             }`}
             title={
               hideCronNoise
-                ? "Hiding routine cron start/end logs. Click to show all."
-                : "Showing all logs including routine cron heartbeats."
+                ? "Hiding routine system logs like idle fetch cycles, pending-order heartbeats, and stream-start events."
+                : "Showing all logs including routine system noise."
             }
           >
             <span>{hideCronNoise ? "🙈" : "👁️"}</span>
-            <span>Cron noise</span>
+            <span>Routine noise</span>
           </button>
         </div>
         <span className="text-xs text-slate-500">{totalCount} logs</span>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <button
+          onClick={() => setSelectedLevels([])}
+          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition border ${
+            selectedLevels.length === 0
+              ? "bg-primary-600/20 border-primary-500/40 text-primary-200"
+              : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"
+          }`}
+        >
+          All levels
+        </button>
+        {LOG_LEVEL_FILTERS.map((level) => {
+          const active = selectedLevels.includes(level);
+          return (
+            <button
+              key={level}
+              onClick={() =>
+                setSelectedLevels((current) =>
+                  current.includes(level)
+                    ? current.filter((item) => item !== level)
+                    : [...current, level],
+                )
+              }
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition border ${
+                active
+                  ? "bg-slate-700 border-slate-600 text-slate-200"
+                  : "bg-slate-800 border-slate-700 text-slate-500 hover:bg-slate-700"
+              }`}
+            >
+              {level.toUpperCase()}
+            </button>
+          );
+        })}
       </div>
 
       {/* Log entries */}
@@ -2946,11 +3021,13 @@ function LogsTab({
                     {log.symbol}
                   </span>
                 )}
-                {log.result && (
+                {(log.level || log.result) && (
                   <span
-                    className={`badge ${log.result === "success" || log.result === "executed" ? "badge-success" : log.result === "error" || log.result === "rejected" ? "badge-danger" : "badge-neutral"}`}
+                    className={`badge ${getLogLevelBadgeClass(
+                      log.level || log.result || "",
+                    )}`}
                   >
-                    {log.result}
+                    {(log.level || log.result || "").toUpperCase()}
                   </span>
                 )}
               </div>

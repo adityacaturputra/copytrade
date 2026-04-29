@@ -59,6 +59,7 @@ test("logProcessStep maps nullish fields before writing the trade log", async ()
     action: "buy",
     symbol: null,
     details: "{\"symbol\":\"BTCUSDT\"}",
+    level: null,
     result: null,
     error: null,
   });
@@ -92,6 +93,7 @@ test("executor console helpers log to console and persist normalized process log
     action: "console_info",
     symbol: null,
     details: "info message",
+    level: "info",
     result: "info",
     error: null,
   });
@@ -102,6 +104,7 @@ test("executor console helpers log to console and persist normalized process log
     action: "console_warn",
     symbol: "BTCUSDT",
     details: "warn message",
+    level: "warning",
     result: "warning",
     error: null,
   });
@@ -112,6 +115,7 @@ test("executor console helpers log to console and persist normalized process log
     action: "custom_error",
     symbol: null,
     details: "error message",
+    level: "error",
     result: "fatal",
     error: "error message",
   });
@@ -130,6 +134,7 @@ test("logExecutorError uses default error action and result when context omits t
     action: "console_error",
     symbol: null,
     details: "default error",
+    level: "error",
     result: "error",
     error: "default error",
   });

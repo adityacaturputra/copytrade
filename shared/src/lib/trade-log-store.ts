@@ -11,6 +11,7 @@ export interface TradeLogRecord {
   action: string;
   symbol?: string | null;
   details?: string | null;
+  level?: string | null;
   result?: string | null;
   error?: string | null;
   createdAt: string;
@@ -23,6 +24,7 @@ export interface TradeLogCreateInput {
   action: string;
   symbol?: string | null;
   details?: string | null;
+  level?: string | null;
   result?: string | null;
   error?: string | null;
   createdAt?: string | Date;
@@ -33,6 +35,7 @@ export interface TradeLogListOptions {
   limit?: number;
   accountId?: string | null;
   processId?: string | null;
+  levels?: string[] | null;
   hideCronNoise?: boolean;
   order?: "asc" | "desc";
 }
@@ -180,6 +183,7 @@ function normalizeTradeLogRecord(
     action: input.action,
     symbol: input.symbol || null,
     details: input.details || null,
+    level: input.level || input.result || null,
     result: input.result || null,
     error: input.error || null,
     createdAt: normalizeCreatedAt(input.createdAt),
@@ -248,6 +252,7 @@ async function writeLogToMongo(record: TradeLogRecord) {
     action: record.action,
     symbol: record.symbol || null,
     details: record.details || null,
+    level: record.level || null,
     result: record.result || null,
     error: record.error || null,
     createdAt: new Date(record.createdAt),
@@ -289,6 +294,8 @@ function normalizeMongoRecord(record: Record<string, unknown>): TradeLogRecord {
       typeof record.symbol === "string" ? record.symbol : record.symbol == null ? null : String(record.symbol),
     details:
       typeof record.details === "string" ? record.details : record.details == null ? null : String(record.details),
+    level:
+      typeof record.level === "string" ? record.level : record.level == null ? null : String(record.level),
     result:
       typeof record.result === "string" ? record.result : record.result == null ? null : String(record.result),
     error:
@@ -356,6 +363,7 @@ function dedupeLogs(logs: TradeLogRecord[]) {
       log.action,
       log.symbol || "",
       log.details || "",
+      log.level || "",
       log.result || "",
       log.error || "",
       log.createdAt,
@@ -404,6 +412,10 @@ export function isNoisyTradeLog(log: TradeLogRecord) {
   );
 }
 
+export function isHiddenByDefaultTradeLog(log: TradeLogRecord) {
+  return log.level === "debug" || shouldHideCronNoise(log);
+}
+
 function applyLogFilters(
   logs: TradeLogRecord[],
   options: TradeLogListOptions = {},
@@ -417,7 +429,11 @@ function applyLogFilters(
       return false;
     }
 
-    if (options.hideCronNoise && shouldHideCronNoise(log)) {
+    if (options.levels?.length && !options.levels.includes(log.level || "")) {
+      return false;
+    }
+
+    if (options.hideCronNoise && isHiddenByDefaultTradeLog(log)) {
       return false;
     }
 
@@ -608,6 +624,7 @@ export async function listTradeLogs(
 
     if (options.accountId) params.set("accountId", options.accountId);
     if (options.processId) params.set("processId", options.processId);
+    if (options.levels?.length) params.set("levels", options.levels.join(","));
 
     return fetchRemoteLogs<TradeLogListResult>(`/api/logs?${params.toString()}`);
   }

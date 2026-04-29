@@ -68,6 +68,7 @@ import {
   countTradeLogs,
   createTradeLog,
   getProcessTradeLogs,
+  isHiddenByDefaultTradeLog,
   isNoisyTradeLog,
   getRecentTradeLogs,
   listTradeLogs,
@@ -575,7 +576,7 @@ test("getProcessTradeLogs skips legacy mongo reads when mongo is not ready", asy
   assert.equal(storeMocks.tradeLogFind.mock.calls.length, 0);
 });
 
-test("listTradeLogs filters file logs, hides cron noise, and paginates descending results", async () => {
+test("listTradeLogs filters file logs, hides routine noise, and paginates descending results", async () => {
   setEnv({
     PROCESS_LOG_STORAGE: "file",
     PROCESS_LOG_DIR: "/tmp/copytrade-list",
@@ -597,6 +598,30 @@ test("listTradeLogs filters file logs, hides cron noise, and paginates descendin
         type: "executor",
         action: "BUY",
         createdAt: "2026-01-02T00:00:00.000Z",
+      }),
+      JSON.stringify({
+        _id: "noise-console",
+        accountId: "acc-1",
+        processId: null,
+        type: "executor_console",
+        action: "console_info",
+        details: "📭 No new messages to process",
+        level: "debug",
+        result: "info",
+        createdAt: "2026-01-02T12:00:00.000Z",
+      }),
+      JSON.stringify({
+        _id: "noise-monitor",
+        accountId: "acc-1",
+        processId: "proc-1",
+        type: "tpsl-monitor",
+        action: "pending_limit_still_live",
+        symbol: "BTCUSDT",
+        details:
+          "⏳ [TP/SL Monitor] Pending order still live: BTCUSDT LONG (Order 123 is still open on exchange)",
+        level: "debug",
+        result: "info",
+        createdAt: "2026-01-02T18:00:00.000Z",
       }),
       "{bad json}",
       JSON.stringify({
@@ -1143,6 +1168,69 @@ test("isNoisyTradeLog detects cron noise and structured JSON payloads", () => {
       type: "executor",
       action: "BUY",
       details: "{broken}",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    }),
+    false,
+  );
+});
+
+test("isHiddenByDefaultTradeLog detects routine executor, monitor, and agent noise", () => {
+  assert.equal(
+    isHiddenByDefaultTradeLog({
+      _id: "executor-noise",
+      type: "executor_console",
+      action: "console_info",
+      details: "📭 No new messages to process",
+      level: "debug",
+      result: "info",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    }),
+    true,
+  );
+  assert.equal(
+    isHiddenByDefaultTradeLog({
+      _id: "monitor-noise",
+      type: "tpsl-monitor",
+      action: "pending_limit_still_live",
+      symbol: "BTCUSDT",
+      details:
+        "⏳ [TP/SL Monitor] Pending order still live: BTCUSDT LONG (Order 123 is still open on exchange)",
+      level: "debug",
+      result: "info",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    }),
+    true,
+  );
+  assert.equal(
+    isHiddenByDefaultTradeLog({
+      _id: "monitor-start-noise",
+      type: "monitor",
+      action: "monitor_started",
+      details: "📊 Monitoring 0 open positions",
+      level: "debug",
+      result: "info",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    }),
+    true,
+  );
+  assert.equal(
+    isHiddenByDefaultTradeLog({
+      _id: "agent-noise",
+      type: "agent_turn",
+      action: "model_stream_started",
+      level: "debug",
+      result: "processing",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    }),
+    true,
+  );
+  assert.equal(
+    isHiddenByDefaultTradeLog({
+      _id: "useful-summary",
+      type: "tpsl-monitor",
+      action: "tpsl_monitor_completed",
+      details: "✅ [TP/SL Monitor] Complete: 1 checked, 1 promoted, 1 TP/SL placed, 5 already OK",
+      result: "info",
       createdAt: "2026-01-01T00:00:00.000Z",
     }),
     false,

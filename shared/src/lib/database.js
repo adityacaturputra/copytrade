@@ -187,10 +187,12 @@ const TradeLogSchema = new mongoose_1.Schema({
     action: { type: String, required: true },
     symbol: { type: String, default: null },
     details: { type: String, default: null },
+    level: { type: String, default: null },
     result: { type: String, default: null },
     error: { type: String, default: null },
 }, { timestamps: { createdAt: "createdAt", updatedAt: false } });
 TradeLogSchema.index({ type: 1 });
+TradeLogSchema.index({ level: 1, createdAt: -1 });
 TradeLogSchema.index({ processId: 1, createdAt: 1 });
 TradeLogSchema.index({ createdAt: -1 });
 const DraftTradeSchema = new mongoose_1.Schema({
