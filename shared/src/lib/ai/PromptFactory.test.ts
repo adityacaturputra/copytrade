@@ -64,6 +64,10 @@ test("position analysis prompt and user message include management rules and ser
   } as never);
 
   assert.match(prompt, /Take partial profits at key levels/i);
+  assert.match(
+    prompt,
+    /do NOT close just because price is near SL or briefly wicks into it/i,
+  );
   assert.match(prompt, /If PNL is positive >10%, recommend .* breakeven/i);
   assert.match(prompt, /If Discord context clearly says cancel\/close\/exit the trade/i);
 

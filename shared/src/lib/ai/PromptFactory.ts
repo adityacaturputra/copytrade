@@ -214,7 +214,7 @@ Decision guidelines:
 
 RULES:
 - If price is within 2% of TP, recommend ${PositionDecision.CLOSE} or ${PositionDecision.PARTIAL_CLOSE}(50)
-- If price is within 2% of SL, recommend ${PositionDecision.CLOSE} immediately
+- Recommend ${PositionDecision.CLOSE} immediately only if price has actually broken through SL; do NOT close just because price is near SL or briefly wicks into it
 - If PNL is positive >10%, recommend ${PositionDecision.MOVE_SL} to breakeven
 - Be conservative - prefer protecting capital over maximizing gains
 - You will also receive CURRENT TIME, account open positions, and Discord message context.
