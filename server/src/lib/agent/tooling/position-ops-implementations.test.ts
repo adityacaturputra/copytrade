@@ -22,6 +22,7 @@ const positionOpsMocks = vi.hoisted(() => ({
   normalizeSortOrder: vi.fn(),
   normalizeSourceType: vi.fn(),
   parseOptionalString: vi.fn(),
+  resolveExchangeContext: vi.fn(),
   roundPrice: vi.fn(),
   serializeSourceMessages: vi.fn(),
   toClosingSide: vi.fn(),
@@ -83,6 +84,7 @@ vi.mock("./shared", () => ({
   normalizeSortOrder: positionOpsMocks.normalizeSortOrder,
   normalizeSourceType: positionOpsMocks.normalizeSourceType,
   parseOptionalString: positionOpsMocks.parseOptionalString,
+  resolveExchangeContext: positionOpsMocks.resolveExchangeContext,
   roundPrice: positionOpsMocks.roundPrice,
   serializeSourceMessages: positionOpsMocks.serializeSourceMessages,
   toClosingSide: positionOpsMocks.toClosingSide,
@@ -103,10 +105,12 @@ function createQuery(result: unknown) {
   return query;
 }
 
-function createPositionDoc(overrides: Record<string, unknown> = {}) {
-  const doc: Record<string, unknown> & { save: ReturnType<typeof vi.fn> } = {
+function createPositionDoc(overrides: Record<string, unknown> = {}): any {
+  const doc: any = {
     _id: "pos-1",
     status: "open",
+    side: "LONG",
+    symbol: "BTCUSDT",
     quantity: 2,
     entryPrice: 100,
     currentPrice: 100,
@@ -114,6 +118,9 @@ function createPositionDoc(overrides: Record<string, unknown> = {}) {
     stopLossPrice: 95,
     takeProfitTargets: [{ price: 120, quantity: 2, percentage: 100, status: "pending" }],
     save: vi.fn(),
+    toObject() {
+      return this;
+    },
   };
   Object.assign(doc, overrides);
   doc.save.mockResolvedValue(doc);
@@ -168,6 +175,7 @@ beforeEach(() => {
   positionOpsMocks.roundPrice.mockImplementation((value: number) =>
     Math.round(value * 100) / 100,
   );
+  positionOpsMocks.resolveExchangeContext.mockReset();
   positionOpsMocks.serializeSourceMessages.mockImplementation((messages) => messages);
   positionOpsMocks.toClosingSide.mockImplementation((side) =>
     side === "LONG" ? "SELL" : "BUY",
@@ -210,6 +218,144 @@ test("position ops analyzes position context and returns AI input plus live snap
   assert.equal(result.processId, "proc-persisted");
   assert.equal(result.analysis.decision, "MOVE_SL");
   assert.equal(positionOpsMocks.logProcessStep.mock.calls[0][0].action, "analyze_position_context");
+});
+
+test("position ops exposes live protection state and mismatch details", async () => {
+  const exchange = {
+    getAlgoOrders: vi.fn().mockResolvedValue([
+      {
+        orderId: "sl-live",
+        symbol: "BTCUSDT",
+        side: "SELL",
+        type: "sl",
+        triggerPrice: 95,
+        quantity: 2,
+        status: "active",
+      },
+      {
+        orderId: "tp-live-extra",
+        symbol: "BTCUSDT",
+        side: "SELL",
+        type: "tp",
+        triggerPrice: 130,
+        quantity: 2,
+        status: "active",
+      },
+    ]),
+  };
+
+  positionOpsMocks.findPositionRecord.mockResolvedValue({
+    _id: { toString: () => "pos-prot" },
+    accountId: "acc-1",
+    symbol: "BTCUSDT",
+    side: "LONG",
+    quantity: 2,
+    takeProfitTargets: [{ price: 120, quantity: 2, percentage: 100, status: "pending" }],
+    stopLossPrice: 95,
+  });
+  positionOpsMocks.positionFindById.mockReturnValue(
+    createQuery(
+      createPositionDoc({
+        _id: "pos-prot",
+        quantity: 2,
+        stopLossPrice: 95,
+        takeProfitTargets: [{ price: 120, quantity: 2, percentage: 100, status: "pending" }],
+      }),
+    ),
+  );
+  positionOpsMocks.getLivePositionSnapshot.mockResolvedValue({
+    exchange,
+    currentPrice: 110,
+    pnlPercent: 10,
+    exchangePosition: { symbol: "BTCUSDT", quantity: 2 },
+  });
+
+  const result = JSON.parse(
+    await positionOpsToolImplementations.get_position_protection({
+      positionId: "pos-prot",
+    }),
+  );
+
+  assert.equal(result.success, true);
+  assert.equal(result.protection.missingLiveStopLoss, false);
+  assert.equal(result.protection.missingLiveTakeProfits.length, 1);
+  assert.equal(result.protection.extraLiveTakeProfitOrders.length, 1);
+  assert.equal(positionOpsMocks.logProcessStep.mock.calls.at(-1)?.[0]?.action, "get_position_protection");
+});
+
+test("position ops adjusts stop loss and replaces the take-profit ladder", async () => {
+  const exchange = {
+    getAlgoOrders: vi.fn().mockResolvedValue([]),
+    placeStopLoss: vi.fn().mockResolvedValue("new-sl"),
+    placeTakeProfit: vi
+      .fn()
+      .mockResolvedValueOnce("tp-1")
+      .mockResolvedValueOnce("tp-2"),
+  };
+  const positionDoc = createPositionDoc({
+    _id: "pos-adjust",
+    quantity: 2,
+    side: "LONG",
+    stopLossPrice: 95,
+    takeProfitTargets: [{ price: 120, quantity: 2, percentage: 100, status: "pending" }],
+  });
+
+  positionOpsMocks.findPositionRecord.mockResolvedValue({
+    _id: { toString: () => "pos-adjust" },
+    accountId: "acc-1",
+    symbol: "BTCUSDT",
+    side: "LONG",
+    quantity: 2,
+    stopLossPrice: 95,
+    takeProfitTargets: [{ price: 120, quantity: 2, percentage: 100, status: "pending" }],
+  });
+  positionOpsMocks.positionFindById.mockReturnValue(createQuery(positionDoc));
+  positionOpsMocks.getLivePositionSnapshot.mockResolvedValue({
+    exchange,
+    currentPrice: 112,
+    pnlPercent: 12,
+    exchangePosition: { symbol: "BTCUSDT", quantity: 2 },
+  });
+
+  const result = JSON.parse(
+    await positionOpsToolImplementations.adjust_position_protection({
+      positionId: "pos-adjust",
+      stopLossPrice: 100.123,
+      takeProfits: [
+        { price: 125, percentage: 50 },
+        { price: 130, percentage: 50 },
+      ],
+    }),
+  );
+
+  assert.equal(result.success, true);
+  assert.equal(positionDoc.stopLossPrice, 100.12);
+  assert.equal(positionDoc.takeProfitTargets.length, 2);
+  assert.deepEqual(positionOpsMocks.cancelAlgoOrdersByTypes.mock.calls[0], [
+    exchange,
+    "BTCUSDT",
+    ["sl"],
+  ]);
+  assert.deepEqual(positionOpsMocks.cancelAlgoOrdersByTypes.mock.calls[1], [
+    exchange,
+    "BTCUSDT",
+    ["tp"],
+  ]);
+  assert.deepEqual(exchange.placeStopLoss.mock.calls[0], [
+    "BTCUSDT",
+    100.12,
+    100.12,
+    "SELL",
+    2,
+  ]);
+  assert.deepEqual(exchange.placeTakeProfit.mock.calls[0], [
+    "BTCUSDT",
+    125,
+    125,
+    "SELL",
+    1,
+  ]);
+  assert.equal(positionOpsMocks.logProcessStep.mock.calls.at(-1)?.[0]?.action, "adjust_position_protection");
 });
 
 test("position ops manage_position supports close and stop-loss updates", async () => {
@@ -415,6 +561,66 @@ test("position ops get_process_logs validates process id and syncs positions wit
   assert.equal(syncedClosed.syncedStatus, "closed");
   assert.equal(closedDoc.status, "closed");
   assert.equal(positionOpsMocks.logProcessStep.mock.calls.at(-1)?.[0]?.action, "sync_position_with_exchange");
+});
+
+test("position ops cleans orphan protection orders only for symbols without tracked or live activity", async () => {
+  const exchange = {
+    getAlgoOrders: vi.fn().mockResolvedValue([
+      {
+        orderId: "algo-stale",
+        symbol: "DOGEUSDT",
+        side: "SELL",
+        type: "tp",
+        triggerPrice: 0.2,
+        quantity: 1000,
+        status: "NEW",
+      },
+      {
+        orderId: "algo-active",
+        symbol: "BTCUSDT",
+        side: "SELL",
+        type: "sl",
+        triggerPrice: 95,
+        quantity: 1,
+        status: "NEW",
+      },
+    ]),
+    getOpenOrders: vi.fn().mockResolvedValue([]),
+    getOpenPositions: vi.fn().mockResolvedValue([{ symbol: "BTCUSDT" }]),
+    cancelAlgoOrders: vi.fn().mockResolvedValue({
+      cancelled: ["algo-stale"],
+      errors: [],
+    }),
+  };
+
+  positionOpsMocks.resolveExchangeContext.mockResolvedValue({
+    exchange,
+    accountId: "acc-1",
+    accountName: "VIP",
+    provider: "bybit",
+  });
+  positionOpsMocks.positionFind.mockReturnValue(
+    createQuery([{ symbol: "BTCUSDT", status: "open" }]),
+  );
+
+  const preview = JSON.parse(
+    await positionOpsToolImplementations.cleanup_orphan_protection_orders({
+      accountId: "acc-1",
+    }),
+  );
+  const applied = JSON.parse(
+    await positionOpsToolImplementations.cleanup_orphan_protection_orders({
+      accountId: "acc-1",
+      dryRun: false,
+    }),
+  );
+
+  assert.equal(preview.orphanCandidates.length, 1);
+  assert.equal(preview.orphanCandidates[0].symbol, "DOGEUSDT");
+  assert.equal(applied.cleanupResults.length, 1);
+  assert.equal(applied.cleanupResults[0].symbol, "DOGEUSDT");
+  assert.equal(exchange.cancelAlgoOrders.mock.calls.length, 1);
+  assert.equal(positionOpsMocks.logProcessStep.mock.calls.at(-1)?.[0]?.action, "cleanup_orphan_protection_orders");
 });
 
 test("position ops manage_position covers partial close, breakeven, trailing stop, take-profit updates, cancel orders, and validation errors", async () => {

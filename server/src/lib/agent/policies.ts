@@ -44,6 +44,7 @@ export const agentToolPolicies: Record<string, AgentToolPolicy> = {
   get_telegram_sources: READ_ONLY_POLICY,
   check_telegram_source_health: READ_ONLY_POLICY,
   analyze_position_context: READ_ONLY_POLICY,
+  get_position_protection: READ_ONLY_POLICY,
   review_signal_thread: READ_ONLY_POLICY,
   get_process_logs: READ_ONLY_POLICY,
   get_stats: READ_ONLY_POLICY,
@@ -67,6 +68,8 @@ export const agentToolPolicies: Record<string, AgentToolPolicy> = {
   accept_draft: OPERATOR_MUTATING_POLICY,
   reject_draft: OPERATOR_MUTATING_POLICY,
   manage_position: OPERATOR_MUTATING_POLICY,
+  adjust_position_protection: OPERATOR_MUTATING_POLICY,
+  cleanup_orphan_protection_orders: OPERATOR_MUTATING_POLICY,
   sync_position_with_exchange: OPERATOR_MUTATING_POLICY,
 
   close_all_positions: ADMIN_MUTATING_POLICY,

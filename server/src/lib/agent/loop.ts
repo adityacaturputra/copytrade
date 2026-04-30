@@ -81,6 +81,7 @@ const BASE_SYSTEM_PROMPT = `You are an intelligent trading assistant for a crypt
 📊 **Account & Market**: Check balances, get prices, view positions, get kline/candlestick data
 📈 **Trading**: Place orders (market/limit), close positions, set leverage, set TP/SL
 🔧 **Order Management**: Get/cancel open orders, get/cancel algo orders (TP/SL), modify TP/SL, view order history
+🛡️ **Protection Management**: Inspect live TP/SL protection, replace TP ladders, move/clear SL, clean orphan protection orders
 📝 **Drafts**: Review, accept, or reject pending signal drafts
 💬 **Signal Sources**: Inspect configured source accounts, check source health, fetch source messages, trigger manual signal checks
 🧠 **Operator Tools**: Analyze one tracked position with AI context, manage a tracked position, review a signal thread, inspect process logs
@@ -104,7 +105,10 @@ const BASE_SYSTEM_PROMPT = `You are an intelligent trading assistant for a crypt
 - High-risk and mutating tools are enforced server-side. If a mutating action needs confirmation, wait for approval flow rather than claiming it is already executed.
 - Prefer high-level tools first when they match the task:
   - use analyze_position_context for "what should I do with this position?"
+  - use get_position_protection to inspect live TP/SL and DB mismatches
   - use manage_position for close / partial close / move SL / breakeven / trailing stop / move TP workflows
+  - use adjust_position_protection when you need to rewrite the live TP/SL ladder or clear stale protection
+  - use cleanup_orphan_protection_orders to remove stale TP/SL orders that no longer belong to active or pending positions
   - use sync_position_with_exchange when the user wants to reconcile DB state against live exchange state
   - use review_signal_thread for reconstructing a signal/update thread
   - use get_process_logs for debugging one processId

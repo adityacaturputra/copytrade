@@ -1,6 +1,5 @@
 import { Router, Request, Response, type Router as ExpressRouter } from "express";
 import { runSignalCheck } from "@copytrade/shared/lib/executor";
-import { runPositionMonitor } from "@copytrade/shared/lib/monitor";
 import { runTpslMonitor } from "@copytrade/shared/lib/tp-sl-monitor";
 import { connectDB } from "@copytrade/shared/lib/database";
 import {
@@ -11,6 +10,7 @@ import {
   getAllCronStatus,
 } from "@copytrade/shared/lib/cron-status";
 import { createTradeLog } from "@copytrade/shared/lib/trade-log-store";
+import { runPositionMonitorAgent } from "../lib/agent/position-monitor-agent";
 
 const router: ExpressRouter = Router();
 let loggedCronAuthMode = false;
@@ -165,7 +165,7 @@ async function runPositionMonitorWork() {
     });
 
     updateProgress(POSITION_MONITOR_NAME, "Running position monitor...");
-    const result = await runPositionMonitor();
+    const result = await runPositionMonitorAgent();
 
     updateProgress(
       POSITION_MONITOR_NAME,

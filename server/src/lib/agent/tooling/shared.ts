@@ -53,6 +53,7 @@ export type PositionRecord = {
     quantity: number;
     percentage: number;
     status?: string;
+    orderId?: string | null;
   }>;
   stopLossPrice?: number;
   orderId?: string | null;
