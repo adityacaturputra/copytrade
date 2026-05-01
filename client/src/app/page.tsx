@@ -187,6 +187,7 @@ interface DashboardData {
 export default function Dashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadingExchange, setLoadingExchange] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<
     "positions" | "drafts" | "signals" | "logs"
@@ -204,6 +205,32 @@ export default function Dashboard() {
   const [refreshKey, setRefreshKey] = useState(0);
   const prevCronRunning = useRef<Record<string, boolean>>({});
 
+  const fetchExchangeData = useCallback(async () => {
+    setLoadingExchange(true);
+    try {
+      const res = await fetch("/api/dashboard/exchange");
+      const json = await res.json();
+      if (json.success) {
+        setData((prev) => {
+          if (!prev) return json.data;
+          return {
+            ...prev,
+            accounts: json.data.accounts,
+            openPositions: json.data.openPositions,
+            stats: json.data.stats,
+            account: json.data.account,
+            exchangeProvider: json.data.exchangeProvider,
+            exchangeError: json.data.exchangeError,
+          };
+        });
+      }
+    } catch (err) {
+      console.error("Failed to fetch exchange data", err);
+    } finally {
+      setLoadingExchange(false);
+    }
+  }, []);
+
   const fetchData = useCallback(async () => {
     try {
       const res = await fetch("/api/dashboard");
@@ -211,6 +238,8 @@ export default function Dashboard() {
       if (json.success) {
         setData(json.data);
         setError(null);
+        // Kick off the exchange fetch after core data loads
+        fetchExchangeData();
       } else {
         setError(json.error || "Failed to load data");
       }
@@ -219,7 +248,7 @@ export default function Dashboard() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [fetchExchangeData]);
 
   // Poll cron status
   const fetchCronStatus = useCallback(async () => {
@@ -238,7 +267,9 @@ export default function Dashboard() {
   useEffect(() => {
     fetchData();
     fetchCronStatus();
-    const interval = setInterval(fetchData, 30000);
+    const interval = setInterval(() => {
+      fetchData();
+    }, 30000);
     const cronInterval = setInterval(fetchCronStatus, 2000);
     return () => {
       clearInterval(interval);
@@ -366,16 +397,7 @@ export default function Dashboard() {
     }
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="text-center">
-          <div className="spinner mx-auto mb-4" />
-          <p className="text-slate-400">Loading dashboard...</p>
-        </div>
-      </div>
-    );
-  }
+  // We no longer block the entire page on load so the header can render instantly.
 
   if (error && !data) {
     return (
@@ -486,8 +508,9 @@ export default function Dashboard() {
             <div className="flex items-center gap-2 sm:gap-3">
               <div className="text-xl sm:text-2xl">📈</div>
               <div>
-                <h1 className="text-lg sm:text-xl font-bold text-white">
+                <h1 className="text-lg sm:text-xl font-bold text-white flex items-center gap-2">
                   CopyTrade
+                  {loading && <div className="spinner w-4 h-4 border-2" />}
                 </h1>
                 <p className="text-[10px] sm:text-xs text-slate-400 hidden sm:block">
                   AI-Powered Discord Signal Copier
@@ -694,8 +717,11 @@ export default function Dashboard() {
                 />
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                    <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400 flex items-center gap-2">
                       Exchange Overview
+                      {loadingExchange && (
+                        <div className="spinner w-3 h-3 border-2" title="Syncing with exchange..." />
+                      )}
                     </span>
                     <span className="rounded-full border border-slate-700 bg-slate-900/70 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-200">
                       {exchangeHeaderLabel}
@@ -776,7 +802,12 @@ export default function Dashboard() {
                       )}
                     </div>
 
-                    {account.account ? (
+                    {loadingExchange && !account.account ? (
+                      <div className="mt-4 rounded-lg bg-slate-900/30 border border-slate-800 px-4 py-3 flex items-center gap-3">
+                        <div className="spinner w-4 h-4 border-2" />
+                        <span className="text-sm text-slate-400">Loading exchange data...</span>
+                      </div>
+                    ) : account.account ? (
                       <div className="mt-4 grid gap-2 sm:grid-cols-3">
                         <div className="rounded-lg bg-slate-900/70 px-3 py-2">
                           <div className="text-[11px] uppercase tracking-wide text-slate-500">
@@ -827,6 +858,11 @@ export default function Dashboard() {
                     )}
                   </div>
                 ))}
+              </div>
+            ) : loadingExchange && !displayAccountInfo ? (
+              <div className="rounded-xl border border-slate-700/70 bg-slate-950/40 p-6 flex flex-col items-center justify-center gap-3">
+                <div className="spinner w-6 h-6 border-2" />
+                <span className="text-sm text-slate-400">Loading exchange account...</span>
               </div>
             ) : displayAccountInfo ? (
               <div className="rounded-xl border border-slate-700/70 bg-slate-950/40 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
@@ -958,6 +994,9 @@ export default function Dashboard() {
             <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
               <span className="w-2 h-2 bg-success rounded-full pulse-dot" />
               Active Positions ({openPositions.length})
+              {loadingExchange && (
+                <div className="spinner w-3 h-3 border-2 ml-2" title="Syncing PnL..." />
+              )}
             </h2>
             <div className="overflow-x-auto">
               <table className="data-table">
