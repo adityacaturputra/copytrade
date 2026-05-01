@@ -1414,13 +1414,17 @@ function ProcessLogsAccordion({
   accountId,
   symbol,
   refreshKey,
+  defaultOpen = false,
+  hideHeader = false,
 }: {
   processId?: string;
   accountId?: string;
   symbol?: string;
   refreshKey: number;
+  defaultOpen?: boolean;
+  hideHeader?: boolean;
 }) {
-  const [isOpen, setIsOpen] = useState(false);
+  const [isOpen, setIsOpen] = useState(defaultOpen);
   const [logs, setLogs] = useState<Log[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1553,35 +1557,37 @@ function ProcessLogsAccordion({
   };
 
   return (
-    <div className="mt-3 rounded-lg border border-slate-700/70 bg-slate-900/30">
-      <button
-        onClick={() => setIsOpen((value) => !value)}
-        className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left text-sm"
-      >
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="text-slate-300">{isOpen ? "▼" : "▶"}</span>
-          <span className="font-medium text-slate-200">Process Logs</span>
-          {processId ? (
-            <span className="truncate rounded bg-slate-800 px-2 py-0.5 font-mono text-[10px] text-slate-400">
-              {processId}
-            </span>
-          ) : symbol ? (
-            <span className="rounded bg-slate-800 px-2 py-0.5 text-[10px] text-slate-500 font-mono">
-              {symbol}
-            </span>
-          ) : (
-            <span className="rounded bg-slate-800 px-2 py-0.5 text-[10px] text-slate-500">
-              legacy
-            </span>
-          )}
-        </div>
-        <span className="text-xs text-slate-500">
-          {totalCount} logs
-        </span>
-      </button>
+    <div className={hideHeader ? "" : "mt-3 rounded-lg border border-slate-700/70 bg-slate-900/30"}>
+      {!hideHeader && (
+        <button
+          onClick={() => setIsOpen((value) => !value)}
+          className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left text-sm"
+        >
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="text-slate-300">{isOpen ? "▼" : "▶"}</span>
+            <span className="font-medium text-slate-200">Process Logs</span>
+            {processId ? (
+              <span className="truncate rounded bg-slate-800 px-2 py-0.5 font-mono text-[10px] text-slate-400">
+                {processId}
+              </span>
+            ) : symbol ? (
+              <span className="rounded bg-slate-800 px-2 py-0.5 text-[10px] text-slate-500 font-mono">
+                {symbol}
+              </span>
+            ) : (
+              <span className="rounded bg-slate-800 px-2 py-0.5 text-[10px] text-slate-500">
+                legacy
+              </span>
+            )}
+          </div>
+          <span className="text-xs text-slate-500">
+            {totalCount} logs
+          </span>
+        </button>
+      )}
 
-      {isOpen && (
-        <div className="border-t border-slate-700/70 px-3 py-3">
+      {(isOpen || hideHeader) && (
+        <div className={hideHeader ? "py-2" : "border-t border-slate-700/70 px-3 py-3"}>
           {!(processId || symbol) ? (
             <p className="text-xs text-slate-500">
               Entitas ini belum memiliki identifier log yang valid, jadi timeline proses belum
@@ -2639,6 +2645,7 @@ function PositionsTab({
     closed: 0,
     pending: 0,
   });
+  const [expandedPosId, setExpandedPosId] = useState<string | null>(null);
 
   const fetchStatusCounts = useCallback(async () => {
     try {
@@ -2722,7 +2729,7 @@ function PositionsTab({
   return (
     <div>
       {/* Open / Closed sub-tabs + Refresh */}
-      <div className="flex items-center gap-2 border-b border-slate-700 mb-4">
+      <div className="flex flex-wrap items-center gap-2 border-b border-slate-700 mb-4 pb-2">
         <button
           onClick={() => setPositionFilter("open")}
           className={`px-4 py-2 text-xs sm:text-sm font-medium border-b-2 transition flex items-center gap-1.5 whitespace-nowrap ${
@@ -2826,6 +2833,7 @@ function PositionsTab({
                 {positionFilter === "pending" && <th>Status</th>}
                 <th>Opened</th>
                 {positionFilter === "closed" && <th>Closed</th>}
+                <th className="text-right">Logs</th>
               </tr>
             </thead>
             <tbody>
@@ -2855,8 +2863,15 @@ function PositionsTab({
                       {pos.pnl?.toFixed(2) || "0.00"}
                     </td>
                     {positionFilter === "closed" && (
-                      <td className="text-xs text-slate-400">
-                        {pos.closeReason || "-"}
+                      <td className="text-xs text-slate-400 relative group cursor-help">
+                        <span className="max-w-[120px] truncate block">
+                          {pos.closeReason || "-"}
+                        </span>
+                        {pos.closeReason && (
+                          <div className="absolute z-[100] hidden group-hover:block bg-slate-800 text-slate-200 text-[10px] p-2 rounded-lg border border-slate-600 shadow-2xl min-w-[200px] bottom-full left-0 mb-1 pointer-events-none whitespace-normal leading-relaxed">
+                            {pos.closeReason}
+                          </div>
+                        )}
                       </td>
                     )}
                     {positionFilter === "pending" && (
@@ -2877,17 +2892,41 @@ function PositionsTab({
                           : "-"}
                       </td>
                     )}
-                  </tr>
-                  <tr>
-                    <td colSpan={100} className="p-0 border-none bg-slate-900/10">
-                      <div className="px-4 pb-3">
-                        <ProcessLogsAccordion
-                          processId={pos.processId}
-                          refreshKey={refreshKey}
-                        />
-                      </div>
+                    <td className="text-right">
+                      <button
+                        onClick={() =>
+                          setExpandedPosId(
+                            expandedPosId === (pos._id || String(pos.id))
+                              ? null
+                              : pos._id || String(pos.id),
+                          )
+                        }
+                        className={`text-[10px] px-2 py-1 rounded transition-colors ${
+                          expandedPosId === (pos._id || String(pos.id))
+                            ? "bg-slate-700 text-white"
+                            : "bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200"
+                        }`}
+                      >
+                        {expandedPosId === (pos._id || String(pos.id))
+                          ? "▼ Hide"
+                          : "▶ Logs"}
+                      </button>
                     </td>
                   </tr>
+                  {expandedPosId === (pos._id || String(pos.id)) && (
+                    <tr>
+                      <td colSpan={100} className="p-0 border-none bg-slate-900/10">
+                        <div className="px-4 py-2">
+                          <ProcessLogsAccordion
+                            processId={pos.processId}
+                            refreshKey={refreshKey}
+                            hideHeader={true}
+                            defaultOpen={true}
+                          />
+                        </div>
+                      </td>
+                    </tr>
+                  )}
                 </Fragment>
               ))}
             </tbody>
