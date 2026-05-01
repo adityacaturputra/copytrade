@@ -2954,24 +2954,6 @@ function LogsTab({
     setPage(1);
   }, [hideCronNoise, selectedLevels, pageSize, channelIdFilter, accountIdFilter]);
 
-  if (loading && logs.length === 0) {
-    return (
-      <div className="text-center py-8 text-slate-400">
-        <div className="spinner mx-auto mb-3" />
-        <p>Loading logs...</p>
-      </div>
-    );
-  }
-
-  if (!loading && totalCount === 0) {
-    return (
-      <div className="text-center py-8 text-slate-400">
-        <div className="text-4xl mb-2">📝</div>
-        <p>No activity logs yet.</p>
-      </div>
-    );
-  }
-
   return (
     <div>
       {/* Filter bar */}
@@ -3041,13 +3023,25 @@ function LogsTab({
 
       {/* Log entries */}
       <div className="space-y-2 max-h-[500px] overflow-y-auto">
-        {loading && (
-          <div className="flex items-center justify-center py-2">
-            <div className="spinner w-4 h-4 border-2" />
+        {loading && logs.length === 0 ? (
+          <div className="text-center py-8 text-slate-400">
+            <div className="spinner mx-auto mb-3" />
+            <p>Loading logs...</p>
           </div>
-        )}
-        {logs.map((log) => (
-          <div
+        ) : !loading && totalCount === 0 ? (
+          <div className="text-center py-8 text-slate-400">
+            <div className="text-4xl mb-2">📝</div>
+            <p>No activity logs yet.</p>
+          </div>
+        ) : (
+          <>
+            {loading && (
+              <div className="flex items-center justify-center py-2">
+                <div className="spinner w-4 h-4 border-2" />
+              </div>
+            )}
+            {logs.map((log) => (
+              <div
             key={log._id || log.id}
             className={`border rounded-lg p-3 text-sm ${log.error ? "border-red-900/50 bg-red-950/20" : "border-slate-700"}`}
           >
@@ -3084,6 +3078,8 @@ function LogsTab({
             )}
           </div>
         ))}
+        </>
+        )}
       </div>
 
       <PaginationBar
