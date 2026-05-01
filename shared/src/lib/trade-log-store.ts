@@ -35,6 +35,7 @@ export interface TradeLogListOptions {
   limit?: number;
   accountId?: string | null;
   processId?: string | null;
+  symbol?: string | null;
   levels?: string[] | null;
   hideCronNoise?: boolean;
   order?: "asc" | "desc";
@@ -429,6 +430,10 @@ function applyLogFilters(
       return false;
     }
 
+    if (options.symbol && log.symbol !== options.symbol) {
+      return false;
+    }
+
     if (options.levels?.length) {
       const matchLevel = (log.level || log.result || "").toLowerCase();
       if (!options.levels.map(l => l.toLowerCase()).includes(matchLevel)) {
@@ -627,6 +632,7 @@ export async function listTradeLogs(
 
     if (options.accountId) params.set("accountId", options.accountId);
     if (options.processId) params.set("processId", options.processId);
+    if (options.symbol) params.set("symbol", options.symbol);
     if (options.levels?.length) params.set("levels", options.levels.join(","));
 
     return fetchRemoteLogs<TradeLogListResult>(`/api/logs?${params.toString()}`);

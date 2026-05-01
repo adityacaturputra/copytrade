@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, Fragment } from "react";
 import { calculateRisk } from "@copytrade/shared/lib/risk-calc";
 import { autoCalculateTPFromRR } from "@copytrade/shared/lib/executor-signal-utils";
 import { buildBackendApiUrl } from "../lib/backend-url";
@@ -34,6 +34,7 @@ interface Position {
   openedAt: string;
   closedAt?: string;
   closeReason?: string;
+  processId?: string;
 }
 
 interface Message {
@@ -1410,51 +1411,146 @@ function renderStructuredLogDetails(details?: string) {
 
 function ProcessLogsAccordion({
   processId,
+  accountId,
+  symbol,
   refreshKey,
 }: {
   processId?: string;
+  accountId?: string;
+  symbol?: string;
   refreshKey: number;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [logs, setLogs] = useState<Log[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [loadedProcessId, setLoadedProcessId] = useState<string | null>(null);
+
+  // New states for terminal UI
+  const [hideCronNoise, setHideCronNoise] = useState(true);
+  const [selectedLevels, setSelectedLevels] = useState<string[]>([]);
+  const [page, setPage] = useState(1);
+  const [pageSize] = useState(100);
+  const [totalCount, setTotalCount] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
+
+  const observerTarget = useRef<HTMLDivElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const fetchProcessLogs = useCallback(async () => {
-    if (!processId) return;
+    if (!processId && !symbol) return; // Need at least one
+
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
     setLoading(true);
     setError(null);
 
     try {
+      const shouldHideRoutineNoise =
+        hideCronNoise && !selectedLevels.includes("debug");
       const params = new URLSearchParams({
-        processId,
-        page: "1",
-        limit: "200",
-        hideCronNoise: "false",
-        order: "desc",
+        page: String(page),
+        limit: String(pageSize),
+        hideCronNoise: String(shouldHideRoutineNoise),
+        order: "desc", // Latest first, will be flipped by flex-col-reverse
       });
-
-      const res = await fetch(`/api/logs?${params}`);
-      const json = await res.json();
-      if (!json.success) {
-        throw new Error(json.error || "Failed to load process logs");
+      
+      if (processId) params.set("processId", processId);
+      if (accountId) params.set("accountId", accountId);
+      if (symbol) params.set("symbol", symbol);
+      if (selectedLevels.length > 0) {
+        params.set("levels", selectedLevels.join(","));
       }
 
-      setLogs(json.data.logs || []);
-      setLoadedProcessId(processId);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load process logs");
+      const res = await fetch(`/api/logs?${params}`, { signal: controller.signal });
+      const json = await res.json();
+      
+      if (!controller.signal.aborted) {
+        if (!json.success) {
+          throw new Error(json.error || "Failed to load process logs");
+        }
+        setLogs((prev) => (page === 1 ? json.data.logs : [...prev, ...json.data.logs]));
+        setTotalCount(json.data.totalCount);
+        setTotalPages(json.data.totalPages);
+      }
+    } catch (err: any) {
+      if (err.name !== "AbortError") {
+        setError(err instanceof Error ? err.message : "Failed to load process logs");
+      }
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) {
+        setLoading(false);
+      }
     }
-  }, [processId]);
+  }, [processId, accountId, symbol, page, pageSize, hideCronNoise, selectedLevels]);
 
+  // Fetch when opened
   useEffect(() => {
-    if (!isOpen || !processId) return;
+    if (!isOpen) return;
     fetchProcessLogs();
-  }, [isOpen, processId, refreshKey, fetchProcessLogs]);
+  }, [isOpen, fetchProcessLogs]);
+
+  // Reset and fetch when refreshKey changes (if open)
+  useEffect(() => {
+    if (!isOpen) return;
+    setLogs([]);
+    setPage(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey]);
+
+  // Reset when filters change
+  useEffect(() => {
+    if (!isOpen) return;
+    setLogs([]);
+    setPage(1);
+  }, [hideCronNoise, selectedLevels, pageSize, isOpen]);
+
+  // Infinite scroll observer
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && !loading && page < totalPages) {
+          setPage((prev) => prev + 1);
+        }
+      },
+      { threshold: 0.1 }
+    );
+
+    const currentTarget = observerTarget.current;
+    if (currentTarget) {
+      observer.observe(currentTarget);
+    }
+
+    return () => {
+      if (currentTarget) observer.unobserve(currentTarget);
+    };
+  }, [loading, page, totalPages]);
+
+  const getTerminalColor = (level: string) => {
+    switch (level.toLowerCase()) {
+      case "info":
+      case "executed":
+      case "started":
+        return "text-blue-400";
+      case "success":
+      case "updated":
+        return "text-emerald-400";
+      case "warning":
+      case "partial":
+        return "text-yellow-400";
+      case "error":
+      case "rejected":
+        return "text-red-400";
+      case "debug":
+      case "processing":
+        return "text-slate-500";
+      default:
+        return "text-slate-300";
+    }
+  };
 
   return (
     <div className="mt-3 rounded-lg border border-slate-700/70 bg-slate-900/30">
@@ -1469,112 +1565,149 @@ function ProcessLogsAccordion({
             <span className="truncate rounded bg-slate-800 px-2 py-0.5 font-mono text-[10px] text-slate-400">
               {processId}
             </span>
+          ) : symbol ? (
+            <span className="rounded bg-slate-800 px-2 py-0.5 text-[10px] text-slate-500 font-mono">
+              {symbol}
+            </span>
           ) : (
             <span className="rounded bg-slate-800 px-2 py-0.5 text-[10px] text-slate-500">
-              legacy draft
+              legacy
             </span>
           )}
         </div>
         <span className="text-xs text-slate-500">
-          {processId ? `${logs.length} logs` : "No processId"}
+          {totalCount} logs
         </span>
       </button>
 
       {isOpen && (
         <div className="border-t border-slate-700/70 px-3 py-3">
-          {!processId ? (
+          {!(processId || symbol) ? (
             <p className="text-xs text-slate-500">
-              Draft lama ini belum punya `processId`, jadi timeline proses belum
+              Entitas ini belum memiliki identifier log yang valid, jadi timeline proses belum
               bisa ditampilkan.
             </p>
           ) : (
             <>
-              <div className="mb-3 flex items-center justify-between">
-                <button
-                  onClick={() => fetchProcessLogs()}
-                  disabled={loading}
-                  className="rounded-lg border border-slate-700 px-2.5 py-1 text-xs text-slate-300 transition hover:bg-slate-800 disabled:opacity-40"
-                >
-                  Refresh
-                </button>
+              {/* Filter bar */}
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => { setLogs([]); setPage(1); fetchProcessLogs(); }}
+                    disabled={loading}
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-slate-700 text-slate-300 hover:bg-slate-700 disabled:opacity-40 transition"
+                  >
+                    🔄 Refresh
+                  </button>
+                  <button
+                    onClick={() => setHideCronNoise(!hideCronNoise)}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition border ${
+                      hideCronNoise
+                        ? "bg-slate-700 border-slate-600 text-slate-300 hover:bg-slate-600"
+                        : "bg-slate-800 border-slate-700 text-slate-500 hover:bg-slate-700"
+                    }`}
+                  >
+                    <span>{hideCronNoise ? "🙈" : "👁️"}</span>
+                    <span>Routine noise</span>
+                  </button>
+                </div>
               </div>
 
-              {loading && (
-                <div className="flex items-center gap-2 py-3 text-xs text-slate-400">
-                  <div className="spinner h-4 w-4 border-2" />
-                  Loading process logs...
-                </div>
-              )}
+              <div className="flex flex-wrap items-center gap-2 mb-3">
+                <button
+                  onClick={() => setSelectedLevels([])}
+                  className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg text-[10px] sm:text-xs font-medium transition border ${
+                    selectedLevels.length === 0
+                      ? "bg-primary-600/20 border-primary-500/40 text-primary-200"
+                      : "bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700"
+                  }`}
+                >
+                  All levels
+                </button>
+                {LOG_LEVEL_FILTERS.map((level) => {
+                  const active = selectedLevels.includes(level);
+                  return (
+                    <button
+                      key={level}
+                      onClick={() =>
+                        setSelectedLevels((current) =>
+                          current.includes(level)
+                            ? current.filter((item) => item !== level)
+                            : [...current, level],
+                        )
+                      }
+                      className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg text-[10px] sm:text-xs font-medium transition border ${
+                        active
+                          ? "bg-slate-700 border-slate-600 text-slate-200"
+                          : "bg-slate-800 border-slate-700 text-slate-500 hover:bg-slate-700"
+                      }`}
+                    >
+                      {level.toUpperCase()}
+                    </button>
+                  );
+                })}
+              </div>
 
               {!loading && error && (
-                <p className="rounded-lg border border-red-900/50 bg-red-950/20 px-3 py-2 text-xs text-red-300">
+                <p className="rounded-lg border border-red-900/50 bg-red-950/20 px-3 py-2 text-xs text-red-300 mb-3">
                   {error}
                 </p>
               )}
 
-              {!loading && !error && logs.length === 0 && loadedProcessId === processId && (
-                <p className="text-xs text-slate-500">
-                  Belum ada log proses untuk draft ini.
-                </p>
-              )}
+              {/* Terminal Log View */}
+              <div className="flex flex-col-reverse h-[400px] overflow-y-auto bg-[#0D1117] rounded-lg border border-slate-800 p-3 font-mono text-[11px] leading-relaxed relative">
+                {loading && logs.length === 0 ? (
+                  <div className="flex-1 flex flex-col items-center justify-center text-slate-500 py-8">
+                    <div className="spinner mx-auto mb-3" />
+                    <p>Loading terminal...</p>
+                  </div>
+                ) : !loading && totalCount === 0 && !error ? (
+                  <div className="flex-1 flex flex-col items-center justify-center text-slate-500 py-8">
+                    <p>No activity logs yet.</p>
+                  </div>
+                ) : (
+                  <>
+                    {logs.map((log) => {
+                      const dateStr = new Date(log.createdAt || log.created_at || "").toLocaleString();
+                      const levelText = (log.level || log.result || "").toUpperCase();
+                      return (
+                        <div key={log._id || log.id} className="hover:bg-slate-800/30 px-1 -mx-1 rounded transition-colors grid grid-cols-[140px_10px_60px_10px_140px_10px_180px_20px_1fr] gap-1 items-start">
+                          <span className="text-slate-500 truncate">{dateStr}</span>
+                          <span className="text-slate-700 text-center">|</span>
+                          <span className={`${getTerminalColor(levelText)} font-bold truncate`}>{levelText || "INFO"}</span>
+                          <span className="text-slate-700 text-center">|</span>
+                          <span className="text-fuchsia-400 truncate" title={log.type}>{log.type}</span>
+                          <span className="text-slate-700 text-center">|</span>
+                          <span className="text-slate-300 truncate" title={log.action}>{log.action}</span>
+                          <span className="text-slate-700 text-center">---</span>
+                          <span className="text-slate-400 break-words">
+                            {log.details}
+                            {log.error && <span className="text-red-400 ml-1">Error: {log.error}</span>}
+                            {log.symbol && <span className="text-primary-400 ml-1">[{log.symbol}]</span>}
+                          </span>
+                        </div>
+                      );
+                    })}
 
-              {!loading && !error && logs.length > 0 && (
-                <div className="max-h-[28rem] space-y-3 overflow-y-auto pr-1">
-                  {logs.map((log, index) => (
-                    <div
-                      key={log._id || `${log.processId}-${index}`}
-                      className={`rounded-lg border px-3 py-2.5 ${
-                        log.error
-                          ? "border-red-900/50 bg-red-950/20"
-                          : log.result === "executed" || log.result === "drafted"
-                            ? "border-emerald-900/40 bg-emerald-950/10"
-                            : "border-slate-700/70 bg-slate-950/40"
-                      }`}
-                    >
-                      <div className="flex flex-wrap items-center gap-2 text-xs">
-                        <span className="badge badge-info">{log.type}</span>
-                        <span className="font-medium text-slate-200">
-                          {formatProcessActionLabel(log.action)}
-                        </span>
-                        {log.symbol && (
-                          <span className="font-mono text-primary-400">
-                            {log.symbol}
-                          </span>
+                    {/* Infinite Scroll Sentinel */}
+                    {page < totalPages && (
+                      <div ref={observerTarget} className="py-3 flex justify-center shrink-0">
+                        {loading ? (
+                          <div className="spinner w-4 h-4 border-2" />
+                        ) : (
+                          <span className="text-slate-600">Loading older logs...</span>
                         )}
-                        {log.result && (
-                          <span
-                            className={`badge ${
-                              log.result === "executed" ||
-                              log.result === "updated" ||
-                              log.result === "drafted" ||
-                              log.result === "processed"
-                                ? "badge-success"
-                                : log.result === "failed" ||
-                                    log.result === "rejected" ||
-                                    log.result === "parse_failed"
-                                  ? "badge-danger"
-                                  : "badge-neutral"
-                            }`}
-                          >
-                            {log.result}
-                          </span>
-                        )}
-                        <span className="ml-auto text-[11px] text-slate-500">
-                          {new Date(
-                            log.createdAt || log.created_at || "",
-                          ).toLocaleString()}
-                        </span>
                       </div>
-                      {renderStructuredLogDetails(log.details)}
-                      {log.error && (
-                        <p className="mt-2 whitespace-pre-wrap text-xs text-red-300">
-                          Error: {log.error}
-                        </p>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
+                    )}
+                    
+                    {page >= totalPages && logs.length > 0 && (
+                      <div className="py-3 text-center text-slate-600 shrink-0 border-b border-slate-800/50 mb-2">
+                        --- End of logs ---
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
             </>
           )}
         </div>
@@ -2689,54 +2822,65 @@ function PositionsTab({
             </thead>
             <tbody>
               {positions.map((pos) => (
-                <tr
-                  key={pos._id || pos.id}
-                  className={positionFilter === "pending" ? "opacity-80" : ""}
-                >
-                  <td className="font-medium">{pos.symbol}</td>
-                  <td>
-                    <span
-                      className={`badge ${pos.side === "LONG" ? "badge-success" : "badge-danger"}`}
-                    >
-                      {pos.side}
-                    </span>
-                  </td>
-                  <td>{pos.entryPrice?.toFixed(4)}</td>
-                  {positionFilter === "open" && (
-                    <td>{pos.currentPrice?.toFixed(4) || "-"}</td>
-                  )}
-                  <td>{pos.quantity}</td>
-                  <td>{pos.leverage}x</td>
-                  <td
-                    className={`font-mono ${(pos.pnl || 0) >= 0 ? "text-success" : "text-danger"}`}
+                <Fragment key={pos._id || pos.id}>
+                  <tr
+                    className={positionFilter === "pending" ? "opacity-80 border-b border-slate-700/50" : "border-b border-slate-700/50"}
                   >
-                    {(pos.pnl || 0) >= 0 ? "+" : ""}
-                    {pos.pnl?.toFixed(2) || "0.00"}
-                  </td>
-                  {positionFilter === "closed" && (
-                    <td className="text-xs text-slate-400">
-                      {pos.closeReason || "-"}
-                    </td>
-                  )}
-                  {positionFilter === "pending" && (
+                    <td className="font-medium">{pos.symbol}</td>
                     <td>
-                      <span className="inline-flex items-center gap-1.5 badge badge-warning">
-                        <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" />
-                        Pending
+                      <span
+                        className={`badge ${pos.side === "LONG" ? "badge-success" : "badge-danger"}`}
+                      >
+                        {pos.side}
                       </span>
                     </td>
-                  )}
-                  <td className="text-xs text-slate-400">
-                    {new Date(pos.openedAt).toLocaleString()}
-                  </td>
-                  {positionFilter === "closed" && (
-                    <td className="text-xs text-slate-400">
-                      {pos.closedAt
-                        ? new Date(pos.closedAt).toLocaleString()
-                        : "-"}
+                    <td>{pos.entryPrice?.toFixed(4)}</td>
+                    {positionFilter === "open" && (
+                      <td>{pos.currentPrice?.toFixed(4) || "-"}</td>
+                    )}
+                    <td>{pos.quantity}</td>
+                    <td>{pos.leverage}x</td>
+                    <td
+                      className={`font-mono ${(pos.pnl || 0) >= 0 ? "text-success" : "text-danger"}`}
+                    >
+                      {(pos.pnl || 0) >= 0 ? "+" : ""}
+                      {pos.pnl?.toFixed(2) || "0.00"}
                     </td>
-                  )}
-                </tr>
+                    {positionFilter === "closed" && (
+                      <td className="text-xs text-slate-400">
+                        {pos.closeReason || "-"}
+                      </td>
+                    )}
+                    {positionFilter === "pending" && (
+                      <td>
+                        <span className="inline-flex items-center gap-1.5 badge badge-warning">
+                          <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" />
+                          Pending
+                        </span>
+                      </td>
+                    )}
+                    <td className="text-xs text-slate-400">
+                      {new Date(pos.openedAt).toLocaleString()}
+                    </td>
+                    {positionFilter === "closed" && (
+                      <td className="text-xs text-slate-400">
+                        {pos.closedAt
+                          ? new Date(pos.closedAt).toLocaleString()
+                          : "-"}
+                      </td>
+                    )}
+                  </tr>
+                  <tr>
+                    <td colSpan={100} className="p-0 border-none bg-slate-900/10">
+                      <div className="px-4 pb-3">
+                        <ProcessLogsAccordion
+                          processId={pos.processId}
+                          refreshKey={refreshKey}
+                        />
+                      </div>
+                    </td>
+                  </tr>
+                </Fragment>
               ))}
             </tbody>
           </table>

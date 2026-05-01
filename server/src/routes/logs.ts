@@ -19,6 +19,8 @@ router.get("/", async (req: Request, res: Response) => {
       typeof req.query.accountId === "string" ? req.query.accountId : undefined;
     const processId =
       typeof req.query.processId === "string" ? req.query.processId : undefined;
+    const symbol =
+      typeof req.query.symbol === "string" ? req.query.symbol : undefined;
     const levels =
       typeof req.query.levels === "string"
         ? req.query.levels
@@ -34,6 +36,7 @@ router.get("/", async (req: Request, res: Response) => {
       hideCronNoise,
       accountId,
       processId,
+      symbol,
       levels,
       order,
     });
