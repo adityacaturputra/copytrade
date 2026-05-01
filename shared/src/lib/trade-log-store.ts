@@ -429,8 +429,11 @@ function applyLogFilters(
       return false;
     }
 
-    if (options.levels?.length && !options.levels.includes(log.level || "")) {
-      return false;
+    if (options.levels?.length) {
+      const matchLevel = (log.level || log.result || "").toLowerCase();
+      if (!options.levels.map(l => l.toLowerCase()).includes(matchLevel)) {
+        return false;
+      }
     }
 
     if (options.hideCronNoise && isHiddenByDefaultTradeLog(log)) {
