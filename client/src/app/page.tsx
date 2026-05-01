@@ -2031,6 +2031,17 @@ function DraftCard({
                 </span>
               )}
               {!isPending && <StatusBadge status={draft.status} />}
+              
+              {isResolved && (
+                <button
+                  onClick={() => setIsExpanded(false)}
+                  className="ml-auto bg-slate-800 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded-md text-xs transition flex items-center gap-1 border border-slate-700"
+                  title="Collapse"
+                >
+                  <span className="hidden sm:inline">Collapse</span>
+                  <span>▲</span>
+                </button>
+              )}
             </div>
 
             {/* Key info */}
@@ -2205,41 +2216,6 @@ function DraftCard({
                 💡 {draft.reasoning}
               </p>
             )}
-
-            {/* Author & Time */}
-            <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-xs text-slate-500">
-              <span>👤 @{draft.author}</span>
-              {draft.sourceTimestamp ? (
-                <span className="text-blue-400">
-                  💬 {new Date(draft.sourceTimestamp).toLocaleString()}
-                </span>
-              ) : null}
-              <span>🕐 {new Date(draft.createdAt).toLocaleString()}</span>
-              {draft.resolvedAt && !isPending && (
-                <span>✅ {new Date(draft.resolvedAt).toLocaleString()}</span>
-              )}
-              {draft.messageUrl && (
-                <a
-                  href={draft.messageUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-primary-400 hover:text-primary-300 underline"
-                >
-                  🔗 Discord
-                </a>
-              )}
-              <button
-                onClick={() => setShowDetails(!showDetails)}
-                className="text-slate-400 hover:text-white transition"
-              >
-                {showDetails ? "▼ Hide" : "▶ Show"} original
-              </button>
-            </div>
-
-            <ProcessLogsAccordion
-              processId={draft.processId}
-              refreshKey={refreshKey}
-            />
           </div>
 
           {/* Action Buttons — only for pending */}
@@ -2294,14 +2270,46 @@ function DraftCard({
               >
                 🔄 Re-analyze
               </button>
-              <button
-                onClick={() => setIsExpanded(false)}
-                className="bg-slate-700 hover:bg-slate-600 text-white font-semibold px-4 py-2 rounded-lg text-sm transition flex items-center justify-center gap-1"
-              >
-                ▲ Collapse
-              </button>
             </div>
           )}
+        </div>
+
+        {/* Discord Context & Process Logs */}
+        <div className="mt-4 pt-3 border-t border-slate-700/50">
+          {/* Author & Time */}
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-xs text-slate-500 mb-2">
+            <span>👤 @{draft.author}</span>
+            {draft.sourceTimestamp ? (
+              <span className="text-blue-400">
+                💬 {new Date(draft.sourceTimestamp).toLocaleString()}
+              </span>
+            ) : null}
+            <span>🕐 {new Date(draft.createdAt).toLocaleString()}</span>
+            {draft.resolvedAt && !isPending && (
+              <span>✅ {new Date(draft.resolvedAt).toLocaleString()}</span>
+            )}
+            {draft.messageUrl && (
+              <a
+                href={draft.messageUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary-400 hover:text-primary-300 underline"
+              >
+                🔗 Discord
+              </a>
+            )}
+            <button
+              onClick={() => setShowDetails(!showDetails)}
+              className="text-slate-400 hover:text-white transition"
+            >
+              {showDetails ? "▼ Hide" : "▶ Show"} original
+            </button>
+          </div>
+
+          <ProcessLogsAccordion
+            processId={draft.processId}
+            refreshKey={refreshKey}
+          />
         </div>
       </div>
 
