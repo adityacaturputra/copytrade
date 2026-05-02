@@ -11,6 +11,7 @@ import {
 } from "@copytrade/shared/lib/cron-status";
 import { createTradeLog } from "@copytrade/shared/lib/trade-log-store";
 import { runPositionMonitorAgent } from "../lib/agent/position-monitor-agent";
+import { runOrphanCleanupMonitor } from "../lib/orphan-cleanup-monitor";
 
 const router: ExpressRouter = Router();
 let loggedCronAuthMode = false;
@@ -280,6 +281,85 @@ async function runTpSlMonitorWork() {
   }
 }
 
+// ─── Orphan Cleanup ───────────────────────────────────────────────────────────
+
+const ORPHAN_CLEANUP_NAME = "orphan-cleanup";
+
+async function handleOrphanCleanup(req: Request, res: Response) {
+  // Block if already running
+  if (!tryStart(ORPHAN_CLEANUP_NAME)) {
+    const status = getCronStatus(ORPHAN_CLEANUP_NAME);
+    res.status(409).json({
+      success: false,
+      error: "Already running",
+      status,
+    });
+    return;
+  }
+
+  // Return immediately — work continues in background
+  res.json({
+    success: true,
+    message: "Orphan cleanup monitor started",
+    timestamp: new Date().toISOString(),
+  });
+
+  // Fire-and-forget in background
+  runOrphanCleanupWork().catch(console.error);
+}
+
+async function runOrphanCleanupWork() {
+  try {
+    console.log("[Cron] Orphan cleanup monitor started at", new Date().toISOString());
+
+    await connectDB();
+    updateProgress(ORPHAN_CLEANUP_NAME, "Connected to database");
+
+    await createTradeLog({
+      type: "cron",
+      action: "orphan_cleanup_start",
+      details: "Starting orphan cleanup cron job",
+      level: "debug",
+      result: "started",
+    });
+
+    updateProgress(ORPHAN_CLEANUP_NAME, "Running orphan cleanup monitor...");
+    const result = await runOrphanCleanupMonitor();
+
+    updateProgress(
+      ORPHAN_CLEANUP_NAME,
+      `Done — accounts: ${result.accountsChecked}, checked: ${result.algoOrdersChecked}, cancelled: ${result.orphansCancelled}`,
+      result.errors.length > 0 ? "warning" : "success",
+    );
+
+    await connectDB();
+    await createTradeLog({
+      type: "cron",
+      action: "orphan_cleanup_end",
+      details: `Accounts: ${result.accountsChecked}, Algo Checked: ${result.algoOrdersChecked}, Cancelled: ${result.orphansCancelled}, Errors: ${result.errors.length}`,
+      level: "debug",
+      result: result.errors.length > 0 ? "partial" : "success",
+    });
+
+    finishCron(ORPHAN_CLEANUP_NAME, result.errors.length > 0 ? "error" : "success");
+  } catch (error) {
+    const errMsg = error instanceof Error ? error.message : "Unknown error";
+    console.error("[Cron] Orphan cleanup monitor error:", errMsg);
+    updateProgress(ORPHAN_CLEANUP_NAME, `Error: ${errMsg}`, "error");
+
+    try {
+      await connectDB();
+      await createTradeLog({
+        type: "cron",
+        action: "orphan_cleanup_error",
+        error: errMsg,
+      });
+    } catch {}
+
+    finishCron(ORPHAN_CLEANUP_NAME, "error", errMsg);
+  }
+}
+
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 // Apply cron secret verification to all cron routes
@@ -296,6 +376,10 @@ router.post("/position-monitor", handlePositionMonitor);
 // GET /api/cron/tp-sl-monitor
 router.get("/tp-sl-monitor", handleTpSlMonitor);
 router.post("/tp-sl-monitor", handleTpSlMonitor);
+
+// GET /api/cron/orphan-cleanup
+router.get("/orphan-cleanup", handleOrphanCleanup);
+router.post("/orphan-cleanup", handleOrphanCleanup);
 
 // GET /api/cron/status
 router.get("/status", (req: Request, res: Response) => {

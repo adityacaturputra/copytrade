@@ -42,6 +42,7 @@ export const KNOWN_CRON_JOB_TYPES = [
   "signal-check",
   "position-monitor",
   "tp-sl-monitor",
+  "orphan-cleanup",
 ] as const;
 
 export type KnownCronJobType = (typeof KNOWN_CRON_JOB_TYPES)[number];
@@ -80,6 +81,19 @@ export const DEFAULT_CRON_JOBS: Omit<CronJobConfig, "id">[] = [
     url: "/api/cron/tp-sl-monitor",
     schedule: {
       minutes: 5,
+      hours: [],
+      mdays: [],
+      months: [],
+      wdays: [],
+    },
+  },
+  {
+    type: "orphan-cleanup",
+    enabled: true,
+    title: "CopyTrade - Orphan Cleanup",
+    url: "/api/cron/orphan-cleanup",
+    schedule: {
+      minutes: 1,
       hours: [],
       mdays: [],
       months: [],
