@@ -6,6 +6,14 @@ import type { AgentRole } from "./auth";
 import { getAgentApprovalRequired, hasRequiredAgentRole } from "./auth";
 import { ensureAgentSession, createAgentTurn, createAgentTurnProcessId, loadAgentTurn, updateAgentTurnState, logAgentTurnEvent, buildToolTrace } from "./logging";
 import { getAgentToolPolicy } from "./policies";
+import {
+  getContextLimits,
+  estimateMessagesTokens,
+  pruneToolResult,
+  trimHistoryToTokenBudget,
+  shouldCompact,
+  compactMessages,
+} from "./context-manager";
 
 const MAX_ITERATIONS = 12;
 
@@ -228,6 +236,7 @@ function resolveProviderConfig(provider?: string) {
     model,
     providerHeaders,
     apiKeys,
+    contextLimits: getContextLimits(selectedProvider),
   };
 }
 
@@ -444,6 +453,7 @@ async function* executeAgentRun(
   initialPendingToolCalls: PendingToolCall[],
   initialResponse: string,
   initialToolTraces: Array<Record<string, unknown>>,
+  providerName?: string,
 ): AsyncGenerator<AgentStreamEvent> {
   const steps: AgentStep[] = [];
   let assistantResponse = initialResponse;
@@ -451,9 +461,33 @@ async function* executeAgentRun(
   let pendingToolCalls = [...initialPendingToolCalls];
   let toolTraces = [...initialToolTraces];
   let decision = input.decision;
+  const resolvedProvider = providerName || input.provider || "glm";
 
   for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
     throwIfAborted(input.signal);
+
+    // ── Auto-compact if context is too large ──
+    if (shouldCompact(messages, resolvedProvider)) {
+      const tokensBefore = estimateMessagesTokens(messages);
+      await logAgentTurnEvent({
+        processId: input.processId!,
+        action: "context_compaction",
+        level: "info",
+        result: "processing",
+        details: { tokensBefore, messageCount: messages.length },
+      });
+
+      messages = await compactMessages(messages, resolvedProvider, input.signal);
+
+      const tokensAfter = estimateMessagesTokens(messages);
+      await logAgentTurnEvent({
+        processId: input.processId!,
+        action: "context_compaction",
+        level: "info",
+        result: "success",
+        details: { tokensBefore, tokensAfter, saved: tokensBefore - tokensAfter, messageCount: messages.length },
+      });
+    }
 
     if (pendingToolCalls.length === 0) {
       const startTime = Date.now();
@@ -832,7 +866,8 @@ async function* executeAgentRun(
 
       try {
         const result = await executor(toolArgs);
-        messages.push(buildToolResultMessage(toolCall.id, result));
+        const contextLimits = getContextLimits(resolvedProvider);
+        messages.push(buildToolResultMessage(toolCall.id, pruneToolResult(result, contextLimits.maxToolResultTokens)));
         pendingToolCalls = pendingToolCalls.slice(1);
         toolTraces.push(
           buildToolTrace({
@@ -1007,6 +1042,7 @@ export async function* runAgentLoopStreaming(
         getPendingToolCallsFromTurn(turn),
         turn.assistantResponse || "",
         getToolTracesFromTurn(turn),
+        turn.provider,
       );
       return;
     }
@@ -1016,7 +1052,10 @@ export async function* runAgentLoopStreaming(
     }
 
     const systemPrompt = await buildSystemPrompt(input.role);
-    const history = Array.isArray(input.history) ? input.history.slice(-20) : [];
+    const config = resolveProviderConfig(input.provider);
+    const history = Array.isArray(input.history)
+      ? trimHistoryToTokenBudget(input.history, config.contextLimits.historyBudgetTokens)
+      : [];
     const messages: AgentChatMessage[] = [
       { role: "system", content: systemPrompt },
       ...history.map(
@@ -1049,6 +1088,7 @@ export async function* runAgentLoopStreaming(
       [],
       "",
       [],
+      config.selectedProvider,
     );
   } catch (error) {
     const message = getErrorMessage(error);
