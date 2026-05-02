@@ -484,9 +484,24 @@ export default function SettingsPage() {
             const savedByType = new Map<string, (typeof prevDefaults)[number]>(
               json.settings.jobs.map((j: any) => [j.type as string, j]),
             );
-            return prevDefaults.map(
-              (defaultJob) => savedByType.get(defaultJob.type) ?? defaultJob,
-            );
+            return prevDefaults.map((defaultJob) => {
+              const saved = savedByType.get(defaultJob.type);
+              if (!saved) return defaultJob;
+              // Ensure schedule.minutes is a valid number
+              const minutes = Number(saved.schedule?.minutes);
+              return {
+                ...defaultJob,
+                ...saved,
+                schedule: {
+                  ...defaultJob.schedule,
+                  ...(saved.schedule || {}),
+                  minutes:
+                    Number.isFinite(minutes) && minutes > 0
+                      ? minutes
+                      : defaultJob.schedule.minutes,
+                },
+              };
+            });
           });
         }
         if (json.liveStatus) setCronLiveStatus(json.liveStatus);
