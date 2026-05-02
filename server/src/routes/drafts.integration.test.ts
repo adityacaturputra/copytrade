@@ -1,6 +1,19 @@
 import request from "supertest";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { startTestMongo, clearTestMongo, stopTestMongo } from "../../../tests/helpers/mongo.ts";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+// @ts-ignore -- test helper outside server/src rootDir
+import {
+  startTestMongo,
+  clearTestMongo,
+  stopTestMongo,
+} from "../../../tests/helpers/mongo";
 
 const { executeSignalMock, logProcessStepMock } = vi.hoisted(() => ({
   executeSignalMock: vi.fn(),
@@ -8,9 +21,9 @@ const { executeSignalMock, logProcessStepMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("@copytrade/shared/lib/executor", async () => {
-  const actual = await vi.importActual<typeof import("@copytrade/shared/lib/executor")>(
-    "@copytrade/shared/lib/executor",
-  );
+  const actual = await vi.importActual<
+    typeof import("@copytrade/shared/lib/executor")
+  >("@copytrade/shared/lib/executor");
 
   return {
     ...actual,
@@ -139,6 +152,7 @@ describe("drafts routes integration", () => {
 
     const response = await request(app)
       .post(`/api/drafts/${draft._id.toString()}/accept`)
+      .set("x-action-password", process.env.ACTION_PASSWORD || "")
       .send({});
 
     expect(response.status).toBe(200);
@@ -175,6 +189,7 @@ describe("drafts routes integration", () => {
 
     const response = await request(app)
       .post(`/api/drafts/${draft._id.toString()}/reject`)
+      .set("x-action-password", process.env.ACTION_PASSWORD || "")
       .send({});
 
     expect(response.status).toBe(200);

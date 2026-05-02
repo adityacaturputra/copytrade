@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import Link from "next/link";
+import { getStoredActionPassword } from "@/lib/action-auth";
+import { useActionAuth } from "@/lib/action-auth-context";
 
 interface AgentStep {
   type: "thinking" | "tool_call" | "tool_result" | "response";
@@ -55,11 +57,13 @@ const AGENT_API_URL = `${API_BASE}/api/agent`;
 const AGENT_AUTH_URL = `${API_BASE}/api/agent/auth`;
 const AGENT_APPROVAL_URL = `${API_BASE}/api/agent/approval`;
 const AGENT_HISTORY_URL = `${API_BASE}/api/agent/history`;
-const STORAGE_PASSWORD_KEY = "agent-chat-password";
 const STORAGE_SESSION_KEY = "agent-chat-session-id";
 
 function createSessionId() {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+  if (
+    typeof crypto !== "undefined" &&
+    typeof crypto.randomUUID === "function"
+  ) {
     return `agentsess_${crypto.randomUUID()}`;
   }
 
@@ -72,17 +76,23 @@ export default function AgentChatPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
-  const [password, setPassword] = useState("");
   const [sessionId, setSessionId] = useState("");
   const [role, setRole] = useState<AgentRole | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
-  const [passwordInput, setPasswordInput] = useState("");
-  const [currentView, setCurrentView] = useState<"chat" | "history_list" | "history_detail">("chat");
+  const [currentView, setCurrentView] = useState<
+    "chat" | "history_list" | "history_detail"
+  >("chat");
   const [historyList, setHistoryList] = useState<HistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
-  const [selectedHistory, setSelectedHistory] = useState<HistoryItem | null>(null);
+  const [selectedHistory, setSelectedHistory] = useState<HistoryItem | null>(
+    null,
+  );
   const [historyDetail, setHistoryDetail] = useState<any>(null);
-  
+  const [showUnlockDialog, setShowUnlockDialog] = useState(false);
+  const [unlockInput, setUnlockInput] = useState("");
+
+  const actionAuth = useActionAuth();
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const streamControllerRef = useRef<AbortController | null>(null);
@@ -113,51 +123,35 @@ export default function AgentChatPage() {
     });
   };
 
-  const authenticate = useCallback(
-    async (nextPassword: string, preferredSessionId?: string) => {
-      const resolvedSessionId = preferredSessionId || createSessionId();
-      const res = await fetch(AGENT_AUTH_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          password: nextPassword,
-          sessionId: resolvedSessionId,
-        }),
-      });
+  const authenticate = useCallback(async (preferredSessionId?: string) => {
+    const resolvedSessionId = preferredSessionId || createSessionId();
+    const res = await fetch(AGENT_AUTH_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: resolvedSessionId,
+      }),
+    });
 
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || "Failed to authenticate agent chat");
-      }
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      throw new Error(data.error || "Failed to authenticate agent chat");
+    }
 
-      sessionStorage.setItem(STORAGE_PASSWORD_KEY, nextPassword);
-      sessionStorage.setItem(STORAGE_SESSION_KEY, data.sessionId);
-      setPassword(nextPassword);
-      setPasswordInput(nextPassword);
-      setSessionId(data.sessionId);
-      setRole(data.role);
-    },
-    [],
-  );
+    sessionStorage.setItem(STORAGE_SESSION_KEY, data.sessionId);
+    setSessionId(data.sessionId);
+    setRole(data.role);
+  }, []);
 
   useEffect(() => {
-    const savedPassword = sessionStorage.getItem(STORAGE_PASSWORD_KEY) || "";
     const savedSessionId =
       sessionStorage.getItem(STORAGE_SESSION_KEY) || createSessionId();
 
-    if (!savedPassword) {
-      setSessionId(savedSessionId);
-      setAuthLoading(false);
-      return;
-    }
-
-    authenticate(savedPassword, savedSessionId)
+    authenticate(savedSessionId)
       .catch(() => {
-        sessionStorage.removeItem(STORAGE_PASSWORD_KEY);
         sessionStorage.removeItem(STORAGE_SESSION_KEY);
-        setPassword("");
         setRole(null);
-        setSessionId(savedSessionId);
+        setSessionId(createSessionId());
       })
       .finally(() => {
         setAuthLoading(false);
@@ -167,10 +161,7 @@ export default function AgentChatPage() {
   const logout = () => {
     streamControllerRef.current?.abort();
     streamControllerRef.current = null;
-    sessionStorage.removeItem(STORAGE_PASSWORD_KEY);
     sessionStorage.removeItem(STORAGE_SESSION_KEY);
-    setPassword("");
-    setPasswordInput("");
     setRole(null);
     setMessages([]);
     setError(null);
@@ -184,7 +175,10 @@ export default function AgentChatPage() {
       event:
         | { type: "step"; data: AgentStep }
         | { type: "token"; data: { token: string } }
-        | { type: "done"; data: { response: string; processId?: string; status?: string } }
+        | {
+            type: "done";
+            data: { response: string; processId?: string; status?: string };
+          }
         | { type: "error"; data: { error: string; processId?: string } }
         | { type: "approval_required"; data: AgentApproval },
     ) => {
@@ -321,19 +315,20 @@ export default function AgentChatPage() {
       },
       messageId: string,
     ) => {
-      if (!password) {
-        throw new Error("Agent password is not set");
-      }
-
       const controller = new AbortController();
       streamControllerRef.current = controller;
 
+      const actionPassword = getStoredActionPassword();
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (actionPassword) {
+        headers["x-action-password"] = actionPassword;
+      }
+
       const res = await fetch(request.url, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-agent-password": password,
-        },
+        headers,
         body: JSON.stringify(request.body),
         signal: controller.signal,
       });
@@ -350,12 +345,12 @@ export default function AgentChatPage() {
 
       await readSseStream(reader, messageId);
     },
-    [password, readSseStream],
+    [readSseStream],
   );
 
   const sendMessage = useCallback(async () => {
     const trimmed = input.trim();
-    if (!trimmed || loading || !role) return;
+    if (!trimmed || loading) return;
 
     setError(null);
     const timestamp = new Date();
@@ -422,10 +417,14 @@ export default function AgentChatPage() {
       setLoading(false);
       inputRef.current?.focus();
     }
-  }, [executeAgentRequest, input, loading, messages, role, sessionId]);
+  }, [executeAgentRequest, input, loading, messages, sessionId]);
 
   const handleApproval = useCallback(
-    async (messageId: string, approval: AgentApproval, decision: "approve" | "reject") => {
+    async (
+      messageId: string,
+      approval: AgentApproval,
+      decision: "approve" | "reject",
+    ) => {
       if (loading) return;
 
       setError(null);
@@ -458,7 +457,8 @@ export default function AgentChatPage() {
           messageId,
         );
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Network error";
+        const message =
+          error instanceof Error ? error.message : "Network error";
         if (message.toLowerCase().includes("abort")) {
           setMessages((prev) =>
             prev.map((item) =>
@@ -489,21 +489,6 @@ export default function AgentChatPage() {
     setLoading(false);
   };
 
-  const handlePasswordSubmit = async () => {
-    const trimmed = passwordInput.trim();
-    if (!trimmed) return;
-
-    setError(null);
-    setAuthLoading(true);
-    try {
-      await authenticate(trimmed, sessionId || createSessionId());
-    } catch (error) {
-      setError(error instanceof Error ? error.message : "Authentication failed");
-    } finally {
-      setAuthLoading(false);
-    }
-  };
-
   const handleKeyDown = (event: React.KeyboardEvent) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
@@ -517,14 +502,11 @@ export default function AgentChatPage() {
   };
 
   const loadHistory = useCallback(async () => {
-    if (!password) return;
     setHistoryLoading(true);
     setCurrentView("history_list");
     setError(null);
     try {
-      const res = await fetch(AGENT_HISTORY_URL, {
-        headers: { "x-agent-password": password },
-      });
+      const res = await fetch(AGENT_HISTORY_URL, {});
       const data = await res.json();
       if (!res.ok || !data.success) {
         throw new Error(data.error || "Failed to load history");
@@ -535,18 +517,15 @@ export default function AgentChatPage() {
     } finally {
       setHistoryLoading(false);
     }
-  }, [password]);
+  }, []);
 
   const loadHistoryDetail = useCallback(async (item: HistoryItem) => {
-    if (!password) return;
     setSelectedHistory(item);
     setHistoryLoading(true);
     setCurrentView("history_detail");
     setError(null);
     try {
-      const res = await fetch(`${AGENT_HISTORY_URL}/${item.processId}`, {
-        headers: { "x-agent-password": password },
-      });
+      const res = await fetch(`${AGENT_HISTORY_URL}/${item.processId}`, {});
       const data = await res.json();
       if (!res.ok || !data.success) {
         throw new Error(data.error || "Failed to load history detail");
@@ -557,7 +536,7 @@ export default function AgentChatPage() {
     } finally {
       setHistoryLoading(false);
     }
-  }, [password]);
+  }, []);
 
   const quickPrompts = [
     "What's my account balance?",
@@ -582,30 +561,28 @@ export default function AgentChatPage() {
         <div className="w-full max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-6">
           <h1 className="text-xl font-bold text-white">Agent Access</h1>
           <p className="mt-2 text-sm text-slate-400">
-            Enter the agent password from `.env` to unlock chat access.
+            Could not connect to the agent. Please try again.
           </p>
-          <input
-            type="password"
-            value={passwordInput}
-            onChange={(event) => setPasswordInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                void handlePasswordSubmit();
-              }
-            }}
-            className="mt-4 w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm text-white outline-none focus:border-primary-500"
-            placeholder="Agent password"
-          />
           {error && (
             <p className="mt-3 rounded-lg border border-red-700/40 bg-red-900/20 px-3 py-2 text-sm text-red-300">
               {error}
             </p>
           )}
           <button
-            onClick={() => void handlePasswordSubmit()}
+            onClick={() => {
+              setError(null);
+              setAuthLoading(true);
+              authenticate(sessionId || createSessionId())
+                .catch((err) =>
+                  setError(
+                    err instanceof Error ? err.message : "Connection failed",
+                  ),
+                )
+                .finally(() => setAuthLoading(false));
+            }}
             className="mt-4 w-full rounded-xl bg-primary-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-primary-700"
           >
-            Unlock Agent
+            Retry Connection
           </button>
         </div>
       </div>
@@ -617,7 +594,7 @@ export default function AgentChatPage() {
       <header className="shrink-0 border-b border-slate-700 bg-dark-100">
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-2 px-3 py-3 sm:px-4">
           <div className="flex min-w-0 items-center gap-3">
-            <Link 
+            <Link
               href="/"
               className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-800 text-slate-400 transition-colors hover:bg-slate-700 hover:text-slate-200"
               title="Back to Dashboard"
@@ -665,6 +642,23 @@ export default function AgentChatPage() {
                 Clear
               </button>
             ) : null}
+            {actionAuth.isUnlocked ? (
+              <button
+                onClick={actionAuth.lock}
+                className="rounded-lg bg-emerald-900/30 text-emerald-400 border border-emerald-700/50 px-3 py-1.5 text-xs font-semibold hover:bg-emerald-900/50"
+                title="Actions unlocked – click to lock"
+              >
+                🔓 Actions
+              </button>
+            ) : (
+              <button
+                onClick={() => setShowUnlockDialog(true)}
+                className="rounded-lg bg-amber-900/30 text-amber-400 border border-amber-700/50 px-3 py-1.5 text-xs font-semibold hover:bg-amber-900/50"
+                title="Unlock to allow mutating actions"
+              >
+                🔒 Unlock Actions
+              </button>
+            )}
             <button
               onClick={logout}
               className="rounded-lg bg-slate-800 px-3 py-1.5 text-xs text-slate-300"
@@ -673,181 +667,256 @@ export default function AgentChatPage() {
             </button>
           </div>
         </div>
+
+        {/* Inline unlock dialog */}
+        {showUnlockDialog && !actionAuth.isUnlocked && (
+          <div className="border-b border-slate-700 bg-slate-900/80 px-4 py-3">
+            <div className="mx-auto flex max-w-5xl items-center gap-3">
+              <input
+                type="password"
+                value={unlockInput}
+                onChange={(e) => setUnlockInput(e.target.value)}
+                onKeyDown={async (e) => {
+                  if (e.key === "Enter") {
+                    const ok = await actionAuth.unlock(unlockInput.trim());
+                    if (ok) {
+                      setShowUnlockDialog(false);
+                      setUnlockInput("");
+                    }
+                  }
+                }}
+                placeholder="Action password"
+                className="flex-1 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white outline-none focus:border-primary-500"
+                autoFocus
+              />
+              <button
+                onClick={async () => {
+                  const ok = await actionAuth.unlock(unlockInput.trim());
+                  if (ok) {
+                    setShowUnlockDialog(false);
+                    setUnlockInput("");
+                  }
+                }}
+                disabled={actionAuth.isVerifying || !unlockInput.trim()}
+                className="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                {actionAuth.isVerifying ? "..." : "Unlock"}
+              </button>
+              <button
+                onClick={() => {
+                  setShowUnlockDialog(false);
+                  setUnlockInput("");
+                }}
+                className="rounded-lg bg-slate-800 px-3 py-2 text-sm text-slate-400"
+              >
+                Cancel
+              </button>
+            </div>
+            {actionAuth.error && (
+              <p className="mx-auto mt-2 max-w-5xl text-xs text-red-400">
+                {actionAuth.error}
+              </p>
+            )}
+          </div>
+        )}
       </header>
 
       {currentView === "chat" ? (
         <>
           <div className="flex-1 overflow-y-auto">
             <div className="mx-auto max-w-5xl space-y-6 px-4 py-6">
-          {messages.length === 0 && !loading ? (
-            <div className="py-12 text-center">
-              <div className="mb-4 text-6xl">🤖</div>
-              <h2 className="text-2xl font-bold text-white">Agent Chat</h2>
-              <p className="mx-auto mt-2 max-w-md text-slate-400">
-                Read-only or approval-gated execution depending on your role.
-              </p>
-              <div className="mx-auto mt-8 grid max-w-2xl grid-cols-2 gap-3 md:grid-cols-3">
-                {quickPrompts.map((prompt) => (
-                  <button
-                    key={prompt}
-                    onClick={() => {
-                      setInput(prompt);
-                      inputRef.current?.focus();
-                    }}
-                    className="rounded-lg border border-slate-700 bg-slate-800 p-3 text-left text-sm text-slate-300 transition hover:bg-slate-700"
-                  >
-                    {prompt}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : null}
+              {messages.length === 0 && !loading ? (
+                <div className="py-12 text-center">
+                  <div className="mb-4 text-6xl">🤖</div>
+                  <h2 className="text-2xl font-bold text-white">Agent Chat</h2>
+                  <p className="mx-auto mt-2 max-w-md text-slate-400">
+                    Read-only or approval-gated execution depending on your
+                    role.
+                  </p>
+                  <div className="mx-auto mt-8 grid max-w-2xl grid-cols-2 gap-3 md:grid-cols-3">
+                    {quickPrompts.map((prompt) => (
+                      <button
+                        key={prompt}
+                        onClick={() => {
+                          setInput(prompt);
+                          inputRef.current?.focus();
+                        }}
+                        className="rounded-lg border border-slate-700 bg-slate-800 p-3 text-left text-sm text-slate-300 transition hover:bg-slate-700"
+                      >
+                        {prompt}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
 
-          {messages.map((message) => (
-            <div
-              key={message.id}
-              className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
-            >
-              <div
-                className={`max-w-[85%] ${message.role === "user" ? "order-2" : "order-1"}`}
-              >
-                {message.role === "assistant" && message.steps.length > 0 ? (
-                  <div className="mb-2">
-                    {expandedSteps.has(message.id) ? (
-                      <div className="mb-2 space-y-2">
-                        {message.steps.map((step, index) => (
-                          <StepCard key={`${message.id}-${index}`} step={step} />
-                        ))}
+              {messages.map((message) => (
+                <div
+                  key={message.id}
+                  className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
+                >
+                  <div
+                    className={`max-w-[85%] ${message.role === "user" ? "order-2" : "order-1"}`}
+                  >
+                    {message.role === "assistant" &&
+                    message.steps.length > 0 ? (
+                      <div className="mb-2">
+                        {expandedSteps.has(message.id) ? (
+                          <div className="mb-2 space-y-2">
+                            {message.steps.map((step, index) => (
+                              <StepCard
+                                key={`${message.id}-${index}`}
+                                step={step}
+                              />
+                            ))}
+                          </div>
+                        ) : null}
+                        <button
+                          onClick={() => toggleSteps(message.id)}
+                          className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-400 transition-colors"
+                        >
+                          {expandedSteps.has(message.id) ? "▲" : "▼"}{" "}
+                          {
+                            message.steps.filter(
+                              (step) => step.type === "tool_call",
+                            ).length
+                          }{" "}
+                          tool calls
+                        </button>
                       </div>
                     ) : null}
-                    <button
-                      onClick={() => toggleSteps(message.id)}
-                      className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-400 transition-colors"
+
+                    <div
+                      className={`mb-1 flex items-center gap-2 ${message.role === "user" ? "justify-end" : ""}`}
                     >
-                      {expandedSteps.has(message.id) ? "▲" : "▼"}{" "}
-                      {message.steps.filter((step) => step.type === "tool_call").length}{" "}
-                      tool calls
-                    </button>
-                  </div>
-                ) : null}
-
-                <div
-                  className={`mb-1 flex items-center gap-2 ${message.role === "user" ? "justify-end" : ""}`}
-                >
-                  <span className="text-xs text-slate-500">
-                    {message.role === "user" ? "You" : "Agent"}
-                  </span>
-                  <span className="text-xs text-slate-600">
-                    {message.timestamp.toLocaleTimeString()}
-                  </span>
-                  {message.processId ? (
-                    <span className="truncate text-xs text-slate-600">
-                      {message.processId}
-                    </span>
-                  ) : null}
-                  {message.streaming ? (
-                    <span className="text-xs text-primary-400">● streaming</span>
-                  ) : null}
-                </div>
-
-                <div
-                  className={`rounded-2xl px-4 py-3 ${
-                    message.role === "user"
-                      ? "rounded-br-md bg-primary-600 text-white"
-                      : "rounded-bl-md border border-slate-700 bg-slate-800 text-slate-200"
-                  }`}
-                >
-                  {message.role === "assistant" ? (
-                    message.content ? (
-                      <div className="agent-markdown text-sm leading-relaxed">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {message.content}
-                        </ReactMarkdown>
-                      </div>
-                    ) : (
-                      <div className="flex flex-col gap-3 py-1">
-                        <div className="flex items-center gap-3 text-sm text-slate-400">
-                          <span className="relative flex h-2.5 w-2.5">
-                            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary-400 opacity-75"></span>
-                            <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-primary-500"></span>
-                          </span>
-                          <span className="animate-pulse">Thinking & processing...</span>
-                        </div>
-                        <div className="space-y-2">
-                          <div className="h-3 w-3/4 animate-pulse rounded-md bg-slate-700"></div>
-                          <div className="h-3 w-full animate-pulse rounded-md bg-slate-700"></div>
-                          <div className="h-3 w-5/6 animate-pulse rounded-md bg-slate-700"></div>
-                        </div>
-                      </div>
-                    )
-                  ) : (
-                    <div className="whitespace-pre-wrap text-sm leading-relaxed">
-                      {message.content}
+                      <span className="text-xs text-slate-500">
+                        {message.role === "user" ? "You" : "Agent"}
+                      </span>
+                      <span className="text-xs text-slate-600">
+                        {message.timestamp.toLocaleTimeString()}
+                      </span>
+                      {message.processId ? (
+                        <span className="truncate text-xs text-slate-600">
+                          {message.processId}
+                        </span>
+                      ) : null}
+                      {message.streaming ? (
+                        <span className="text-xs text-primary-400">
+                          ● streaming
+                        </span>
+                      ) : null}
                     </div>
-                  )}
-                </div>
 
-                {message.approval ? (
-                  <div className="mt-2">
-                    <ApprovalCard
-                      approval={message.approval}
-                      disabled={loading}
-                      onApprove={() =>
-                        void handleApproval(message.id, message.approval!, "approve")
-                      }
-                      onReject={() =>
-                        void handleApproval(message.id, message.approval!, "reject")
-                      }
-                    />
+                    <div
+                      className={`rounded-2xl px-4 py-3 ${
+                        message.role === "user"
+                          ? "rounded-br-md bg-primary-600 text-white"
+                          : "rounded-bl-md border border-slate-700 bg-slate-800 text-slate-200"
+                      }`}
+                    >
+                      {message.role === "assistant" ? (
+                        message.content ? (
+                          <div className="agent-markdown text-sm leading-relaxed">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                              {message.content}
+                            </ReactMarkdown>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col gap-3 py-1">
+                            <div className="flex items-center gap-3 text-sm text-slate-400">
+                              <span className="relative flex h-2.5 w-2.5">
+                                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary-400 opacity-75"></span>
+                                <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-primary-500"></span>
+                              </span>
+                              <span className="animate-pulse">
+                                Thinking & processing...
+                              </span>
+                            </div>
+                            <div className="space-y-2">
+                              <div className="h-3 w-3/4 animate-pulse rounded-md bg-slate-700"></div>
+                              <div className="h-3 w-full animate-pulse rounded-md bg-slate-700"></div>
+                              <div className="h-3 w-5/6 animate-pulse rounded-md bg-slate-700"></div>
+                            </div>
+                          </div>
+                        )
+                      ) : (
+                        <div className="whitespace-pre-wrap text-sm leading-relaxed">
+                          {message.content}
+                        </div>
+                      )}
+                    </div>
+
+                    {message.approval ? (
+                      <div className="mt-2">
+                        <ApprovalCard
+                          approval={message.approval}
+                          disabled={loading}
+                          onApprove={() =>
+                            void handleApproval(
+                              message.id,
+                              message.approval!,
+                              "approve",
+                            )
+                          }
+                          onReject={() =>
+                            void handleApproval(
+                              message.id,
+                              message.approval!,
+                              "reject",
+                            )
+                          }
+                        />
+                      </div>
+                    ) : null}
                   </div>
-                ) : null}
-              </div>
+                </div>
+              ))}
+
+              {error ? (
+                <div className="flex justify-center">
+                  <div className="max-w-md rounded-lg border border-red-700/50 bg-red-900/30 px-4 py-3 text-sm text-red-300">
+                    {error}
+                  </div>
+                </div>
+              ) : null}
+
+              <div ref={messagesEndRef} />
             </div>
-          ))}
-
-          {error ? (
-            <div className="flex justify-center">
-              <div className="max-w-md rounded-lg border border-red-700/50 bg-red-900/30 px-4 py-3 text-sm text-red-300">
-                {error}
-              </div>
-            </div>
-          ) : null}
-
-          <div ref={messagesEndRef} />
-        </div>
-      </div>
-
-      <div className="shrink-0 border-t border-slate-700 bg-dark-100">
-        <div className="mx-auto max-w-5xl px-4 py-4">
-          <div className="flex items-end gap-3">
-            <textarea
-              ref={inputRef}
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Ask about positions, logs, drafts, or request a trade operation..."
-              rows={1}
-              disabled={loading}
-              className="min-h-[52px] flex-1 resize-none rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm text-white outline-none focus:border-primary-500"
-            />
-            <button
-              onClick={() => void sendMessage()}
-              disabled={loading || !input.trim()}
-              className="rounded-xl bg-primary-600 px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              Send
-            </button>
           </div>
-          <p className="mt-2 text-center text-xs text-slate-600">
-            Mutating tools are enforced server-side and require approval.
-          </p>
-        </div>
-      </div>
+
+          <div className="shrink-0 border-t border-slate-700 bg-dark-100">
+            <div className="mx-auto max-w-5xl px-4 py-4">
+              <div className="flex items-end gap-3">
+                <textarea
+                  ref={inputRef}
+                  value={input}
+                  onChange={(event) => setInput(event.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="Ask about positions, logs, drafts, or request a trade operation..."
+                  rows={1}
+                  disabled={loading}
+                  className="min-h-[52px] flex-1 resize-none rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm text-white outline-none focus:border-primary-500"
+                />
+                <button
+                  onClick={() => void sendMessage()}
+                  disabled={loading || !input.trim()}
+                  className="rounded-xl bg-primary-600 px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Send
+                </button>
+              </div>
+              <p className="mt-2 text-center text-xs text-slate-600">
+                Mutating tools are enforced server-side and require approval.
+              </p>
+            </div>
+          </div>
         </>
       ) : currentView === "history_list" ? (
         <div className="flex-1 overflow-y-auto p-4">
           <div className="mx-auto max-w-4xl">
-            <h2 className="text-xl font-bold text-white mb-6">Agent Run History</h2>
+            <h2 className="text-xl font-bold text-white mb-6">
+              Agent Run History
+            </h2>
             {historyLoading ? (
               <div className="text-slate-400">Loading history...</div>
             ) : historyList.length === 0 ? (
@@ -875,7 +944,9 @@ export default function AgentChatPage() {
                           {new Date(item.createdAt).toLocaleString()}
                         </span>
                       </div>
-                      <span className="text-xs text-slate-500">{item.toolCount} tool calls</span>
+                      <span className="text-xs text-slate-500">
+                        {item.toolCount} tool calls
+                      </span>
                     </div>
                     <p className="text-sm text-slate-300 line-clamp-2">
                       {item.sessionId === "position-monitor-session"
@@ -913,26 +984,36 @@ export default function AgentChatPage() {
                         {historyDetail.assistantResponse || "No response"}
                       </ReactMarkdown>
                     </div>
-                    {historyDetail.toolTraces && historyDetail.toolTraces.length > 0 && (
-                      <div className="mt-4 space-y-2">
-                        <p className="text-xs text-slate-500 mb-2">Tool Calls:</p>
-                        {historyDetail.toolTraces.map((trace: any, i: number) => (
-                          <div key={i} className="rounded-lg border border-slate-700/50 bg-slate-900/50 p-2.5">
-                            <div className="flex items-center gap-2 mb-2">
-                              <span className="text-xs font-mono text-primary-400">
-                                {trace.toolName}
-                              </span>
-                              <span className={`text-[10px] px-1.5 py-0.5 rounded ${trace.status === 'executed' ? 'bg-emerald-900/30 text-emerald-400' : 'bg-amber-900/30 text-amber-400'}`}>
-                                {trace.status}
-                              </span>
-                            </div>
-                            <div className="text-xs text-slate-400 max-h-32 overflow-y-auto font-mono whitespace-pre-wrap">
-                              {JSON.stringify(trace.toolArgs, null, 2)}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                    {historyDetail.toolTraces &&
+                      historyDetail.toolTraces.length > 0 && (
+                        <div className="mt-4 space-y-2">
+                          <p className="text-xs text-slate-500 mb-2">
+                            Tool Calls:
+                          </p>
+                          {historyDetail.toolTraces.map(
+                            (trace: any, i: number) => (
+                              <div
+                                key={i}
+                                className="rounded-lg border border-slate-700/50 bg-slate-900/50 p-2.5"
+                              >
+                                <div className="flex items-center gap-2 mb-2">
+                                  <span className="text-xs font-mono text-primary-400">
+                                    {trace.toolName}
+                                  </span>
+                                  <span
+                                    className={`text-[10px] px-1.5 py-0.5 rounded ${trace.status === "executed" ? "bg-emerald-900/30 text-emerald-400" : "bg-amber-900/30 text-amber-400"}`}
+                                  >
+                                    {trace.status}
+                                  </span>
+                                </div>
+                                <div className="text-xs text-slate-400 max-h-32 overflow-y-auto font-mono whitespace-pre-wrap">
+                                  {JSON.stringify(trace.toolArgs, null, 2)}
+                                </div>
+                              </div>
+                            ),
+                          )}
+                        </div>
+                      )}
                   </div>
                 </div>
               </div>

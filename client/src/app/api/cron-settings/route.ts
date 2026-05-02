@@ -10,6 +10,7 @@ import {
   setCronSettings,
   syncCronJobs,
 } from "@/lib/cron-config";
+import { verifyActionAuth } from "../_lib/action-auth";
 import {
   createDefaultCronJobs,
   normalizeCronProvider,
@@ -20,10 +21,9 @@ import type { CronRunStatus } from "@copytrade/shared/lib/cron-status";
 
 export const dynamic = "force-dynamic";
 
-const BACKEND_URL = (process.env.BACKEND_URL || "http://localhost:3001").replace(
-  /\/+$/,
-  "",
-);
+const BACKEND_URL = (
+  process.env.BACKEND_URL || "http://localhost:3001"
+).replace(/\/+$/, "");
 
 type CronLiveStatus = {
   type: string;
@@ -96,7 +96,9 @@ async function getAppProviderStatus(settings: CronSettingsType): Promise<{
     backendStatus = result.cronStatus;
   } catch (error) {
     liveErrors.push(
-      error instanceof Error ? error.message : "Backend cron status unavailable",
+      error instanceof Error
+        ? error.message
+        : "Backend cron status unavailable",
     );
   }
 
@@ -112,7 +114,8 @@ async function getAppProviderStatus(settings: CronSettingsType): Promise<{
       running: runStatus?.running ?? false,
       result: runStatus?.result ?? null,
       progress: runStatus?.progress || "",
-      lastExecution: runStatus?.completedAt || runStatus?.startedAt || undefined,
+      lastExecution:
+        runStatus?.completedAt || runStatus?.startedAt || undefined,
     } satisfies CronLiveStatus;
   });
 
@@ -205,14 +208,18 @@ export async function GET() {
   }
 }
 
-export async function PUT() {
+export async function PUT(request: NextRequest) {
+  const authError = verifyActionAuth(request);
+  if (authError) return authError;
+
   try {
     const currentSettings = await getCronSettings();
     if (normalizeCronProvider(currentSettings.provider) !== "cron-job.org") {
       return NextResponse.json(
         {
           success: false,
-          error: "Cloud sync is only available when cron provider is cron-job.org",
+          error:
+            "Cloud sync is only available when cron provider is cron-job.org",
         },
         { status: 400 },
       );
@@ -263,6 +270,9 @@ export async function PUT() {
 }
 
 export async function POST(request: NextRequest) {
+  const authError = verifyActionAuth(request);
+  if (authError) return authError;
+
   try {
     const body = await request.json();
     const provider = normalizeCronProvider(body.provider);
@@ -289,7 +299,8 @@ export async function POST(request: NextRequest) {
         return NextResponse.json(
           {
             success: false,
-            error: "Base URL is required for cron-job.org (e.g. https://your-backend.com)",
+            error:
+              "Base URL is required for cron-job.org (e.g. https://your-backend.com)",
           },
           { status: 400 },
         );
@@ -299,7 +310,9 @@ export async function POST(request: NextRequest) {
     const settings: CronSettingsType = {
       provider,
       baseUrl:
-        typeof body.baseUrl === "string" ? body.baseUrl.replace(/\/+$/, "") : "",
+        typeof body.baseUrl === "string"
+          ? body.baseUrl.replace(/\/+$/, "")
+          : "",
       jobs: body.jobs as CronJobConfig[],
     };
 
@@ -324,10 +337,14 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const disableResult = await disableManagedCloudCronJobs().catch((error) => ({
-      disabled: 0,
-      errors: [error instanceof Error ? error.message : "Unknown disable error"],
-    }));
+    const disableResult = await disableManagedCloudCronJobs().catch(
+      (error) => ({
+        disabled: 0,
+        errors: [
+          error instanceof Error ? error.message : "Unknown disable error",
+        ],
+      }),
+    );
 
     return NextResponse.json({
       success: true,

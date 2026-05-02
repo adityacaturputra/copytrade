@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { connectDB, Account } from "@copytrade/shared/lib/database";
 import mongoose from "mongoose";
 import { resetExchangeAccountState } from "@copytrade/shared/lib/exchange/reset-account-state";
+import { verifyActionAuth } from "../_lib/action-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +22,9 @@ interface ResetStepResult {
 }
 
 export async function POST(request: NextRequest) {
+  const authError = verifyActionAuth(request);
+  if (authError) return authError;
+
   try {
     const body = await request.json().catch(() => ({}));
     const skipExchange = body?.skipExchange === true;
@@ -123,9 +127,8 @@ export async function POST(request: NextRequest) {
               if (resetResult.status === "error") {
                 totalErrors +=
                   resetResult.orderCancelErrors +
-                  resetResult.algoCancelErrors +
-                  resetResult.positionCloseErrors ||
-                  1;
+                    resetResult.algoCancelErrors +
+                    resetResult.positionCloseErrors || 1;
               }
 
               allDetails.push(

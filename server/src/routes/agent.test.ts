@@ -5,8 +5,6 @@ import assert from "node:assert/strict";
 
 const agentRouteMocks = vi.hoisted(() => ({
   authenticateAgentRequest: vi.fn(),
-  isAgentAuthConfigured: vi.fn(),
-  resolveAgentRoleFromPassword: vi.fn(),
   createAgentSessionId: vi.fn(),
   ensureAgentSession: vi.fn(),
   runAgentLoopStreaming: vi.fn(),
@@ -14,8 +12,7 @@ const agentRouteMocks = vi.hoisted(() => ({
 
 vi.mock("../lib/agent/auth", () => ({
   authenticateAgentRequest: agentRouteMocks.authenticateAgentRequest,
-  isAgentAuthConfigured: agentRouteMocks.isAgentAuthConfigured,
-  resolveAgentRoleFromPassword: agentRouteMocks.resolveAgentRoleFromPassword,
+  isAgentAuthConfigured: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock("../lib/agent/logging", () => ({
@@ -25,6 +22,10 @@ vi.mock("../lib/agent/logging", () => ({
 
 vi.mock("../lib/agent/loop", () => ({
   runAgentLoopStreaming: agentRouteMocks.runAgentLoopStreaming,
+}));
+
+vi.mock("../lib/action-auth", () => ({
+  getActionPasswordHeader: vi.fn().mockReturnValue(undefined),
 }));
 
 import agentRouter from "./agent";
@@ -38,91 +39,67 @@ function createApp() {
 
 beforeEach(() => {
   agentRouteMocks.authenticateAgentRequest.mockReset();
-  agentRouteMocks.isAgentAuthConfigured.mockReset();
-  agentRouteMocks.resolveAgentRoleFromPassword.mockReset();
   agentRouteMocks.createAgentSessionId.mockReset();
   agentRouteMocks.ensureAgentSession.mockReset();
   agentRouteMocks.runAgentLoopStreaming.mockReset();
-  agentRouteMocks.isAgentAuthConfigured.mockReturnValue(true);
+
+  // Default: always authenticated as admin
+  agentRouteMocks.authenticateAgentRequest.mockReturnValue({
+    role: "admin",
+    source: "default",
+  });
+  agentRouteMocks.createAgentSessionId.mockReturnValue("generated-session");
+  agentRouteMocks.ensureAgentSession.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
-test("agent route returns 503 when auth is not configured", async () => {
-  agentRouteMocks.isAgentAuthConfigured.mockReturnValue(false);
-
-  const res = await request(createApp()).post("/auth").send({});
-
-  assert.equal(res.status, 503);
-  assert.match(res.body.error, /Agent auth is not configured/);
-});
-
-test("agent auth endpoint validates password and creates or reuses session ids", async () => {
-  agentRouteMocks.resolveAgentRoleFromPassword
-    .mockReturnValueOnce(null)
-    .mockReturnValueOnce("operator")
-    .mockReturnValueOnce("admin");
-  agentRouteMocks.createAgentSessionId.mockReturnValue("generated-session");
-
+test("agent auth endpoint creates or reuses session ids", async () => {
   const app = createApp();
-
-  const invalid = await request(app).post("/auth").send({ password: "bad" });
-  assert.equal(invalid.status, 401);
-  assert.deepEqual(invalid.body, { error: "Invalid agent password" });
 
   const generated = await request(app)
     .post("/auth")
     .set("user-agent", "agent-ui")
     .set("x-forwarded-for", "1.2.3.4, 5.6.7.8")
-    .send({ password: "good" });
+    .send({});
   assert.equal(generated.status, 200);
-  assert.deepEqual(generated.body, {
-    success: true,
-    role: "operator",
-    sessionId: "generated-session",
-  });
+  assert.equal(generated.body.success, true);
+  assert.equal(generated.body.role, "admin");
+  assert.equal(generated.body.sessionId, "generated-session");
   assert.deepEqual(agentRouteMocks.ensureAgentSession.mock.calls[0][0], {
     sessionId: "generated-session",
-    role: "operator",
+    role: "admin",
     userAgent: "agent-ui",
     ipAddress: "1.2.3.4",
   });
 
   const reused = await request(app)
     .post("/auth")
-    .send({ password: "good", sessionId: "  custom-session  " });
+    .send({ sessionId: "  custom-session  " });
   assert.equal(reused.status, 200);
   assert.equal(reused.body.sessionId, "custom-session");
 });
 
-test("agent main endpoint validates auth, required fields, and streams SSE token/done events", async () => {
-  agentRouteMocks.authenticateAgentRequest
-    .mockReturnValueOnce(null)
-    .mockReturnValueOnce({ role: "viewer", source: "header" })
-    .mockReturnValue({ role: "viewer", source: "header" });
-
-  agentRouteMocks.runAgentLoopStreaming.mockImplementation(
-    async function* (input: Record<string, unknown>) {
-      assert.equal(input.sessionId, "sess-1");
-      assert.equal(input.role, "viewer");
-      assert.equal(input.provider, "openai");
-      assert.deepEqual(input.history, [{ role: "user", content: "older" }]);
-      assert.equal(input.userMessage, "hello");
-      assert.equal(input.userAgent, "agent-ui");
-      assert.equal(input.ipAddress, "9.9.9.9");
-      yield { type: "token", token: "Hi" };
-      yield { type: "step", step: { type: "tool_call", toolName: "get_account_info" } };
-      yield { type: "done", response: "Hi there", sessionId: "sess-1" };
-    },
-  );
+test("agent main endpoint validates required fields and streams SSE events", async () => {
+  agentRouteMocks.runAgentLoopStreaming.mockImplementation(async function* (
+    input: Record<string, unknown>,
+  ) {
+    assert.equal(input.sessionId, "sess-1");
+    assert.equal(input.role, "admin");
+    assert.equal(input.provider, "openai");
+    assert.deepEqual(input.history, [{ role: "user", content: "older" }]);
+    assert.equal(input.userMessage, "hello");
+    yield { type: "token", token: "Hi" };
+    yield {
+      type: "step",
+      step: { type: "tool_call", toolName: "get_account_info" },
+    };
+    yield { type: "done", response: "Hi there", sessionId: "sess-1" };
+  });
 
   const app = createApp();
-
-  const unauthorized = await request(app).post("/").send({});
-  assert.equal(unauthorized.status, 401);
-  assert.deepEqual(unauthorized.body, { error: "Unauthorized agent request" });
 
   const missingMessage = await request(app)
     .post("/")
@@ -155,11 +132,7 @@ test("agent main endpoint validates auth, required fields, and streams SSE token
   assert.match(streamed.text, /"response":"Hi there"/);
 });
 
-test("agent approval endpoint validates payload and streams approval-required/error events", async () => {
-  agentRouteMocks.authenticateAgentRequest
-    .mockReturnValueOnce(null)
-    .mockReturnValue({ role: "operator", source: "header" });
-
+test("agent approval endpoint validates payload and streams approval-required events", async () => {
   agentRouteMocks.runAgentLoopStreaming.mockImplementationOnce(
     async function* () {
       yield {
@@ -174,9 +147,6 @@ test("agent approval endpoint validates payload and streams approval-required/er
   );
 
   const app = createApp();
-
-  const unauthorized = await request(app).post("/approval").send({});
-  assert.equal(unauthorized.status, 401);
 
   const missingSession = await request(app)
     .post("/approval")
@@ -207,15 +177,9 @@ test("agent approval endpoint validates payload and streams approval-required/er
 });
 
 test("agent route streams error events and closes the response", async () => {
-  agentRouteMocks.authenticateAgentRequest.mockReturnValue({
-    role: "viewer",
-    source: "header",
+  agentRouteMocks.runAgentLoopStreaming.mockImplementation(async function* () {
+    yield { type: "error", error: "agent failed" };
   });
-  agentRouteMocks.runAgentLoopStreaming.mockImplementation(
-    async function* () {
-      yield { type: "error", error: "agent failed" };
-    },
-  );
 
   const res = await request(createApp())
     .post("/")

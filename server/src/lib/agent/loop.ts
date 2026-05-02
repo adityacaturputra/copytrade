@@ -1,10 +1,23 @@
 import OpenAI from "openai";
 import { getCodexPatunginConfig } from "@copytrade/shared/lib/ai/CodexPatunginConfig";
-import { Account, type IAgentTurn, connectDB } from "@copytrade/shared/lib/database";
+import {
+  Account,
+  type IAgentTurn,
+  connectDB,
+} from "@copytrade/shared/lib/database";
 import { agentTools, toolImplementations } from "./tools";
 import type { AgentRole } from "./auth";
 import { getAgentApprovalRequired, hasRequiredAgentRole } from "./auth";
-import { ensureAgentSession, createAgentTurn, createAgentTurnProcessId, loadAgentTurn, updateAgentTurnState, logAgentTurnEvent, buildToolTrace } from "./logging";
+import { verifyActionPassword } from "../action-auth";
+import {
+  ensureAgentSession,
+  createAgentTurn,
+  createAgentTurnProcessId,
+  loadAgentTurn,
+  updateAgentTurnState,
+  logAgentTurnEvent,
+  buildToolTrace,
+} from "./logging";
 import { getAgentToolPolicy } from "./policies";
 import {
   getContextLimits,
@@ -82,6 +95,7 @@ interface AgentRunInput {
   decision?: "approve" | "reject";
   userAgent?: string;
   ipAddress?: string;
+  actionPassword?: string;
 }
 
 const BASE_SYSTEM_PROMPT = `You are an intelligent trading assistant for a crypto copy-trading system. You have access to tools that let you:
@@ -256,7 +270,9 @@ async function* streamAssistantResponse(input: {
 > {
   const config = resolveProviderConfig(input.provider);
   if (config.apiKeys.length === 0) {
-    throw new Error("No valid API keys configured for the selected AI provider.");
+    throw new Error(
+      "No valid API keys configured for the selected AI provider.",
+    );
   }
 
   let currentKeyIndex = 0;
@@ -378,7 +394,10 @@ function parseToolArgs(input: string): Record<string, unknown> {
     : {};
 }
 
-function buildToolResultMessage(toolCallId: string, content: string): AgentChatMessage {
+function buildToolResultMessage(
+  toolCallId: string,
+  content: string,
+): AgentChatMessage {
   return {
     role: "tool",
     tool_call_id: toolCallId,
@@ -441,7 +460,9 @@ async function finalizeTurnState(input: {
     toolTraces: input.toolTraces,
     error: input.error || null,
     completedAt:
-      input.status === "completed" || input.status === "failed" || input.status === "aborted"
+      input.status === "completed" ||
+      input.status === "failed" ||
+      input.status === "aborted"
         ? new Date()
         : null,
   });
@@ -477,7 +498,11 @@ async function* executeAgentRun(
         details: { tokensBefore, messageCount: messages.length },
       });
 
-      messages = await compactMessages(messages, resolvedProvider, input.signal);
+      messages = await compactMessages(
+        messages,
+        resolvedProvider,
+        input.signal,
+      );
 
       const tokensAfter = estimateMessagesTokens(messages);
       await logAgentTurnEvent({
@@ -485,20 +510,23 @@ async function* executeAgentRun(
         action: "context_compaction",
         level: "info",
         result: "success",
-        details: { tokensBefore, tokensAfter, saved: tokensBefore - tokensAfter, messageCount: messages.length },
+        details: {
+          tokensBefore,
+          tokensAfter,
+          saved: tokensBefore - tokensAfter,
+          messageCount: messages.length,
+        },
       });
     }
 
     if (pendingToolCalls.length === 0) {
       const startTime = Date.now();
-      let assistantChunk:
-        | {
-            provider: string;
-            model: string;
-            content: string;
-            toolCalls: PendingToolCall[];
-          }
-        | null = null;
+      let assistantChunk: {
+        provider: string;
+        model: string;
+        content: string;
+        toolCalls: PendingToolCall[];
+      } | null = null;
 
       await logAgentTurnEvent({
         processId: input.processId!,
@@ -525,7 +553,9 @@ async function* executeAgentRun(
       }
 
       if (!assistantChunk) {
-        throw new Error("No assistant response received from streaming provider.");
+        throw new Error(
+          "No assistant response received from streaming provider.",
+        );
       }
 
       await logAgentTurnEvent({
@@ -723,6 +753,54 @@ async function* executeAgentRun(
         continue;
       }
 
+      // ── Action password gate for mutating tools ──
+      if (
+        policy.mode === "mutating" &&
+        !verifyActionPassword(input.actionPassword)
+      ) {
+        const errorResult = JSON.stringify({
+          error:
+            "🔒 Action locked. Unlock first to perform mutating operations (place orders, close positions, etc.). Use the unlock button in the UI header.",
+          actionLocked: true,
+        });
+        messages.push(buildToolResultMessage(toolCall.id, errorResult));
+        pendingToolCalls = pendingToolCalls.slice(1);
+        toolTraces.push(
+          buildToolTrace({
+            toolCallId: toolCall.id,
+            toolName: toolCall.name,
+            toolArgs,
+            mode: policy.mode,
+            minimumRole: policy.minimumRole,
+            requiresApproval: policy.requiresApproval,
+            status: "denied",
+            error: errorResult,
+          }),
+        );
+        await logAgentTurnEvent({
+          processId: input.processId!,
+          action: "tool_denied_action_password",
+          result: "denied",
+          details: { toolName: toolCall.name },
+        });
+        await updateAgentTurnState(input.processId!, {
+          messages,
+          pendingToolCalls,
+          toolTraces,
+          assistantResponse,
+        });
+        yield {
+          type: "step",
+          step: {
+            type: "tool_result",
+            content: errorResult,
+            toolName: toolCall.name,
+            duration: Date.now() - startTime,
+          },
+        };
+        continue;
+      }
+
       const needsApproval =
         policy.mode === "mutating" &&
         policy.requiresApproval &&
@@ -867,7 +945,12 @@ async function* executeAgentRun(
       try {
         const result = await executor(toolArgs);
         const contextLimits = getContextLimits(resolvedProvider);
-        messages.push(buildToolResultMessage(toolCall.id, pruneToolResult(result, contextLimits.maxToolResultTokens)));
+        messages.push(
+          buildToolResultMessage(
+            toolCall.id,
+            pruneToolResult(result, contextLimits.maxToolResultTokens),
+          ),
+        );
         pendingToolCalls = pendingToolCalls.slice(1);
         toolTraces.push(
           buildToolTrace({
@@ -998,9 +1081,13 @@ function getPendingToolCallsFromTurn(turn: IAgentTurn): PendingToolCall[] {
     : [];
 }
 
-function getToolTracesFromTurn(turn: IAgentTurn): Array<Record<string, unknown>> {
+function getToolTracesFromTurn(
+  turn: IAgentTurn,
+): Array<Record<string, unknown>> {
   return Array.isArray(turn.toolTraces)
-    ? (JSON.parse(JSON.stringify(turn.toolTraces)) as Array<Record<string, unknown>>)
+    ? (JSON.parse(JSON.stringify(turn.toolTraces)) as Array<
+        Record<string, unknown>
+      >)
     : [];
 }
 
@@ -1054,7 +1141,10 @@ export async function* runAgentLoopStreaming(
     const systemPrompt = await buildSystemPrompt(input.role);
     const config = resolveProviderConfig(input.provider);
     const history = Array.isArray(input.history)
-      ? trimHistoryToTokenBudget(input.history, config.contextLimits.historyBudgetTokens)
+      ? trimHistoryToTokenBudget(
+          input.history,
+          config.contextLimits.historyBudgetTokens,
+        )
       : [];
     const messages: AgentChatMessage[] = [
       { role: "system", content: systemPrompt },

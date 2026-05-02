@@ -72,6 +72,7 @@ export function createApp(): Express {
         "Authorization",
         "X-Agent-Password",
         "X-Agent-Auth",
+        "X-Action-Password",
       ],
       credentials: true,
     }),

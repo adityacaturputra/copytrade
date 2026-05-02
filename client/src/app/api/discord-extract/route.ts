@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB, DiscordSource } from "@copytrade/shared/lib/database";
 import { checkTokenHealth } from "@/lib/discord";
+import { verifyActionAuth } from "../_lib/action-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -10,6 +11,9 @@ export const dynamic = "force-dynamic";
  * Creates a new DiscordSource or updates an existing one.
  */
 export async function POST(request: NextRequest) {
+  const authError = verifyActionAuth(request);
+  if (authError) return authError;
+
   try {
     await connectDB();
     const body = await request.json();

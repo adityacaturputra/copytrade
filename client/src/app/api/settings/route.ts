@@ -1,11 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { connectDB, getTradingMode, setTradingMode } from "@copytrade/shared/lib/database";
+import {
+  connectDB,
+  getTradingMode,
+  setTradingMode,
+} from "@copytrade/shared/lib/database";
 import { getRiskConfig, setRiskConfig } from "@copytrade/shared/lib/risk";
 import {
   getSignalConfig,
   setSignalConfig,
   SignalConfigType,
 } from "@copytrade/shared/lib/signal-config";
+import { verifyActionAuth } from "../_lib/action-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +38,9 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+  const authError = verifyActionAuth(request);
+  if (authError) return authError;
+
   try {
     await connectDB();
     const body = await request.json();

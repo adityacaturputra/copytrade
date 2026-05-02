@@ -4,6 +4,8 @@ import { useState, useEffect, useCallback, useRef, Fragment } from "react";
 import { calculateRisk } from "@copytrade/shared/lib/risk-calc";
 import { autoCalculateTPFromRR } from "@copytrade/shared/lib/executor-signal-utils";
 import { buildBackendApiUrl } from "../lib/backend-url";
+import { getStoredActionPassword } from "@/lib/action-auth";
+import { UnlockModal } from "@/lib/components/UnlockModal";
 
 // ==================== Types ====================
 
@@ -317,7 +319,10 @@ export default function Dashboard() {
   ) => {
     setTriggeringCron(type);
     try {
-      const res = await fetch(`/api/cron/${type}`, { method: "POST" });
+      const actionPassword = getStoredActionPassword();
+      const headers: Record<string, string> = {};
+      if (actionPassword) headers["x-action-password"] = actionPassword;
+      const res = await fetch(`/api/cron/${type}`, { method: "POST", headers });
       const json = await res.json();
       if (json.success) {
         // Fire-and-forget — poll status to see progress
@@ -338,9 +343,13 @@ export default function Dashboard() {
     const newMode = data.tradingMode === "auto" ? "manual" : "auto";
     setSwitchingMode(true);
     try {
+      const actionPassword = getStoredActionPassword();
       const res = await fetch("/api/settings", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(actionPassword ? { "x-action-password": actionPassword } : {}),
+        },
         body: JSON.stringify({ mode: newMode }),
       });
       const json = await res.json();
@@ -361,13 +370,16 @@ export default function Dashboard() {
   ) => {
     setActingDraft(draftId);
     try {
+      const actionPassword = getStoredActionPassword();
+      const draftHeaders: Record<string, string> = extraBody
+        ? { "Content-Type": "application/json" }
+        : {};
+      if (actionPassword) draftHeaders["x-action-password"] = actionPassword;
       const res = await fetch(
         buildBackendApiUrl(`/api/drafts/${draftId}/${action}`),
         {
           method: "POST",
-          headers: extraBody
-            ? { "Content-Type": "application/json" }
-            : undefined,
+          headers: draftHeaders,
           body: extraBody ? JSON.stringify(extraBody) : undefined,
         },
       );
@@ -388,7 +400,9 @@ export default function Dashboard() {
       } else {
         setRefreshKey((k) => k + 1);
         await fetchData();
-        const processSuffix = json.processId ? `\nProcess: ${json.processId}` : "";
+        const processSuffix = json.processId
+          ? `\nProcess: ${json.processId}`
+          : "";
         alert(`Failed: ${json.error}${processSuffix}`);
       }
     } catch (err) {
@@ -485,7 +499,8 @@ export default function Dashboard() {
       ? visibleExchangeAccounts.length > 0
         ? "MULTI ACCOUNT"
         : (data?.exchangeProvider || "unknown").toUpperCase()
-      : (displayAccount?.tradingPlatform ||
+      : (
+          displayAccount?.tradingPlatform ||
           data?.exchangeProvider ||
           "unknown"
         ).toUpperCase();
@@ -649,6 +664,7 @@ export default function Dashboard() {
               >
                 🤖 <span className="hidden sm:inline">Agent</span>
               </a>
+              <UnlockModal />
               <a
                 href="/settings"
                 className="bg-slate-700 hover:bg-slate-600 px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm transition"
@@ -721,7 +737,10 @@ export default function Dashboard() {
                     <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400 flex items-center gap-2">
                       Exchange Overview
                       {loadingExchange && (
-                        <div className="spinner w-3 h-3 border-2" title="Syncing with exchange..." />
+                        <div
+                          className="spinner w-3 h-3 border-2"
+                          title="Syncing with exchange..."
+                        />
                       )}
                     </span>
                     <span className="rounded-full border border-slate-700 bg-slate-900/70 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-200">
@@ -747,7 +766,8 @@ export default function Dashboard() {
                     Connected
                   </div>
                   <div className="mt-1 text-sm font-semibold text-white">
-                    {connectedExchangeAccounts.length}/{visibleExchangeAccounts.length}
+                    {connectedExchangeAccounts.length}/
+                    {visibleExchangeAccounts.length}
                   </div>
                 </div>
                 <div className="rounded-lg border border-slate-700/70 bg-slate-900/60 px-3 py-2">
@@ -777,7 +797,8 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {selectedAccountId === "all" && visibleExchangeAccounts.length > 0 ? (
+            {selectedAccountId === "all" &&
+            visibleExchangeAccounts.length > 0 ? (
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                 {visibleExchangeAccounts.map((account) => (
                   <div
@@ -806,7 +827,9 @@ export default function Dashboard() {
                     {loadingExchange && !account.account ? (
                       <div className="mt-4 rounded-lg bg-slate-900/30 border border-slate-800 px-4 py-3 flex items-center gap-3">
                         <div className="spinner w-4 h-4 border-2" />
-                        <span className="text-sm text-slate-400">Loading exchange data...</span>
+                        <span className="text-sm text-slate-400">
+                          Loading exchange data...
+                        </span>
                       </div>
                     ) : account.account ? (
                       <div className="mt-4 grid gap-2 sm:grid-cols-3">
@@ -854,7 +877,8 @@ export default function Dashboard() {
                     ) : (
                       <div className="mt-4 rounded-lg border border-red-900/40 bg-red-950/20 px-3 py-2 text-sm text-red-300">
                         ⚠️{" "}
-                        {account.exchangeError || "Failed to load exchange balance."}
+                        {account.exchangeError ||
+                          "Failed to load exchange balance."}
                       </div>
                     )}
                   </div>
@@ -863,7 +887,9 @@ export default function Dashboard() {
             ) : loadingExchange && !displayAccountInfo ? (
               <div className="rounded-xl border border-slate-700/70 bg-slate-950/40 p-6 flex flex-col items-center justify-center gap-3">
                 <div className="spinner w-6 h-6 border-2" />
-                <span className="text-sm text-slate-400">Loading exchange account...</span>
+                <span className="text-sm text-slate-400">
+                  Loading exchange account...
+                </span>
               </div>
             ) : displayAccountInfo ? (
               <div className="rounded-xl border border-slate-700/70 bg-slate-950/40 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
@@ -998,7 +1024,10 @@ export default function Dashboard() {
               <span className="w-2 h-2 bg-success rounded-full pulse-dot" />
               Active Positions ({openPositions.length})
               {loadingExchange && (
-                <div className="spinner w-3 h-3 border-2 ml-2" title="Syncing PnL..." />
+                <div
+                  className="spinner w-3 h-3 border-2 ml-2"
+                  title="Syncing PnL..."
+                />
               )}
             </h2>
             <div className="overflow-x-auto">
@@ -1407,7 +1436,11 @@ function InlineLogDetails({ text }: { text?: string | null }) {
   if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
     startIndex = firstBrace;
     endIndex = lastBrace;
-  } else if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
+  } else if (
+    firstBracket !== -1 &&
+    lastBracket !== -1 &&
+    lastBracket > firstBracket
+  ) {
     startIndex = firstBracket;
     endIndex = lastBracket;
   }
@@ -1425,7 +1458,7 @@ function InlineLogDetails({ text }: { text?: string | null }) {
           {prefix}
           <span className="relative group cursor-help inline-flex items-center mx-1 z-10 align-middle">
             <span className="bg-emerald-950/40 text-emerald-400 text-[9px] px-1.5 py-0.5 rounded border border-emerald-900/50 hover:bg-emerald-900/50 transition-colors whitespace-nowrap">
-              ...{'{ }'} JSON
+              ...{"{ }"} JSON
             </span>
             <span className="absolute z-[100] hidden group-hover:block bg-[#0D1117] text-slate-300 text-[10px] p-3 rounded-lg border border-slate-600 shadow-2xl min-w-[250px] max-w-[85vw] md:max-w-[600px] bottom-full left-0 sm:left-1/2 sm:-translate-x-1/2 mb-2 pointer-events-none whitespace-pre-wrap leading-relaxed max-h-[40vh] overflow-y-auto text-left">
               {formatted}
@@ -1494,7 +1527,7 @@ function ProcessLogsAccordion({
         hideCronNoise: String(shouldHideRoutineNoise),
         order: "desc", // Latest first, will be flipped by flex-col-reverse
       });
-      
+
       if (processId) params.set("processId", processId);
       if (accountId) params.set("accountId", accountId);
       if (symbol) params.set("symbol", symbol);
@@ -1502,27 +1535,41 @@ function ProcessLogsAccordion({
         params.set("levels", selectedLevels.join(","));
       }
 
-      const res = await fetch(`/api/logs?${params}`, { signal: controller.signal });
+      const res = await fetch(`/api/logs?${params}`, {
+        signal: controller.signal,
+      });
       const json = await res.json();
-      
+
       if (!controller.signal.aborted) {
         if (!json.success) {
           throw new Error(json.error || "Failed to load process logs");
         }
-        setLogs((prev) => (page === 1 ? json.data.logs : [...prev, ...json.data.logs]));
+        setLogs((prev) =>
+          page === 1 ? json.data.logs : [...prev, ...json.data.logs],
+        );
         setTotalCount(json.data.totalCount);
         setTotalPages(json.data.totalPages);
       }
     } catch (err: any) {
       if (err.name !== "AbortError") {
-        setError(err instanceof Error ? err.message : "Failed to load process logs");
+        setError(
+          err instanceof Error ? err.message : "Failed to load process logs",
+        );
       }
     } finally {
       if (!controller.signal.aborted) {
         setLoading(false);
       }
     }
-  }, [processId, accountId, symbol, page, pageSize, hideCronNoise, selectedLevels]);
+  }, [
+    processId,
+    accountId,
+    symbol,
+    page,
+    pageSize,
+    hideCronNoise,
+    selectedLevels,
+  ]);
 
   // Fetch when opened
   useEffect(() => {
@@ -1553,7 +1600,7 @@ function ProcessLogsAccordion({
           setPage((prev) => prev + 1);
         }
       },
-      { threshold: 0.1 }
+      { threshold: 0.1 },
     );
 
     const currentTarget = observerTarget.current;
@@ -1590,7 +1637,13 @@ function ProcessLogsAccordion({
   };
 
   return (
-    <div className={hideHeader ? "" : "mt-3 rounded-lg border border-slate-700/70 bg-slate-900/30"}>
+    <div
+      className={
+        hideHeader
+          ? ""
+          : "mt-3 rounded-lg border border-slate-700/70 bg-slate-900/30"
+      }
+    >
       {!hideHeader && (
         <button
           onClick={() => setIsOpen((value) => !value)}
@@ -1613,18 +1666,20 @@ function ProcessLogsAccordion({
               </span>
             )}
           </div>
-          <span className="text-xs text-slate-500">
-            {totalCount} logs
-          </span>
+          <span className="text-xs text-slate-500">{totalCount} logs</span>
         </button>
       )}
 
       {(isOpen || hideHeader) && (
-        <div className={hideHeader ? "py-2" : "border-t border-slate-700/70 px-3 py-3"}>
+        <div
+          className={
+            hideHeader ? "py-2" : "border-t border-slate-700/70 px-3 py-3"
+          }
+        >
           {!(processId || symbol) ? (
             <p className="text-xs text-slate-500">
-              Entitas ini belum memiliki identifier log yang valid, jadi timeline proses belum
-              bisa ditampilkan.
+              Entitas ini belum memiliki identifier log yang valid, jadi
+              timeline proses belum bisa ditampilkan.
             </p>
           ) : (
             <>
@@ -1632,7 +1687,11 @@ function ProcessLogsAccordion({
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={() => { setLogs([]); setPage(1); fetchProcessLogs(); }}
+                    onClick={() => {
+                      setLogs([]);
+                      setPage(1);
+                      fetchProcessLogs();
+                    }}
                     disabled={loading}
                     className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-slate-700 text-slate-300 hover:bg-slate-700 disabled:opacity-40 transition"
                   >
@@ -1707,37 +1766,86 @@ function ProcessLogsAccordion({
                 ) : (
                   <>
                     {logs.map((log) => {
-                      const dateStr = new Date(log.createdAt || log.created_at || "").toLocaleString();
-                      const levelText = (log.level || log.result || "").toUpperCase();
+                      const dateStr = new Date(
+                        log.createdAt || log.created_at || "",
+                      ).toLocaleString();
+                      const levelText = (
+                        log.level ||
+                        log.result ||
+                        ""
+                      ).toUpperCase();
                       return (
-                        <div key={log._id || log.id} className="hover:bg-slate-800/30 p-2 sm:px-1 sm:py-0 -mx-1 rounded transition-colors flex flex-col gap-1 sm:grid sm:grid-cols-[140px_10px_60px_10px_140px_10px_180px_20px_1fr] sm:items-start border-b border-slate-800/50 sm:border-none">
+                        <div
+                          key={log._id || log.id}
+                          className="hover:bg-slate-800/30 p-2 sm:px-1 sm:py-0 -mx-1 rounded transition-colors flex flex-col gap-1 sm:grid sm:grid-cols-[140px_10px_60px_10px_140px_10px_180px_20px_1fr] sm:items-start border-b border-slate-800/50 sm:border-none"
+                        >
                           {/* Mobile Header */}
                           <div className="flex items-center gap-2 sm:hidden text-xs">
                             <span className="text-slate-500">{dateStr}</span>
                             <span className="text-slate-700">|</span>
-                            <span className={`${getTerminalColor(levelText)} font-bold`}>{levelText || "INFO"}</span>
+                            <span
+                              className={`${getTerminalColor(levelText)} font-bold`}
+                            >
+                              {levelText || "INFO"}
+                            </span>
                           </div>
                           <div className="flex items-center gap-2 sm:hidden text-[11px]">
-                            <span className="text-fuchsia-400 truncate">{log.type}</span>
+                            <span className="text-fuchsia-400 truncate">
+                              {log.type}
+                            </span>
                             <span className="text-slate-700">|</span>
-                            <span className="text-slate-300 truncate">{log.action}</span>
+                            <span className="text-slate-300 truncate">
+                              {log.action}
+                            </span>
                           </div>
 
                           {/* Desktop Columns */}
-                          <span className="hidden sm:inline text-slate-500 truncate">{dateStr}</span>
-                          <span className="hidden sm:inline text-slate-700 text-center">|</span>
-                          <span className={`hidden sm:inline ${getTerminalColor(levelText)} font-bold truncate`}>{levelText || "INFO"}</span>
-                          <span className="hidden sm:inline text-slate-700 text-center">|</span>
-                          <span className="hidden sm:inline text-fuchsia-400 truncate" title={log.type}>{log.type}</span>
-                          <span className="hidden sm:inline text-slate-700 text-center">|</span>
-                          <span className="hidden sm:inline text-slate-300 truncate" title={log.action}>{log.action}</span>
-                          <span className="hidden sm:inline text-slate-700 text-center">---</span>
-                          
+                          <span className="hidden sm:inline text-slate-500 truncate">
+                            {dateStr}
+                          </span>
+                          <span className="hidden sm:inline text-slate-700 text-center">
+                            |
+                          </span>
+                          <span
+                            className={`hidden sm:inline ${getTerminalColor(levelText)} font-bold truncate`}
+                          >
+                            {levelText || "INFO"}
+                          </span>
+                          <span className="hidden sm:inline text-slate-700 text-center">
+                            |
+                          </span>
+                          <span
+                            className="hidden sm:inline text-fuchsia-400 truncate"
+                            title={log.type}
+                          >
+                            {log.type}
+                          </span>
+                          <span className="hidden sm:inline text-slate-700 text-center">
+                            |
+                          </span>
+                          <span
+                            className="hidden sm:inline text-slate-300 truncate"
+                            title={log.action}
+                          >
+                            {log.action}
+                          </span>
+                          <span className="hidden sm:inline text-slate-700 text-center">
+                            ---
+                          </span>
+
                           {/* Detail Body */}
                           <span className="text-slate-400 mt-1 sm:mt-0 leading-relaxed break-words">
                             <InlineLogDetails text={log.details} />
-                            {log.error && <span className="text-red-400 ml-1 block sm:inline mt-1 sm:mt-0">Error: {log.error}</span>}
-                            {log.symbol && <span className="text-primary-400 ml-1 block sm:inline mt-1 sm:mt-0">[{log.symbol}]</span>}
+                            {log.error && (
+                              <span className="text-red-400 ml-1 block sm:inline mt-1 sm:mt-0">
+                                Error: {log.error}
+                              </span>
+                            )}
+                            {log.symbol && (
+                              <span className="text-primary-400 ml-1 block sm:inline mt-1 sm:mt-0">
+                                [{log.symbol}]
+                              </span>
+                            )}
                           </span>
                         </div>
                       );
@@ -1745,15 +1853,20 @@ function ProcessLogsAccordion({
 
                     {/* Infinite Scroll Sentinel */}
                     {page < totalPages && (
-                      <div ref={observerTarget} className="py-3 flex justify-center shrink-0">
+                      <div
+                        ref={observerTarget}
+                        className="py-3 flex justify-center shrink-0"
+                      >
                         {loading ? (
                           <div className="spinner w-4 h-4 border-2" />
                         ) : (
-                          <span className="text-slate-600">Loading older logs...</span>
+                          <span className="text-slate-600">
+                            Loading older logs...
+                          </span>
                         )}
                       </div>
                     )}
-                    
+
                     {page >= totalPages && logs.length > 0 && (
                       <div className="py-3 text-center text-slate-600 shrink-0 border-b border-slate-800/50 mb-2">
                         --- End of logs ---
@@ -2085,7 +2198,7 @@ function DraftCard({
                 </span>
               )}
               {!isPending && <StatusBadge status={draft.status} />}
-              
+
               {isResolved && (
                 <button
                   onClick={() => setIsExpanded(false)}
@@ -2179,7 +2292,9 @@ function DraftCard({
                       min="0.5"
                       value={customRR}
                       onChange={(e) =>
-                        setCustomRR(Math.max(0.5, parseFloat(e.target.value) || 0.5))
+                        setCustomRR(
+                          Math.max(0.5, parseFloat(e.target.value) || 0.5),
+                        )
                       }
                       className="h-7 w-20 rounded border border-slate-600 bg-slate-800 px-2 text-xs text-white focus:border-blue-500 focus:outline-none"
                     />
@@ -2714,7 +2829,10 @@ function PositionsTab({
         if (accountIdFilter !== "all") params.set("accountId", accountIdFilter);
         const res = await fetch(`/api/positions?${params}`);
         const json = await res.json();
-        return [status, json?.success ? (json.data?.totalCount ?? 0) : 0] as const;
+        return [
+          status,
+          json?.success ? (json.data?.totalCount ?? 0) : 0,
+        ] as const;
       });
 
       const counts = await Promise.all(countPromises);
@@ -2881,14 +2999,15 @@ function PositionsTab({
             {positions.map((pos) => {
               let displayPnl = pos.pnl || 0;
               let displayCurrentPrice = pos.currentPrice || pos.entryPrice;
-              
+
               if (pos.status === "open" && livePositions.length > 0) {
                 const livePos = livePositions.find(
                   (lp) => (lp._id || lp.id) === (pos._id || pos.id),
                 );
                 if (livePos) {
                   displayPnl = livePos.pnl || 0;
-                  displayCurrentPrice = livePos.currentPrice || livePos.entryPrice;
+                  displayCurrentPrice =
+                    livePos.currentPrice || livePos.entryPrice;
                 }
               }
 
@@ -2909,7 +3028,9 @@ function PositionsTab({
                 >
                   <div className="flex justify-between items-center mb-3">
                     <div className="flex items-center gap-2">
-                      <span className="font-bold text-slate-200">{pos.symbol}</span>
+                      <span className="font-bold text-slate-200">
+                        {pos.symbol}
+                      </span>
                       <span
                         className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
                           pos.side === "LONG"
@@ -2920,31 +3041,48 @@ function PositionsTab({
                         {pos.side}
                       </span>
                     </div>
-                    <span className={`text-[10px] px-2 py-0.5 rounded-full ${getStatusColor(pos.status)}`}>
+                    <span
+                      className={`text-[10px] px-2 py-0.5 rounded-full ${getStatusColor(pos.status)}`}
+                    >
                       {pos.status.toUpperCase()}
                     </span>
                   </div>
 
                   <div className="grid grid-cols-3 gap-2 mb-3">
                     <div className="bg-slate-900/50 rounded p-1.5 flex flex-col">
-                      <span className="text-[9px] text-slate-500 uppercase">Entry</span>
+                      <span className="text-[9px] text-slate-500 uppercase">
+                        Entry
+                      </span>
                       <span className="text-xs font-mono text-slate-300">
                         {pos.entryPrice?.toFixed(4) || "-"}
                       </span>
                     </div>
                     <div className="bg-slate-900/50 rounded p-1.5 flex flex-col">
-                      <span className="text-[9px] text-slate-500 uppercase">Qty</span>
-                      <span className="text-xs font-mono text-slate-300">{pos.quantity}</span>
+                      <span className="text-[9px] text-slate-500 uppercase">
+                        Qty
+                      </span>
+                      <span className="text-xs font-mono text-slate-300">
+                        {pos.quantity}
+                      </span>
                     </div>
                     <div className="bg-slate-900/50 rounded p-1.5 flex flex-col">
-                      <span className="text-[9px] text-slate-500 uppercase">PNL</span>
-                      <div className={`text-xs font-mono font-bold ${
-                        displayPnl > 0 ? "text-emerald-400" : displayPnl < 0 ? "text-red-400" : "text-slate-400"
-                      }`}>
+                      <span className="text-[9px] text-slate-500 uppercase">
+                        PNL
+                      </span>
+                      <div
+                        className={`text-xs font-mono font-bold ${
+                          displayPnl > 0
+                            ? "text-emerald-400"
+                            : displayPnl < 0
+                              ? "text-red-400"
+                              : "text-slate-400"
+                        }`}
+                      >
                         {displayPnl > 0 ? "+" : ""}
                         {displayPnl.toFixed(2)}
                         <span className="text-[9px] ml-1 opacity-80 font-normal">
-                          ({displayPnl > 0 ? "+" : ""}{pnlPercent.toFixed(2)}%)
+                          ({displayPnl > 0 ? "+" : ""}
+                          {pnlPercent.toFixed(2)}%)
                         </span>
                       </div>
                     </div>
@@ -2963,8 +3101,12 @@ function PositionsTab({
                     )}
                     {pos.closeReason && (
                       <div className="bg-slate-900/50 p-1.5 rounded mt-1 border border-slate-700/50 relative group">
-                        <span className="text-[9px] text-slate-500 uppercase block mb-0.5">Close Reason</span>
-                        <span className="text-slate-400 block truncate">{pos.closeReason}</span>
+                        <span className="text-[9px] text-slate-500 uppercase block mb-0.5">
+                          Close Reason
+                        </span>
+                        <span className="text-slate-400 block truncate">
+                          {pos.closeReason}
+                        </span>
                         <div className="absolute z-[100] hidden active:block sm:group-hover:block bg-slate-800 text-slate-200 text-[10px] p-2 rounded-lg border border-slate-600 shadow-2xl min-w-[200px] bottom-full left-0 mb-1 whitespace-normal leading-relaxed">
                           {pos.closeReason}
                         </div>
@@ -2974,7 +3116,9 @@ function PositionsTab({
 
                   <button
                     onClick={() =>
-                      setExpandedPosId(isExpanded ? null : (pos._id || String(pos.id)))
+                      setExpandedPosId(
+                        isExpanded ? null : pos._id || String(pos.id),
+                      )
                     }
                     className={`w-full text-xs py-1.5 rounded transition-colors flex items-center justify-center gap-1 ${
                       isExpanded
@@ -3023,20 +3167,22 @@ function PositionsTab({
                 {positions.map((pos) => {
                   let displayPnl = pos.pnl || 0;
                   let displayCurrentPrice = pos.currentPrice || pos.entryPrice;
-                  
+
                   if (pos.status === "open" && livePositions.length > 0) {
                     const livePos = livePositions.find(
                       (lp) => (lp._id || lp.id) === (pos._id || pos.id),
                     );
                     if (livePos) {
                       displayPnl = livePos.pnl || 0;
-                      displayCurrentPrice = livePos.currentPrice || livePos.entryPrice;
+                      displayCurrentPrice =
+                        livePos.currentPrice || livePos.entryPrice;
                     }
                   }
 
                   const pnlPercent =
                     displayCurrentPrice && pos.entryPrice && pos.entryPrice > 0
-                      ? ((displayCurrentPrice - pos.entryPrice) / pos.entryPrice) *
+                      ? ((displayCurrentPrice - pos.entryPrice) /
+                          pos.entryPrice) *
                         100 *
                         pos.leverage *
                         (pos.side === "LONG" ? 1 : -1)
@@ -3045,7 +3191,11 @@ function PositionsTab({
                   return (
                     <Fragment key={`desktop-${pos._id || pos.id}`}>
                       <tr
-                        className={positionFilter === "pending" ? "opacity-80 border-b border-slate-700/50" : "border-b border-slate-700/50"}
+                        className={
+                          positionFilter === "pending"
+                            ? "opacity-80 border-b border-slate-700/50"
+                            : "border-b border-slate-700/50"
+                        }
                       >
                         <td className="font-medium">{pos.symbol}</td>
                         <td>
@@ -3070,7 +3220,8 @@ function PositionsTab({
                           </span>
                           {positionFilter === "open" && (
                             <span className="text-[10px] opacity-80">
-                              ({displayPnl >= 0 ? "+" : ""}{pnlPercent.toFixed(2)}%)
+                              ({displayPnl >= 0 ? "+" : ""}
+                              {pnlPercent.toFixed(2)}%)
                             </span>
                           )}
                         </td>
@@ -3127,7 +3278,10 @@ function PositionsTab({
                       </tr>
                       {expandedPosId === (pos._id || String(pos.id)) && (
                         <tr>
-                          <td colSpan={100} className="p-0 border-none bg-slate-900/10">
+                          <td
+                            colSpan={100}
+                            className="p-0 border-none bg-slate-900/10"
+                          >
                             <div className="px-4 py-2">
                               <ProcessLogsAccordion
                                 processId={pos.processId}
@@ -3331,10 +3485,14 @@ function LogsTab({
       }
       if (channelIdFilter !== "all") params.set("channelId", channelIdFilter);
       if (accountIdFilter !== "all") params.set("accountId", accountIdFilter);
-      const res = await fetch(`/api/logs?${params}`, { signal: controller.signal });
+      const res = await fetch(`/api/logs?${params}`, {
+        signal: controller.signal,
+      });
       const json = await res.json();
       if (json.success && !controller.signal.aborted) {
-        setLogs((prev) => (page === 1 ? json.data.logs : [...prev, ...json.data.logs]));
+        setLogs((prev) =>
+          page === 1 ? json.data.logs : [...prev, ...json.data.logs],
+        );
         setTotalCount(json.data.totalCount);
         setTotalPages(json.data.totalPages);
       }
@@ -3369,7 +3527,13 @@ function LogsTab({
   useEffect(() => {
     setLogs([]);
     setPage(1);
-  }, [hideCronNoise, selectedLevels, pageSize, channelIdFilter, accountIdFilter]);
+  }, [
+    hideCronNoise,
+    selectedLevels,
+    pageSize,
+    channelIdFilter,
+    accountIdFilter,
+  ]);
 
   // Infinite scroll observer
   useEffect(() => {
@@ -3379,7 +3543,7 @@ function LogsTab({
           setPage((prev) => prev + 1);
         }
       },
-      { threshold: 0.1 }
+      { threshold: 0.1 },
     );
 
     const currentTarget = observerTarget.current;
@@ -3421,7 +3585,10 @@ function LogsTab({
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <button
-            onClick={() => { setPage(1); fetchLogs(); }}
+            onClick={() => {
+              setPage(1);
+              fetchLogs();
+            }}
             disabled={loading}
             className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-slate-700 text-slate-300 hover:bg-slate-700 disabled:opacity-40 transition"
           >
@@ -3496,37 +3663,82 @@ function LogsTab({
         ) : (
           <>
             {logs.map((log) => {
-              const dateStr = new Date(log.createdAt || log.created_at || "").toLocaleString();
+              const dateStr = new Date(
+                log.createdAt || log.created_at || "",
+              ).toLocaleString();
               const levelText = (log.level || log.result || "").toUpperCase();
               return (
-                <div key={log._id || log.id} className="hover:bg-slate-800/30 p-2 sm:px-1 sm:py-0 -mx-1 rounded transition-colors flex flex-col gap-1 sm:grid sm:grid-cols-[140px_10px_60px_10px_140px_10px_180px_20px_1fr] sm:items-start border-b border-slate-800/50 sm:border-none">
+                <div
+                  key={log._id || log.id}
+                  className="hover:bg-slate-800/30 p-2 sm:px-1 sm:py-0 -mx-1 rounded transition-colors flex flex-col gap-1 sm:grid sm:grid-cols-[140px_10px_60px_10px_140px_10px_180px_20px_1fr] sm:items-start border-b border-slate-800/50 sm:border-none"
+                >
                   {/* Mobile Header */}
                   <div className="flex items-center gap-2 sm:hidden text-xs">
                     <span className="text-slate-500">{dateStr}</span>
                     <span className="text-slate-700">|</span>
-                    <span className={`${getTerminalColor(levelText)} font-bold`}>{levelText || "INFO"}</span>
+                    <span
+                      className={`${getTerminalColor(levelText)} font-bold`}
+                    >
+                      {levelText || "INFO"}
+                    </span>
                   </div>
                   <div className="flex items-center gap-2 sm:hidden text-[11px]">
-                    <span className="text-fuchsia-400 truncate">{log.type}</span>
+                    <span className="text-fuchsia-400 truncate">
+                      {log.type}
+                    </span>
                     <span className="text-slate-700">|</span>
-                    <span className="text-slate-300 truncate">{log.action}</span>
+                    <span className="text-slate-300 truncate">
+                      {log.action}
+                    </span>
                   </div>
 
                   {/* Desktop Columns */}
-                  <span className="hidden sm:inline text-slate-500 truncate">{dateStr}</span>
-                  <span className="hidden sm:inline text-slate-700 text-center">|</span>
-                  <span className={`hidden sm:inline ${getTerminalColor(levelText)} font-bold truncate`}>{levelText || "INFO"}</span>
-                  <span className="hidden sm:inline text-slate-700 text-center">|</span>
-                  <span className="hidden sm:inline text-fuchsia-400 truncate" title={log.type}>{log.type}</span>
-                  <span className="hidden sm:inline text-slate-700 text-center">|</span>
-                  <span className="hidden sm:inline text-slate-300 truncate" title={log.action}>{log.action}</span>
-                  <span className="hidden sm:inline text-slate-700 text-center">---</span>
-                  
+                  <span className="hidden sm:inline text-slate-500 truncate">
+                    {dateStr}
+                  </span>
+                  <span className="hidden sm:inline text-slate-700 text-center">
+                    |
+                  </span>
+                  <span
+                    className={`hidden sm:inline ${getTerminalColor(levelText)} font-bold truncate`}
+                  >
+                    {levelText || "INFO"}
+                  </span>
+                  <span className="hidden sm:inline text-slate-700 text-center">
+                    |
+                  </span>
+                  <span
+                    className="hidden sm:inline text-fuchsia-400 truncate"
+                    title={log.type}
+                  >
+                    {log.type}
+                  </span>
+                  <span className="hidden sm:inline text-slate-700 text-center">
+                    |
+                  </span>
+                  <span
+                    className="hidden sm:inline text-slate-300 truncate"
+                    title={log.action}
+                  >
+                    {log.action}
+                  </span>
+                  <span className="hidden sm:inline text-slate-700 text-center">
+                    ---
+                  </span>
+
                   {/* Detail Body */}
                   <span className="text-slate-400 mt-1 sm:mt-0 leading-relaxed">
                     <InlineLogDetails text={log.details} />
-                    {log.error && <span className="text-red-400 ml-1 block sm:inline mt-1 sm:mt-0">Error: {log.error}</span>}
-                    {log.symbol && <span className="text-primary-400 ml-1 block sm:inline mt-1 sm:mt-0">[{log.symbol}]</span>}
+                    {log.error && (
+                      <span className="text-red-400 ml-1 block sm:inline mt-1 sm:mt-0">
+                        Error: {log.error}
+                      </span>
+                    )}
+                    {log.symbol && (
+                      <span className="text-primary-400 ml-1 block sm:inline mt-1 sm:mt-0">
+                        [{log.symbol}]
+                      </span>
+                    )}
                   </span>
                 </div>
               );
@@ -3534,7 +3746,10 @@ function LogsTab({
 
             {/* Infinite Scroll Sentinel */}
             {page < totalPages && (
-              <div ref={observerTarget} className="py-3 flex justify-center shrink-0">
+              <div
+                ref={observerTarget}
+                className="py-3 flex justify-center shrink-0"
+              >
                 {loading ? (
                   <div className="spinner w-4 h-4 border-2" />
                 ) : (
@@ -3542,7 +3757,7 @@ function LogsTab({
                 )}
               </div>
             )}
-            
+
             {page >= totalPages && logs.length > 0 && (
               <div className="py-3 text-center text-slate-600 shrink-0 border-b border-slate-800/50 mb-2">
                 --- End of logs ---

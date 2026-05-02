@@ -1,14 +1,16 @@
-import { Router, Request, Response, type Router as ExpressRouter } from "express";
 import {
-  authenticateAgentRequest,
+  Router,
+  Request,
+  Response,
+  type Router as ExpressRouter,
+} from "express";
+import {
   isAgentAuthConfigured,
-  resolveAgentRoleFromPassword,
+  authenticateAgentRequest,
 } from "../lib/agent/auth";
-import {
-  createAgentSessionId,
-  ensureAgentSession,
-} from "../lib/agent/logging";
+import { createAgentSessionId, ensureAgentSession } from "../lib/agent/logging";
 import { runAgentLoopStreaming } from "../lib/agent/loop";
+import { getActionPasswordHeader } from "../lib/action-auth";
 import { AgentTurn } from "@copytrade/shared/lib/database";
 
 const router: ExpressRouter = Router();
@@ -20,18 +22,6 @@ function getRequestIp(req: Request): string | undefined {
   }
 
   return req.ip || undefined;
-}
-
-function ensureAgentAuthConfigured(res: Response): boolean {
-  if (isAgentAuthConfigured()) {
-    return true;
-  }
-
-  res.status(503).json({
-    error:
-      "Agent auth is not configured. Set AGENT_VIEWER_PASSWORD, AGENT_OPERATOR_PASSWORD, and/or AGENT_ADMIN_PASSWORD in .env.",
-  });
-  return false;
 }
 
 function sendSseEvent(res: Response, event: string, data: unknown) {
@@ -127,47 +117,29 @@ async function streamAgentResponse(
 }
 
 router.post("/auth", async (req: Request, res: Response) => {
-  if (!ensureAgentAuthConfigured(res)) {
-    return;
-  }
-
-  const password =
-    typeof req.body?.password === "string" ? req.body.password : undefined;
-  const role = resolveAgentRoleFromPassword(password);
-  if (!role) {
-    res.status(401).json({ error: "Invalid agent password" });
-    return;
-  }
-
+  // Agent auth is open — just create/return a session
   const requestedSessionId =
-    typeof req.body?.sessionId === "string" && req.body.sessionId.trim().length > 0
+    typeof req.body?.sessionId === "string" &&
+    req.body.sessionId.trim().length > 0
       ? req.body.sessionId.trim()
       : createAgentSessionId();
 
   await ensureAgentSession({
     sessionId: requestedSessionId,
-    role,
+    role: "admin",
     userAgent: req.header("user-agent") || undefined,
     ipAddress: getRequestIp(req),
   });
 
   res.json({
     success: true,
-    role,
+    role: "admin",
     sessionId: requestedSessionId,
   });
 });
 
 router.post("/", async (req: Request, res: Response) => {
-  if (!ensureAgentAuthConfigured(res)) {
-    return;
-  }
-
   const auth = authenticateAgentRequest(req);
-  if (!auth) {
-    res.status(401).json({ error: "Unauthorized agent request" });
-    return;
-  }
 
   const { message, history = [], provider, sessionId } = req.body ?? {};
   if (!message || typeof message !== "string") {
@@ -186,19 +158,12 @@ router.post("/", async (req: Request, res: Response) => {
     provider: typeof provider === "string" ? provider : undefined,
     history: Array.isArray(history) ? history : [],
     userMessage: message,
+    actionPassword: getActionPasswordHeader(req),
   });
 });
 
 router.post("/approval", async (req: Request, res: Response) => {
-  if (!ensureAgentAuthConfigured(res)) {
-    return;
-  }
-
   const auth = authenticateAgentRequest(req);
-  if (!auth) {
-    res.status(401).json({ error: "Unauthorized agent request" });
-    return;
-  }
 
   const { sessionId, processId, decision } = req.body ?? {};
   if (!sessionId || typeof sessionId !== "string") {
@@ -221,20 +186,11 @@ router.post("/approval", async (req: Request, res: Response) => {
     role: auth.role,
     processId,
     decision,
+    actionPassword: getActionPasswordHeader(req),
   });
 });
 
 router.get("/history", async (req: Request, res: Response) => {
-  if (!ensureAgentAuthConfigured(res)) {
-    return;
-  }
-
-  const auth = authenticateAgentRequest(req);
-  if (!auth) {
-    res.status(401).json({ error: "Unauthorized agent request" });
-    return;
-  }
-
   try {
     const turns = await AgentTurn.find()
       .select({
@@ -273,18 +229,10 @@ router.get("/history", async (req: Request, res: Response) => {
 });
 
 router.get("/history/:processId", async (req: Request, res: Response) => {
-  if (!ensureAgentAuthConfigured(res)) {
-    return;
-  }
-
-  const auth = authenticateAgentRequest(req);
-  if (!auth) {
-    res.status(401).json({ error: "Unauthorized agent request" });
-    return;
-  }
-
   try {
-    const turn = await AgentTurn.findOne({ processId: req.params.processId }).lean().exec();
+    const turn = await AgentTurn.findOne({ processId: req.params.processId })
+      .lean()
+      .exec();
     if (!turn) {
       res.status(404).json({ error: "History not found" });
       return;

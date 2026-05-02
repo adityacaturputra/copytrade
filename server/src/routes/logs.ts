@@ -1,9 +1,15 @@
-import { Router, Request, Response, type Router as ExpressRouter } from "express";
+import {
+  Router,
+  Request,
+  Response,
+  type Router as ExpressRouter,
+} from "express";
 import {
   cleanupTradeLogs,
   createTradeLog,
   listTradeLogs,
 } from "@copytrade/shared/lib/trade-log-store";
+import { requireActionAuth } from "../lib/action-auth";
 
 const router: ExpressRouter = Router();
 
@@ -72,17 +78,25 @@ router.post("/", async (req: Request, res: Response) => {
 
     const record = await createTradeLog({
       accountId:
-        typeof body.accountId === "string" ? body.accountId : body.accountId ?? null,
+        typeof body.accountId === "string"
+          ? body.accountId
+          : (body.accountId ?? null),
       processId:
-        typeof body.processId === "string" ? body.processId : body.processId ?? null,
+        typeof body.processId === "string"
+          ? body.processId
+          : (body.processId ?? null),
       type: String(body.type),
       action: String(body.action),
-      symbol: typeof body.symbol === "string" ? body.symbol : body.symbol ?? null,
+      symbol:
+        typeof body.symbol === "string" ? body.symbol : (body.symbol ?? null),
       details:
-        typeof body.details === "string" ? body.details : body.details ?? null,
-      level: typeof body.level === "string" ? body.level : body.level ?? null,
-      result: typeof body.result === "string" ? body.result : body.result ?? null,
-      error: typeof body.error === "string" ? body.error : body.error ?? null,
+        typeof body.details === "string"
+          ? body.details
+          : (body.details ?? null),
+      level: typeof body.level === "string" ? body.level : (body.level ?? null),
+      result:
+        typeof body.result === "string" ? body.result : (body.result ?? null),
+      error: typeof body.error === "string" ? body.error : (body.error ?? null),
       createdAt:
         typeof body.createdAt === "string" || body.createdAt instanceof Date
           ? body.createdAt
@@ -101,38 +115,44 @@ router.post("/", async (req: Request, res: Response) => {
   }
 });
 
-router.post("/cleanup", async (req: Request, res: Response) => {
-  try {
-    const mode =
-      req.body?.mode === "retention" ? "retention" : "noisy-json";
-    const keepDays =
-      typeof req.body?.keepDays === "number"
-        ? req.body.keepDays
-        : Number.parseInt(String(req.body?.keepDays || ""), 10);
+router.post(
+  "/cleanup",
+  requireActionAuth,
+  async (req: Request, res: Response) => {
+    try {
+      const mode = req.body?.mode === "retention" ? "retention" : "noisy-json";
+      const keepDays =
+        typeof req.body?.keepDays === "number"
+          ? req.body.keepDays
+          : Number.parseInt(String(req.body?.keepDays || ""), 10);
 
-    if (mode === "retention" && (!Number.isFinite(keepDays) || keepDays < 1)) {
-      res.status(400).json({
-        success: false,
-        error: "keepDays must be a number greater than or equal to 1",
+      if (
+        mode === "retention" &&
+        (!Number.isFinite(keepDays) || keepDays < 1)
+      ) {
+        res.status(400).json({
+          success: false,
+          error: "keepDays must be a number greater than or equal to 1",
+        });
+        return;
+      }
+
+      const result = await cleanupTradeLogs({
+        mode,
+        keepDays: mode === "retention" ? Math.floor(keepDays) : undefined,
       });
-      return;
+
+      res.json({
+        success: true,
+        data: result,
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown error",
+      });
     }
-
-    const result = await cleanupTradeLogs({
-      mode,
-      keepDays: mode === "retention" ? Math.floor(keepDays) : undefined,
-    });
-
-    res.json({
-      success: true,
-      data: result,
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error instanceof Error ? error.message : "Unknown error",
-    });
-  }
-});
+  },
+);
 
 export default router;

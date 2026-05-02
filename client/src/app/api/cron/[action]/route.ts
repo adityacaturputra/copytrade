@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import { verifyActionAuth } from "../../_lib/action-auth";
 
 export const dynamic = "force-dynamic";
 
-const BACKEND_URL = (process.env.BACKEND_URL || "http://localhost:3001").replace(
-  /\/+$/,
-  "",
-);
+const BACKEND_URL = (
+  process.env.BACKEND_URL || "http://localhost:3001"
+).replace(/\/+$/, "");
 
 const ALLOWED_ACTIONS = new Set([
   "signal-check",
@@ -87,6 +87,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
 export async function POST(request: NextRequest, { params }: RouteParams) {
   const { action } = await params;
+  const authError = verifyActionAuth(request);
+  if (authError) return authError;
   return proxyCronRequest("POST", request, action);
 }
-

@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { connectDB, DiscordSource, getAllDiscordSources } from "@copytrade/shared/lib/database";
+import {
+  connectDB,
+  DiscordSource,
+  getAllDiscordSources,
+} from "@copytrade/shared/lib/database";
 import { checkTokenHealth } from "@/lib/discord";
+import { verifyActionAuth } from "../_lib/action-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +36,9 @@ export async function GET() {
 
 // POST /api/discord-sources - Create a new source
 export async function POST(request: NextRequest) {
+  const authError = verifyActionAuth(request);
+  if (authError) return authError;
+
   try {
     await connectDB();
     const body = await request.json();
@@ -109,6 +117,9 @@ export async function POST(request: NextRequest) {
 
 // PUT /api/discord-sources - Update a source
 export async function PUT(request: NextRequest) {
+  const authError = verifyActionAuth(request);
+  if (authError) return authError;
+
   try {
     await connectDB();
     const body = await request.json();
@@ -197,6 +208,9 @@ export async function PUT(request: NextRequest) {
 
 // DELETE /api/discord-sources - Delete a source
 export async function DELETE(request: NextRequest) {
+  const authError = verifyActionAuth(request);
+  if (authError) return authError;
+
   try {
     await connectDB();
     const { searchParams } = new URL(request.url);

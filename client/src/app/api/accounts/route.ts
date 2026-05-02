@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import mongoose from "mongoose";
-import { connectDB, Account, DiscordSource } from "@copytrade/shared/lib/database";
+import {
+  connectDB,
+  Account,
+  DiscordSource,
+} from "@copytrade/shared/lib/database";
 import { SourceType } from "@copytrade/shared/lib/enums";
 import type { ExchangeCredentialValues } from "@copytrade/shared/lib/exchange/exchange-credentials";
 import {
@@ -9,6 +13,7 @@ import {
   normalizeExchangeProvider,
   validateExchangeCredentials,
 } from "@copytrade/shared/lib/exchange/provider-config";
+import { verifyActionAuth } from "../_lib/action-auth";
 
 const MASKED_VALUE_PREFIX = "••••••••";
 
@@ -38,10 +43,7 @@ type DuplicateSourceAccount = {
   disabledChannelIds?: string[];
 };
 
-const RISK_OVERRIDE_VALIDATORS: Record<
-  string,
-  (value: unknown) => boolean
-> = {
+const RISK_OVERRIDE_VALIDATORS: Record<string, (value: unknown) => boolean> = {
   riskPerTradePercent: (value) =>
     typeof value === "number" &&
     Number.isFinite(value) &&
@@ -229,7 +231,10 @@ function validateSourceConfiguration(
 async function getDuplicateSourceAccount(
   duplicateFromId: unknown,
 ): Promise<DuplicateSourceAccount | null> {
-  if (typeof duplicateFromId !== "string" || duplicateFromId.trim().length === 0) {
+  if (
+    typeof duplicateFromId !== "string" ||
+    duplicateFromId.trim().length === 0
+  ) {
     return null;
   }
 
@@ -322,9 +327,7 @@ function validateRiskOverrides(
   return null;
 }
 
-function validateChannelConfigs(
-  channelConfigs: unknown,
-): string | null {
+function validateChannelConfigs(channelConfigs: unknown): string | null {
   if (channelConfigs === undefined || channelConfigs === null) return null;
   if (!channelConfigs || typeof channelConfigs !== "object") {
     return "Channel configs must be an object";
@@ -412,6 +415,9 @@ export async function GET() {
 
 // ─── POST /api/accounts ────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
+  const authError = verifyActionAuth(req);
+  if (authError) return authError;
+
   try {
     await connectDB();
     const body = await req.json();
@@ -461,7 +467,8 @@ export async function POST(req: NextRequest) {
       DEFAULT_EXCHANGE_PROVIDER,
       tradingPlatform,
     );
-    const duplicateSourceAccount = await getDuplicateSourceAccount(duplicateFromId);
+    const duplicateSourceAccount =
+      await getDuplicateSourceAccount(duplicateFromId);
     if (duplicateFromId && !duplicateSourceAccount) {
       return NextResponse.json(
         { success: false, error: "Source account for duplication not found" },
@@ -497,7 +504,10 @@ export async function POST(req: NextRequest) {
     );
     if (!exchangeValidation.valid) {
       return NextResponse.json(
-        { success: false, error: exchangeValidation.error || "Invalid exchange configuration" },
+        {
+          success: false,
+          error: exchangeValidation.error || "Invalid exchange configuration",
+        },
         { status: 400 },
       );
     }
@@ -544,9 +554,7 @@ export async function POST(req: NextRequest) {
       ),
     });
 
-    console.log(
-      `✅ Created account: ${name} (${sourceType} → ${provider})`,
-    );
+    console.log(`✅ Created account: ${name} (${sourceType} → ${provider})`);
 
     return NextResponse.json({ success: true, account });
   } catch (error) {
@@ -564,6 +572,9 @@ export async function POST(req: NextRequest) {
 
 // ─── PUT /api/accounts ─────────────────────────────────────────────────────
 export async function PUT(req: NextRequest) {
+  const authError = verifyActionAuth(req);
+  if (authError) return authError;
+
   try {
     await connectDB();
     const body = await req.json();
@@ -585,7 +596,9 @@ export async function PUT(req: NextRequest) {
       );
     }
 
-    const tradingPlatformError = getTradingPlatformError(updates.tradingPlatform);
+    const tradingPlatformError = getTradingPlatformError(
+      updates.tradingPlatform,
+    );
     if (tradingPlatformError) {
       return NextResponse.json(
         { success: false, error: tradingPlatformError },
@@ -645,6 +658,9 @@ export async function PUT(req: NextRequest) {
 
 // ─── DELETE /api/accounts ──────────────────────────────────────────────────
 export async function DELETE(req: NextRequest) {
+  const authError = verifyActionAuth(req);
+  if (authError) return authError;
+
   try {
     await connectDB();
     const { searchParams } = new URL(req.url);

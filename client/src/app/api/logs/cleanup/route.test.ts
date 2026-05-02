@@ -10,6 +10,10 @@ vi.mock("../../_lib/backend-proxy", () => ({
   proxyToBackend: cleanupRouteMocks.proxyToBackend,
 }));
 
+vi.mock("../../_lib/action-auth", () => ({
+  verifyActionAuth: vi.fn().mockReturnValue(null),
+}));
+
 beforeEach(() => {
   cleanupRouteMocks.proxyToBackend.mockReset();
   cleanupRouteMocks.proxyToBackend.mockResolvedValue("proxied");

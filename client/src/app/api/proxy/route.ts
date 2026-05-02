@@ -5,6 +5,7 @@ import {
   getProxyInfo,
   getProviderProxyInfo,
 } from "@copytrade/shared/lib/proxy/ProxyFactory";
+import { verifyActionAuth } from "../_lib/action-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -41,6 +42,9 @@ export async function GET() {
 
 /** POST /api/proxy — Update proxy config */
 export async function POST(request: NextRequest) {
+  const authError = verifyActionAuth(request);
+  if (authError) return authError;
+
   try {
     const body = await request.json();
 

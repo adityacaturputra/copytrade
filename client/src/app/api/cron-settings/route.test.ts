@@ -12,6 +12,10 @@ const routeMocks = vi.hoisted(() => ({
   disableManagedCloudCronJobs: vi.fn(),
 }));
 
+vi.mock("../_lib/action-auth", () => ({
+  verifyActionAuth: vi.fn().mockReturnValue(null),
+}));
+
 vi.mock("@/lib/cron-config", () => ({
   CRON_PROVIDER_OPTIONS: [
     { value: "cron-job.org", label: "cron-job.org", description: "cloud" },
@@ -47,10 +51,21 @@ function buildJob() {
   };
 }
 
-function buildRequest(body: unknown) {
+function buildRequest(body: unknown, method: string = "POST") {
   return {
     json: async () => body,
-  } as NextRequest;
+    headers: new Headers(),
+    method,
+  } as unknown as NextRequest;
+}
+
+/** Build an empty request for PUT/DELETE calls that only need headers */
+function buildEmptyRequest(method: string = "PUT") {
+  return {
+    json: async () => ({}),
+    headers: new Headers(),
+    method,
+  } as unknown as NextRequest;
 }
 
 async function loadRouteModule() {
@@ -164,11 +179,14 @@ test("GET returns app-provider status even when backend status fetch fails", asy
     baseUrl: "",
     jobs: [],
   });
-  vi.stubGlobal("fetch", vi.fn(async () => ({
-    ok: false,
-    status: 502,
-    text: async () => "bad gateway",
-  })));
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => ({
+      ok: false,
+      status: 502,
+      text: async () => "bad gateway",
+    })),
+  );
 
   const { GET } = await loadRouteModule();
   const response = await GET();
@@ -185,9 +203,12 @@ test("GET app-provider handles non-Error backend failures and disabled jobs", as
     baseUrl: "",
     jobs: [{ ...buildJob(), enabled: false }],
   });
-  vi.stubGlobal("fetch", vi.fn(async () => {
-    throw "backend-string";
-  }));
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => {
+      throw "backend-string";
+    }),
+  );
 
   const { GET } = await loadRouteModule();
   const response = await GET();
@@ -205,10 +226,13 @@ test("GET app-provider handles missing backend cronStatus payloads", async () =>
     baseUrl: "",
     jobs: [],
   });
-  vi.stubGlobal("fetch", vi.fn(async () => ({
-    ok: true,
-    json: async () => ({}),
-  })));
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => ({
+      ok: true,
+      json: async () => ({}),
+    })),
+  );
 
   const { GET } = await loadRouteModule();
   const response = await GET();
@@ -295,7 +319,7 @@ test("PUT rejects cloud sync when provider is not cron-job.org", async () => {
   });
 
   const { PUT } = await loadRouteModule();
-  const response = await PUT();
+  const response = await PUT(buildEmptyRequest());
   const json = await response.json();
 
   assert.equal(response.status, 400);
@@ -312,7 +336,7 @@ test("PUT saves pulled cloud settings and tolerates live-status fetch failures",
   routeMocks.pullCronJobStatus.mockRejectedValue(new Error("status down"));
 
   const { PUT } = await loadRouteModule();
-  const response = await PUT();
+  const response = await PUT(buildEmptyRequest());
   const json = await response.json();
 
   assert.equal(json.success, true);
@@ -331,7 +355,7 @@ test("PUT preserves pulled cloud jobs when the provider returns them", async () 
   });
 
   const { PUT } = await loadRouteModule();
-  const response = await PUT();
+  const response = await PUT(buildEmptyRequest());
   const json = await response.json();
 
   assert.equal(json.success, true);
@@ -346,7 +370,7 @@ test("PUT returns error when cloud pull reports only failures", async () => {
   });
 
   const { PUT } = await loadRouteModule();
-  const response = await PUT();
+  const response = await PUT(buildEmptyRequest());
   const json = await response.json();
 
   assert.equal(response.status, 500);
@@ -358,7 +382,7 @@ test("PUT returns 500 when pull throws unexpectedly", async () => {
   routeMocks.pullCloudJobConfigs.mockRejectedValue(new Error("explode"));
 
   const { PUT } = await loadRouteModule();
-  const response = await PUT();
+  const response = await PUT(buildEmptyRequest());
   const json = await response.json();
 
   assert.equal(response.status, 500);
@@ -372,7 +396,7 @@ test("PUT returns unknown error text for non-Error failures", async () => {
   routeMocks.pullCloudJobConfigs.mockRejectedValue("explode-string");
 
   const { PUT } = await loadRouteModule();
-  const response = await PUT();
+  const response = await PUT(buildEmptyRequest());
   const json = await response.json();
 
   assert.equal(response.status, 500);
@@ -386,12 +410,21 @@ test("POST validates required jobs and job schedules", async () => {
 
   const noJobs = await POST(buildRequest({ provider: "app", jobs: [] }));
   assert.equal(noJobs.status, 400);
-  assert.equal((await noJobs.json()).error, "At least one cron job is required");
+  assert.equal(
+    (await noJobs.json()).error,
+    "At least one cron job is required",
+  );
 
   const invalidJob = await POST(
     buildRequest({
       provider: "app",
-      jobs: [{ ...buildJob(), title: "", schedule: { ...buildJob().schedule, minutes: 0 } }],
+      jobs: [
+        {
+          ...buildJob(),
+          title: "",
+          schedule: { ...buildJob().schedule, minutes: 0 },
+        },
+      ],
     }),
   );
   assert.equal(invalidJob.status, 400);
@@ -400,7 +433,9 @@ test("POST validates required jobs and job schedules", async () => {
   const invalidSchedule = await POST(
     buildRequest({
       provider: "app",
-      jobs: [{ ...buildJob(), schedule: { ...buildJob().schedule, minutes: 0 } }],
+      jobs: [
+        { ...buildJob(), schedule: { ...buildJob().schedule, minutes: 0 } },
+      ],
     }),
   );
   assert.equal(invalidSchedule.status, 400);
@@ -457,7 +492,9 @@ test("POST succeeds for cron-job.org and app providers", async () => {
   assert.equal(cloudJson.success, true);
   assert.equal(cloudJson.synced, 1);
 
-  routeMocks.disableManagedCloudCronJobs.mockRejectedValue(new Error("disable failed"));
+  routeMocks.disableManagedCloudCronJobs.mockRejectedValue(
+    new Error("disable failed"),
+  );
   const appResponse = await POST(
     buildRequest({
       provider: "app",

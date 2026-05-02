@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { getStoredActionPassword } from "@/lib/action-auth";
+import { UnlockModal } from "@/lib/components/UnlockModal";
 import {
   DEFAULT_ACCOUNT_EXCHANGE_PROVIDER,
   DEFAULT_EXCHANGE_PROVIDER,
@@ -193,7 +195,18 @@ function parseOptionalPositiveNumber(value: string): number | null {
 }
 
 function formatOptionalNumber(value: unknown): string {
-  return typeof value === "number" && Number.isFinite(value) ? String(value) : "";
+  return typeof value === "number" && Number.isFinite(value)
+    ? String(value)
+    : "";
+}
+
+// Helper to add action password header to mutation requests
+function withActionPassword(
+  headers: Record<string, string> = {},
+): Record<string, string> {
+  const pw = getStoredActionPassword();
+  if (pw) headers["x-action-password"] = pw;
+  return headers;
 }
 
 // ─── Component ──────────────────────────────────────────────
@@ -514,7 +527,9 @@ export default function SettingsPage() {
       form.accountRiskPerTradePercent.trim() &&
       accountRiskPerTradePercent === null
     ) {
-      setFormError("Account Risk Per Trade override must be a positive number.");
+      setFormError(
+        "Account Risk Per Trade override must be a positive number.",
+      );
       setSaving(false);
       return;
     }
@@ -569,7 +584,9 @@ export default function SettingsPage() {
         : { valid: true };
 
     if (!exchangeValidation.valid) {
-      setFormError(exchangeValidation.error || "Invalid exchange configuration.");
+      setFormError(
+        exchangeValidation.error || "Invalid exchange configuration.",
+      );
       setSaving(false);
       return;
     }
@@ -593,12 +610,14 @@ export default function SettingsPage() {
         form.exchangeIsDemo,
       );
 
-    const body = {
-      id: editingId || undefined,
-      duplicateFromId: editingId ? undefined : form.duplicateFromId || undefined,
-      name: form.name,
-      sourceType: form.sourceType,
-      sourceData,
+      const body = {
+        id: editingId || undefined,
+        duplicateFromId: editingId
+          ? undefined
+          : form.duplicateFromId || undefined,
+        name: form.name,
+        sourceType: form.sourceType,
+        sourceData,
         channelIds: channelIdsArray,
         channelNames: channelNamesMap,
         riskOverrides:
@@ -612,7 +631,7 @@ export default function SettingsPage() {
 
       const res = await fetch("/api/accounts", {
         method: editingId ? "PUT" : "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: withActionPassword({ "Content-Type": "application/json" }),
         body: JSON.stringify(body),
       });
 
@@ -714,7 +733,10 @@ export default function SettingsPage() {
     if (!confirm("Are you sure you want to delete this account?")) return;
     setDeleting(id);
     try {
-      const res = await fetch(`/api/accounts?id=${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/accounts?id=${id}`, {
+        method: "DELETE",
+        headers: withActionPassword(),
+      });
       const json = await res.json();
       if (json.success) {
         await fetchAccounts();
@@ -735,7 +757,7 @@ export default function SettingsPage() {
     try {
       const res = await fetch("/api/accounts", {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: withActionPassword({ "Content-Type": "application/json" }),
         body: JSON.stringify({ id: account._id, isActive: newActive }),
       });
       const json = await res.json();
@@ -762,7 +784,7 @@ export default function SettingsPage() {
     try {
       const res = await fetch("/api/accounts", {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: withActionPassword({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           id: account._id,
           disabledChannelIds: Array.from(disabled),
@@ -818,7 +840,7 @@ export default function SettingsPage() {
     try {
       const res = await fetch("/api/settings", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: withActionPassword({ "Content-Type": "application/json" }),
         body: JSON.stringify({ risk: riskConfig }),
       });
       const json = await res.json();
@@ -842,7 +864,7 @@ export default function SettingsPage() {
     try {
       const res = await fetch("/api/settings", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: withActionPassword({ "Content-Type": "application/json" }),
         body: JSON.stringify({ signal: signalCfg }),
       });
       const json = await res.json();
@@ -875,7 +897,7 @@ export default function SettingsPage() {
     try {
       const res = await fetch("/api/cron-settings", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: withActionPassword({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           provider: cronProvider,
           baseUrl: cronBaseUrl,
@@ -905,14 +927,19 @@ export default function SettingsPage() {
 
   const handleCronPull = async () => {
     if (cronProvider !== "cron-job.org") {
-      setCronError("Cloud sync is only available for the cron-job.org provider.");
+      setCronError(
+        "Cloud sync is only available for the cron-job.org provider.",
+      );
       return;
     }
     setCronPulling(true);
     setCronError(null);
     setCronSuccess(false);
     try {
-      const res = await fetch("/api/cron-settings", { method: "PUT" });
+      const res = await fetch("/api/cron-settings", {
+        method: "PUT",
+        headers: withActionPassword(),
+      });
       const json = await res.json();
       if (json.success) {
         if ("baseUrl" in (json.settings || {})) {
@@ -945,7 +972,7 @@ export default function SettingsPage() {
       }
       const res = await fetch("/api/proxy", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: withActionPassword({ "Content-Type": "application/json" }),
         body: JSON.stringify(body),
       });
       const json = await res.json();
@@ -970,7 +997,7 @@ export default function SettingsPage() {
     try {
       const res = await fetch("/api/reset-all", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: withActionPassword({ "Content-Type": "application/json" }),
         body: JSON.stringify({}),
       });
       const json = await res.json();
@@ -1009,7 +1036,7 @@ export default function SettingsPage() {
 
       const res = await fetch("/api/logs/cleanup", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: withActionPassword({ "Content-Type": "application/json" }),
         body: JSON.stringify(payload),
       });
       const json = await res.json();
@@ -1078,6 +1105,7 @@ export default function SettingsPage() {
                 ⚙️ Settings
               </h1>
             </div>
+            <UnlockModal />
           </div>
         </div>
       </header>
@@ -1121,9 +1149,8 @@ export default function SettingsPage() {
               </h2>
               <p className="text-xs text-slate-400">
                 Each account links a signal source (Discord/Telegram) with an
-                exchange (OKX/Binance/Bybit/MEXC/MetaTrader/Paper). Signals
-                from the source channels are auto-executed on the linked
-                exchange.
+                exchange (OKX/Binance/Bybit/MEXC/MetaTrader/Paper). Signals from
+                the source channels are auto-executed on the linked exchange.
               </p>
             </div>
 
@@ -1166,8 +1193,8 @@ export default function SettingsPage() {
                 </h3>
                 {form.duplicateFromId && !editingId && (
                   <p className="text-xs text-slate-400 mb-4">
-                    Source token and exchange credentials will be reused from the
-                    original account unless you paste new values here.
+                    Source token and exchange credentials will be reused from
+                    the original account unless you paste new values here.
                   </p>
                 )}
                 <form onSubmit={handleSubmit} className="space-y-5">
@@ -1353,12 +1380,16 @@ export default function SettingsPage() {
                         className="w-full md:w-72 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none"
                       />
                       <p className="text-xs text-slate-500 mt-2">
-                        Ini override level account. Kalau channel tertentu punya override sendiri, channel itu akan lebih prioritas.
+                        Ini override level account. Kalau channel tertentu punya
+                        override sendiri, channel itu akan lebih prioritas.
                       </p>
                     </div>
                     <div className="space-y-2">
                       {form.channels.map((ch, idx) => (
-                        <div key={idx} className="grid grid-cols-1 md:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_220px_auto] gap-2">
+                        <div
+                          key={idx}
+                          className="grid grid-cols-1 md:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_220px_auto] gap-2"
+                        >
                           <input
                             type="text"
                             value={ch.id}
@@ -1466,11 +1497,16 @@ export default function SettingsPage() {
                           }
                           className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
                         >
-                          {EXCHANGE_PROVIDER_OPTIONS.map((option: ExchangeProviderConfig) => (
-                            <option key={option.provider} value={option.provider}>
-                              {option.optionLabel || option.label}
-                            </option>
-                          ))}
+                          {EXCHANGE_PROVIDER_OPTIONS.map(
+                            (option: ExchangeProviderConfig) => (
+                              <option
+                                key={option.provider}
+                                value={option.provider}
+                              >
+                                {option.optionLabel || option.label}
+                              </option>
+                            ),
+                          )}
                         </select>
                       </div>
                       <div className="flex items-center gap-2">
@@ -1498,7 +1534,8 @@ export default function SettingsPage() {
                     {activeExchangeConfig?.authMode !== "none" && (
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                         {activeExchangeFieldConfigs.map((fieldConfig) => {
-                          const value = form.exchangeValues[fieldConfig.field] || "";
+                          const value =
+                            form.exchangeValues[fieldConfig.field] || "";
                           const className = `w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white ${
                             fieldConfig.monospace ? "font-mono " : ""
                           }placeholder-slate-500 focus:border-primary-500 focus:outline-none`;
@@ -1527,7 +1564,10 @@ export default function SettingsPage() {
                                   className={className}
                                 >
                                   {(fieldConfig.options || []).map((option) => (
-                                    <option key={option.value} value={option.value}>
+                                    <option
+                                      key={option.value}
+                                      value={option.value}
+                                    >
                                       {option.label}
                                     </option>
                                   ))}
@@ -1685,7 +1725,8 @@ export default function SettingsPage() {
                           <div className="flex flex-wrap gap-1.5">
                             {account.riskOverrides?.riskPerTradePercent ? (
                               <span className="text-xs px-2 py-1 rounded border border-cyan-700/40 bg-cyan-900/20 text-cyan-300">
-                                Account RPT: {account.riskOverrides.riskPerTradePercent}%
+                                Account RPT:{" "}
+                                {account.riskOverrides.riskPerTradePercent}%
                               </span>
                             ) : null}
                             {(account.channelIds || []).map((cid: string) => {
@@ -1745,7 +1786,9 @@ export default function SettingsPage() {
                         >
                           <button
                             type="button"
-                            onClick={() => toggleAccountActionsMenu(account._id)}
+                            onClick={() =>
+                              toggleAccountActionsMenu(account._id)
+                            }
                             className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-700 bg-slate-800 text-slate-300 transition hover:border-slate-600 hover:bg-slate-700 hover:text-white"
                             title="Account actions"
                             aria-haspopup="menu"

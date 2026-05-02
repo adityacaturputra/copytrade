@@ -17,6 +17,7 @@ const loopMocks = vi.hoisted(() => ({
   getAgentApprovalRequired: vi.fn(),
   hasRequiredAgentRole: vi.fn(),
   getAgentToolPolicy: vi.fn(),
+  verifyActionPassword: vi.fn(),
   toolExecutors: {} as Record<string, ReturnType<typeof vi.fn>>,
 }));
 
@@ -69,6 +70,10 @@ vi.mock("./policies", () => ({
   getAgentToolPolicy: loopMocks.getAgentToolPolicy,
 }));
 
+vi.mock("../action-auth", () => ({
+  verifyActionPassword: loopMocks.verifyActionPassword,
+}));
+
 import { runAgentFull, runAgentLoopStreaming } from "./loop";
 
 function createQuery(result: unknown) {
@@ -113,7 +118,10 @@ beforeEach(() => {
   loopMocks.getAgentApprovalRequired.mockReset();
   loopMocks.hasRequiredAgentRole.mockReset();
   loopMocks.getAgentToolPolicy.mockReset();
-  Object.keys(loopMocks.toolExecutors).forEach((key) => delete loopMocks.toolExecutors[key]);
+  loopMocks.verifyActionPassword.mockReset();
+  Object.keys(loopMocks.toolExecutors).forEach(
+    (key) => delete loopMocks.toolExecutors[key],
+  );
 
   loopMocks.getCodexPatunginConfig.mockReturnValue({
     apiKey: "",
@@ -128,6 +136,7 @@ beforeEach(() => {
   loopMocks.createAgentTurn.mockResolvedValue({ processId: "proc-generated" });
   loopMocks.updateAgentTurnState.mockResolvedValue(undefined);
   loopMocks.logAgentTurnEvent.mockResolvedValue(undefined);
+  loopMocks.verifyActionPassword.mockReturnValue(true);
   loopMocks.buildToolTrace.mockImplementation((input) => input);
   loopMocks.getAgentApprovalRequired.mockReturnValue(false);
   loopMocks.hasRequiredAgentRole.mockReturnValue(true);
@@ -253,7 +262,9 @@ test("runAgentLoopStreaming denies tools when no policy exists or the role is in
       history: [],
       provider: "glm",
       messages: [],
-      pendingToolCalls: [{ id: "call-1", name: "missing_tool", arguments: "{}" }],
+      pendingToolCalls: [
+        { id: "call-1", name: "missing_tool", arguments: "{}" },
+      ],
       assistantResponse: "",
       toolTraces: [],
     })
@@ -273,13 +284,11 @@ test("runAgentLoopStreaming denies tools when no policy exists or the role is in
     .mockResolvedValueOnce(streamFromDeltas([{ content: "done one" }]))
     .mockResolvedValueOnce(streamFromDeltas([{ content: "done two" }]));
 
-  loopMocks.getAgentToolPolicy
-    .mockReturnValueOnce(null)
-    .mockReturnValueOnce({
-      mode: "read",
-      minimumRole: "admin",
-      requiresApproval: false,
-    });
+  loopMocks.getAgentToolPolicy.mockReturnValueOnce(null).mockReturnValueOnce({
+    mode: "read",
+    minimumRole: "admin",
+    requiresApproval: false,
+  });
   loopMocks.hasRequiredAgentRole.mockReturnValueOnce(false);
 
   const firstEvents: Array<Record<string, unknown>> = [];
@@ -300,8 +309,14 @@ test("runAgentLoopStreaming denies tools when no policy exists or the role is in
     secondEvents.push(event);
   }
 
-  assert.equal(firstEvents.some((event) => event.type === "step"), true);
-  assert.equal(secondEvents.some((event) => event.type === "step"), true);
+  assert.equal(
+    firstEvents.some((event) => event.type === "step"),
+    true,
+  );
+  assert.equal(
+    secondEvents.some((event) => event.type === "step"),
+    true,
+  );
   assert.equal(loopMocks.buildToolTrace.mock.calls.length >= 2, true);
 });
 
@@ -319,7 +334,9 @@ test("runAgentLoopStreaming handles invalid args, unknown tools, executor failur
       history: [],
       provider: "glm",
       messages: [],
-      pendingToolCalls: [{ id: "call-bad", name: "read_tool", arguments: "{bad" }],
+      pendingToolCalls: [
+        { id: "call-bad", name: "read_tool", arguments: "{bad" },
+      ],
       assistantResponse: "",
       toolTraces: [],
     })
@@ -330,7 +347,9 @@ test("runAgentLoopStreaming handles invalid args, unknown tools, executor failur
       history: [],
       provider: "glm",
       messages: [],
-      pendingToolCalls: [{ id: "call-unknown", name: "unknown_tool", arguments: "{}" }],
+      pendingToolCalls: [
+        { id: "call-unknown", name: "unknown_tool", arguments: "{}" },
+      ],
       assistantResponse: "",
       toolTraces: [],
     })
@@ -341,7 +360,9 @@ test("runAgentLoopStreaming handles invalid args, unknown tools, executor failur
       history: [{ role: "assistant", content: "prior" }],
       provider: "glm",
       messages: [],
-      pendingToolCalls: [{ id: "call-ok", name: "read_tool", arguments: '{"value":1}' }],
+      pendingToolCalls: [
+        { id: "call-ok", name: "read_tool", arguments: '{"value":1}' },
+      ],
       assistantResponse: "",
       toolTraces: [{ old: true }],
     })
@@ -352,7 +373,9 @@ test("runAgentLoopStreaming handles invalid args, unknown tools, executor failur
       history: [],
       provider: "glm",
       messages: [],
-      pendingToolCalls: [{ id: "call-fail", name: "read_tool", arguments: '{"value":2}' }],
+      pendingToolCalls: [
+        { id: "call-fail", name: "read_tool", arguments: '{"value":2}' },
+      ],
       assistantResponse: "",
       toolTraces: [],
     });
@@ -386,7 +409,10 @@ test("runAgentLoopStreaming handles invalid args, unknown tools, executor failur
     collected.push(events);
   }
 
-  assert.equal(collected.every((events) => events.at(-1)?.type === "done"), true);
+  assert.equal(
+    collected.every((events) => events.at(-1)?.type === "done"),
+    true,
+  );
   assert.equal(loopMocks.toolExecutors.read_tool.mock.calls.length, 2);
   assert.equal(loopMocks.logAgentTurnEvent.mock.calls.length > 0, true);
 });
@@ -476,7 +502,10 @@ test("runAgentLoopStreaming reports resumed-turn session mismatch and invalid st
   }
 
   assert.equal(mismatchEvents.at(-1)?.type, "error");
-  assert.match(String(mismatchEvents.at(-1)?.error), /does not belong to session/);
+  assert.match(
+    String(mismatchEvents.at(-1)?.error),
+    /does not belong to session/,
+  );
   assert.equal(statusEvents.at(-1)?.type, "error");
   assert.match(String(statusEvents.at(-1)?.error), /is not awaiting approval/);
 });
@@ -491,7 +520,9 @@ test("runAgentLoopStreaming executes approved mutating tools and supports provid
     model: "pat-model",
     headers: { "X-Pat": "1" },
   });
-  loopMocks.toolExecutors.mutate_tool = vi.fn().mockResolvedValue('{"ok":true}');
+  loopMocks.toolExecutors.mutate_tool = vi
+    .fn()
+    .mockResolvedValue('{"ok":true}');
   loopMocks.getAgentApprovalRequired.mockReturnValue(true);
   loopMocks.getAgentToolPolicy.mockReturnValue({
     mode: "mutating",
@@ -505,7 +536,9 @@ test("runAgentLoopStreaming executes approved mutating tools and supports provid
     history: [],
     provider: "openai",
     messages: [],
-    pendingToolCalls: [{ id: "call-approve", name: "mutate_tool", arguments: '{"size":1}' }],
+    pendingToolCalls: [
+      { id: "call-approve", name: "mutate_tool", arguments: '{"size":1}' },
+    ],
     assistantResponse: "",
     toolTraces: [],
   });
@@ -587,7 +620,9 @@ test("runAgentLoopStreaming aborts resumed turns without emitting an error event
   );
   assert.equal(
     loopMocks.logAgentTurnEvent.mock.calls.some(
-      (call) => call[0]?.action === "turn_aborted" && call[0]?.processId === "proc-abort",
+      (call) =>
+        call[0]?.action === "turn_aborted" &&
+        call[0]?.processId === "proc-abort",
     ),
     true,
   );
@@ -659,7 +694,9 @@ test("runAgentLoopStreaming records explicit approval rejections before continui
     history: [],
     provider: "glm",
     messages: [],
-    pendingToolCalls: [{ id: "call-reject", name: "cancel_order", arguments: '{"orderId":"1"}' }],
+    pendingToolCalls: [
+      { id: "call-reject", name: "cancel_order", arguments: '{"orderId":"1"}' },
+    ],
     assistantResponse: "",
     toolTraces: [],
   });

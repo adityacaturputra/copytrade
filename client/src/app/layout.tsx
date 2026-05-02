@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { ClientProviders } from "@/lib/components/ClientProviders";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -15,7 +16,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="min-h-screen bg-dark-200 text-slate-100">
-        {children}
+        <ClientProviders>{children}</ClientProviders>
       </body>
     </html>
   );
