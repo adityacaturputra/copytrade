@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import Link from "next/link";
 
 interface AgentStep {
   type: "thinking" | "tool_call" | "tool_result" | "response";
@@ -615,13 +616,22 @@ export default function AgentChatPage() {
     <div className="flex h-screen flex-col">
       <header className="shrink-0 border-b border-slate-700 bg-dark-100">
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-2 px-3 py-3 sm:px-4">
-          <div className="min-w-0">
-            <h1 className="truncate text-lg font-bold text-white">
-              AI Trading Agent
-            </h1>
-            <p className="text-xs text-slate-400">
-              True streaming • role: {role} • session: {sessionId}
-            </p>
+          <div className="flex min-w-0 items-center gap-3">
+            <Link 
+              href="/"
+              className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-800 text-slate-400 transition-colors hover:bg-slate-700 hover:text-slate-200"
+              title="Back to Dashboard"
+            >
+              ←
+            </Link>
+            <div className="min-w-0">
+              <h1 className="truncate text-lg font-bold text-white">
+                AI Trading Agent
+              </h1>
+              <p className="text-xs text-slate-400">
+                True streaming • role: {role} • session: {sessionId}
+              </p>
+            </div>
           </div>
           <div className="flex items-center gap-2">
             {currentView === "chat" ? (
