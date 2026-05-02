@@ -9,6 +9,7 @@ import {
   ensureAgentSession,
 } from "../lib/agent/logging";
 import { runAgentLoopStreaming } from "../lib/agent/loop";
+import { AgentTurn } from "@copytrade/shared/lib/database";
 
 const router: ExpressRouter = Router();
 
@@ -221,6 +222,78 @@ router.post("/approval", async (req: Request, res: Response) => {
     processId,
     decision,
   });
+});
+
+router.get("/history", async (req: Request, res: Response) => {
+  if (!ensureAgentAuthConfigured(res)) {
+    return;
+  }
+
+  const auth = authenticateAgentRequest(req);
+  if (!auth) {
+    res.status(401).json({ error: "Unauthorized agent request" });
+    return;
+  }
+
+  try {
+    const turns = await AgentTurn.find()
+      .select({
+        _id: 1,
+        processId: 1,
+        sessionId: 1,
+        role: 1,
+        status: 1,
+        userMessage: 1,
+        assistantResponse: 1,
+        createdAt: 1,
+        "toolTraces.toolName": 1,
+      })
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean()
+      .exec();
+
+    res.json({
+      success: true,
+      data: turns.map((turn) => ({
+        id: turn._id,
+        processId: turn.processId,
+        sessionId: turn.sessionId,
+        role: turn.role,
+        status: turn.status,
+        userMessage: turn.userMessage,
+        assistantResponse: turn.assistantResponse,
+        createdAt: turn.createdAt,
+        toolCount: turn.toolTraces ? turn.toolTraces.length : 0,
+      })),
+    });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch agent history" });
+  }
+});
+
+router.get("/history/:processId", async (req: Request, res: Response) => {
+  if (!ensureAgentAuthConfigured(res)) {
+    return;
+  }
+
+  const auth = authenticateAgentRequest(req);
+  if (!auth) {
+    res.status(401).json({ error: "Unauthorized agent request" });
+    return;
+  }
+
+  try {
+    const turn = await AgentTurn.findOne({ processId: req.params.processId }).lean().exec();
+    if (!turn) {
+      res.status(404).json({ error: "History not found" });
+      return;
+    }
+
+    res.json({ success: true, data: turn });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch agent history detail" });
+  }
 });
 
 export default router;

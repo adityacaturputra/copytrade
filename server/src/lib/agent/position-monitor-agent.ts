@@ -3,6 +3,7 @@ import { getCodexPatunginConfig } from "@copytrade/shared/lib/ai/CodexPatunginCo
 import {
   Account,
   Position,
+  AgentTurn,
   connectDB,
   type IPosition,
 } from "@copytrade/shared/lib/database";
@@ -681,6 +682,26 @@ async function runPositionAgentForDoc(position: PositionDocLike) {
     systemPrompt: buildPositionMonitorSystemPrompt(),
     userPrompt: buildPositionMonitorUserPrompt(position, processId),
   });
+
+  try {
+    await AgentTurn.create({
+      sessionId: "position-monitor-session",
+      processId,
+      role: "admin",
+      provider: agentResult.provider,
+      status: "completed",
+      userMessage: buildPositionMonitorUserPrompt(position, processId),
+      assistantResponse: agentResult.response,
+      history: [],
+      messages: [],
+      pendingToolCalls: [],
+      toolTraces: agentResult.toolTraces,
+      startedAt: new Date(),
+      completedAt: new Date(),
+    });
+  } catch (err) {
+    // Just swallow if the unique processId already exists or fails
+  }
 
   await logProcessStep({
     accountId: position.accountId,

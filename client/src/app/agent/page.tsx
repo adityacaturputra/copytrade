@@ -35,12 +35,25 @@ interface ChatMessage {
 
 type AgentRole = "viewer" | "operator" | "admin";
 
+interface HistoryItem {
+  id: string;
+  processId: string;
+  sessionId: string;
+  role: string;
+  status: string;
+  userMessage: string;
+  assistantResponse: string | null;
+  createdAt: string;
+  toolCount: number;
+}
+
 const API_BASE = (
   process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3001"
 ).replace(/\/+$/, "");
 const AGENT_API_URL = `${API_BASE}/api/agent`;
 const AGENT_AUTH_URL = `${API_BASE}/api/agent/auth`;
 const AGENT_APPROVAL_URL = `${API_BASE}/api/agent/approval`;
+const AGENT_HISTORY_URL = `${API_BASE}/api/agent/history`;
 const STORAGE_PASSWORD_KEY = "agent-chat-password";
 const STORAGE_SESSION_KEY = "agent-chat-session-id";
 
@@ -63,6 +76,12 @@ export default function AgentChatPage() {
   const [role, setRole] = useState<AgentRole | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [passwordInput, setPasswordInput] = useState("");
+  const [currentView, setCurrentView] = useState<"chat" | "history_list" | "history_detail">("chat");
+  const [historyList, setHistoryList] = useState<HistoryItem[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [selectedHistory, setSelectedHistory] = useState<HistoryItem | null>(null);
+  const [historyDetail, setHistoryDetail] = useState<any>(null);
+  
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const streamControllerRef = useRef<AbortController | null>(null);
@@ -496,6 +515,49 @@ export default function AgentChatPage() {
     setError(null);
   };
 
+  const loadHistory = useCallback(async () => {
+    if (!password) return;
+    setHistoryLoading(true);
+    setCurrentView("history_list");
+    setError(null);
+    try {
+      const res = await fetch(AGENT_HISTORY_URL, {
+        headers: { "x-agent-password": password },
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Failed to load history");
+      }
+      setHistoryList(data.data || []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [password]);
+
+  const loadHistoryDetail = useCallback(async (item: HistoryItem) => {
+    if (!password) return;
+    setSelectedHistory(item);
+    setHistoryLoading(true);
+    setCurrentView("history_detail");
+    setError(null);
+    try {
+      const res = await fetch(`${AGENT_HISTORY_URL}/${item.processId}`, {
+        headers: { "x-agent-password": password },
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Failed to load history detail");
+      }
+      setHistoryDetail(data.data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [password]);
+
   const quickPrompts = [
     "What's my account balance?",
     "Show my open positions",
@@ -562,6 +624,21 @@ export default function AgentChatPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            {currentView === "chat" ? (
+              <button
+                onClick={() => void loadHistory()}
+                className="rounded-lg bg-indigo-600/20 text-indigo-400 border border-indigo-700/50 px-3 py-1.5 text-xs font-semibold hover:bg-indigo-600/40"
+              >
+                History
+              </button>
+            ) : (
+              <button
+                onClick={() => setCurrentView("chat")}
+                className="rounded-lg bg-emerald-600/20 text-emerald-400 border border-emerald-700/50 px-3 py-1.5 text-xs font-semibold hover:bg-emerald-600/40"
+              >
+                Back to Chat
+              </button>
+            )}
             {loading ? (
               <button
                 onClick={stopStreaming}
@@ -588,8 +665,10 @@ export default function AgentChatPage() {
         </div>
       </header>
 
-      <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-5xl space-y-6 px-4 py-6">
+      {currentView === "chat" ? (
+        <>
+          <div className="flex-1 overflow-y-auto">
+            <div className="mx-auto max-w-5xl space-y-6 px-4 py-6">
           {messages.length === 0 && !loading ? (
             <div className="py-12 text-center">
               <div className="mb-4 text-6xl">🤖</div>
@@ -735,6 +814,103 @@ export default function AgentChatPage() {
           </p>
         </div>
       </div>
+        </>
+      ) : currentView === "history_list" ? (
+        <div className="flex-1 overflow-y-auto p-4">
+          <div className="mx-auto max-w-4xl">
+            <h2 className="text-xl font-bold text-white mb-6">Agent Run History</h2>
+            {historyLoading ? (
+              <div className="text-slate-400">Loading history...</div>
+            ) : historyList.length === 0 ? (
+              <div className="text-slate-400">No history found.</div>
+            ) : (
+              <div className="space-y-3">
+                {historyList.map((item) => (
+                  <div
+                    key={item.id}
+                    onClick={() => void loadHistoryDetail(item)}
+                    className="cursor-pointer rounded-xl border border-slate-700 bg-slate-800 p-4 transition hover:bg-slate-700/80"
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        {item.sessionId === "position-monitor-session" ? (
+                          <span className="rounded-md bg-purple-900/40 border border-purple-700/50 px-2 py-0.5 text-xs font-semibold text-purple-300">
+                            🤖 Position Monitor
+                          </span>
+                        ) : (
+                          <span className="rounded-md bg-blue-900/40 border border-blue-700/50 px-2 py-0.5 text-xs font-semibold text-blue-300">
+                            👤 User Chat
+                          </span>
+                        )}
+                        <span className="text-xs text-slate-500">
+                          {new Date(item.createdAt).toLocaleString()}
+                        </span>
+                      </div>
+                      <span className="text-xs text-slate-500">{item.toolCount} tool calls</span>
+                    </div>
+                    <p className="text-sm text-slate-300 line-clamp-2">
+                      {item.sessionId === "position-monitor-session"
+                        ? item.assistantResponse || "No response"
+                        : item.userMessage}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="flex-1 overflow-y-auto p-4">
+          <div className="mx-auto max-w-4xl">
+            <button
+              onClick={() => setCurrentView("history_list")}
+              className="mb-6 flex items-center gap-2 text-sm text-slate-400 hover:text-white transition"
+            >
+              <span>←</span> Back to History
+            </button>
+            {historyLoading ? (
+              <div className="text-slate-400">Loading details...</div>
+            ) : historyDetail ? (
+              <div className="space-y-6">
+                <div className="flex justify-end">
+                  <div className="max-w-[85%] rounded-2xl rounded-br-md bg-primary-600 px-4 py-3 text-sm text-white whitespace-pre-wrap leading-relaxed">
+                    {historyDetail.userMessage}
+                  </div>
+                </div>
+                <div className="flex justify-start">
+                  <div className="max-w-[85%] rounded-2xl rounded-bl-md border border-slate-700 bg-slate-800 px-4 py-3 text-slate-200">
+                    <div className="agent-markdown text-sm leading-relaxed">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {historyDetail.assistantResponse || "No response"}
+                      </ReactMarkdown>
+                    </div>
+                    {historyDetail.toolTraces && historyDetail.toolTraces.length > 0 && (
+                      <div className="mt-4 space-y-2">
+                        <p className="text-xs text-slate-500 mb-2">Tool Calls:</p>
+                        {historyDetail.toolTraces.map((trace: any, i: number) => (
+                          <div key={i} className="rounded-lg border border-slate-700/50 bg-slate-900/50 p-2.5">
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className="text-xs font-mono text-primary-400">
+                                {trace.toolName}
+                              </span>
+                              <span className={`text-[10px] px-1.5 py-0.5 rounded ${trace.status === 'executed' ? 'bg-emerald-900/30 text-emerald-400' : 'bg-amber-900/30 text-amber-400'}`}>
+                                {trace.status}
+                              </span>
+                            </div>
+                            <div className="text-xs text-slate-400 max-h-32 overflow-y-auto font-mono whitespace-pre-wrap">
+                              {JSON.stringify(trace.toolArgs, null, 2)}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
