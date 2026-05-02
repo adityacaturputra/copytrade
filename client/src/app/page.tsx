@@ -281,14 +281,6 @@ export default function Dashboard() {
   useEffect(() => {
     fetchData();
     fetchCronStatus();
-    const interval = setInterval(() => {
-      fetchData();
-    }, 30000);
-    const cronInterval = setInterval(fetchCronStatus, 2000);
-    return () => {
-      clearInterval(interval);
-      clearInterval(cronInterval);
-    };
   }, [fetchData, fetchCronStatus]);
 
   const [showCronMenu, setShowCronMenu] = useState(false);
