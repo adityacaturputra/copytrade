@@ -748,11 +748,28 @@ export default function AgentChatPage() {
                   }`}
                 >
                   {message.role === "assistant" ? (
-                    <div className="agent-markdown text-sm leading-relaxed">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {message.content}
-                      </ReactMarkdown>
-                    </div>
+                    message.content ? (
+                      <div className="agent-markdown text-sm leading-relaxed">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {message.content}
+                        </ReactMarkdown>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-3 py-1">
+                        <div className="flex items-center gap-3 text-sm text-slate-400">
+                          <span className="relative flex h-2.5 w-2.5">
+                            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary-400 opacity-75"></span>
+                            <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-primary-500"></span>
+                          </span>
+                          <span className="animate-pulse">Thinking & processing...</span>
+                        </div>
+                        <div className="space-y-2">
+                          <div className="h-3 w-3/4 animate-pulse rounded-md bg-slate-700"></div>
+                          <div className="h-3 w-full animate-pulse rounded-md bg-slate-700"></div>
+                          <div className="h-3 w-5/6 animate-pulse rounded-md bg-slate-700"></div>
+                        </div>
+                      </div>
+                    )
                   ) : (
                     <div className="whitespace-pre-wrap text-sm leading-relaxed">
                       {message.content}
