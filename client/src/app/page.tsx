@@ -5,7 +5,7 @@ import { calculateRisk } from "@copytrade/shared/lib/risk-calc";
 import { autoCalculateTPFromRR } from "@copytrade/shared/lib/executor-signal-utils";
 import { buildBackendApiUrl } from "../lib/backend-url";
 import { getStoredActionPassword } from "@/lib/action-auth";
-import { UnlockModal } from "@/lib/components/UnlockModal";
+import { useActionAuth } from "@/lib/action-auth-context";
 
 // ==================== Types ====================
 
@@ -207,6 +207,17 @@ export default function Dashboard() {
   const [selectedAccountId, setSelectedAccountId] = useState<string>("all");
   const [refreshKey, setRefreshKey] = useState(0);
   const prevCronRunning = useRef<Record<string, boolean>>({});
+  const {
+    isUnlocked,
+    isVerifying,
+    error: authError,
+    unlock,
+    lock,
+    unlockRequested,
+    requestShowUnlock,
+    consumeUnlockRequest,
+  } = useActionAuth();
+  const [menuPassword, setMenuPassword] = useState("");
 
   const fetchExchangeData = useCallback(async () => {
     setLoadingExchange(true);
@@ -300,6 +311,14 @@ export default function Dashboard() {
     }
   }, [cronStatus]);
 
+  // Auto-open menu when unlock is requested (e.g. 403 received)
+  useEffect(() => {
+    if (unlockRequested) {
+      setShowCronMenu(true);
+      consumeUnlockRequest();
+    }
+  }, [unlockRequested, consumeUnlockRequest]);
+
   // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -323,6 +342,10 @@ export default function Dashboard() {
       const headers: Record<string, string> = {};
       if (actionPassword) headers["x-action-password"] = actionPassword;
       const res = await fetch(`/api/cron/${type}`, { method: "POST", headers });
+      if (res.status === 403) {
+        requestShowUnlock();
+        return;
+      }
       const json = await res.json();
       if (json.success) {
         // Fire-and-forget — poll status to see progress
@@ -352,6 +375,10 @@ export default function Dashboard() {
         },
         body: JSON.stringify({ mode: newMode }),
       });
+      if (res.status === 403) {
+        requestShowUnlock();
+        return;
+      }
       const json = await res.json();
       if (json.success) {
         setData({ ...data, tradingMode: newMode });
@@ -383,6 +410,10 @@ export default function Dashboard() {
           body: extraBody ? JSON.stringify(extraBody) : undefined,
         },
       );
+      if (res.status === 403) {
+        requestShowUnlock();
+        return;
+      }
       const json = await res.json();
       if (json.success) {
         const successMessage =
@@ -534,82 +565,67 @@ export default function Dashboard() {
               </div>
             </div>
             <div className="flex items-center gap-1.5 sm:gap-3">
-              {/* Trading Mode Toggle */}
-              <div className="flex items-center gap-1.5 sm:gap-2 bg-slate-800 rounded-lg px-2 sm:px-3 py-1.5 sm:py-2">
-                <span className="text-[10px] sm:text-xs text-slate-400 hidden sm:inline">
-                  Mode:
-                </span>
-                <button
-                  onClick={toggleMode}
-                  disabled={switchingMode}
-                  className={`relative inline-flex h-5 w-9 sm:h-6 sm:w-11 items-center rounded-full transition-colors ${
-                    tradingMode === "auto" ? "bg-green-600" : "bg-slate-600"
-                  }`}
-                >
-                  <span
-                    className={`inline-block h-3.5 w-3.5 sm:h-4 sm:w-4 transform rounded-full bg-white transition-transform ${
-                      tradingMode === "auto"
-                        ? "translate-x-4 sm:translate-x-6"
-                        : "translate-x-1"
-                    }`}
-                  />
-                </button>
-                <span
-                  className={`text-[10px] sm:text-xs font-semibold ${tradingMode === "auto" ? "text-green-400" : "text-amber-400"}`}
-                >
-                  {tradingMode === "auto" ? "🤖" : "👆"}
-                </span>
-              </div>
-
-              {/* Cron Status Warning */}
-              {cronWarning && (
-                <a
-                  href="/settings"
-                  className="bg-amber-600/20 border border-amber-600/40 hover:bg-amber-600/30 px-2 py-1.5 rounded-lg text-xs transition flex items-center gap-1 text-amber-300"
-                  title={`${cronWarning.missing.length} cron job(s) not configured. Click to set up.`}
-                >
-                  ⏰ <span className="hidden sm:inline">Setup Cron</span>
-                </a>
-              )}
-
-              {/* Cron Actions Dropdown */}
+              <a
+                href="/agent"
+                className="bg-purple-700 hover:bg-purple-600 px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm transition flex items-center gap-1"
+              >
+                🤖 <span className="hidden sm:inline">Agent</span>
+              </a>
               <div className="relative" ref={cronMenuRef}>
                 <button
                   onClick={() => setShowCronMenu(!showCronMenu)}
-                  className="bg-primary-600 hover:bg-primary-700 px-2.5 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition flex items-center gap-1 sm:gap-2"
+                  className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold ${
+                    showCronMenu
+                      ? "bg-slate-700 text-white border border-slate-600"
+                      : "bg-slate-800 text-slate-400 border border-slate-700"
+                  }`}
+                  title="Menu"
                 >
-                  ⚡ <span className="hidden sm:inline">Actions</span>
-                  <svg
-                    className="w-3 h-3"
-                    fill="currentColor"
-                    viewBox="0 0 20 20"
-                  >
-                    <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
-                  </svg>
+                  ⋯
                 </button>
                 {showCronMenu && (
-                  <div className="absolute right-0 mt-2 w-52 sm:w-56 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-20 overflow-hidden">
+                  <div className="absolute right-0 mt-1 w-64 rounded-xl border border-slate-700 bg-slate-900 shadow-xl z-50 overflow-hidden">
+                    {/* Mode Toggle */}
+                    <div className="flex items-center justify-between px-3 py-2.5 border-b border-slate-700/50">
+                      <span className="text-xs text-slate-300">
+                        {tradingMode === "auto"
+                          ? "🤖 Auto Mode"
+                          : "👆 Manual Mode"}
+                      </span>
+                      <button
+                        onClick={toggleMode}
+                        disabled={switchingMode}
+                        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                          tradingMode === "auto"
+                            ? "bg-green-600"
+                            : "bg-slate-600"
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                            tradingMode === "auto"
+                              ? "translate-x-4"
+                              : "translate-x-1"
+                          }`}
+                        />
+                      </button>
+                    </div>
+
+                    {/* Cron Actions */}
                     <button
                       onClick={() => {
                         triggerCron("signal-check");
                         setShowCronMenu(false);
                       }}
                       disabled={triggeringCron === "signal-check"}
-                      className="w-full text-left px-3 sm:px-4 py-2.5 sm:py-3 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center gap-2 sm:gap-3 text-sm"
+                      className="w-full text-left px-3 py-2.5 hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center gap-2 text-sm"
                     >
                       {triggeringCron === "signal-check" ? (
-                        <div className="spinner w-4 h-4 border-2" />
+                        <div className="spinner w-3.5 h-3.5 border-2" />
                       ) : (
                         <span>🔍</span>
                       )}
-                      <div>
-                        <div className="text-white font-medium">
-                          Check Signals
-                        </div>
-                        <div className="text-[10px] text-slate-400">
-                          Fetch & parse Discord signals
-                        </div>
-                      </div>
+                      <span className="text-white text-xs">Check Signals</span>
                     </button>
                     <button
                       onClick={() => {
@@ -617,21 +633,16 @@ export default function Dashboard() {
                         setShowCronMenu(false);
                       }}
                       disabled={triggeringCron === "position-monitor"}
-                      className="w-full text-left px-3 sm:px-4 py-2.5 sm:py-3 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center gap-2 sm:gap-3 text-sm border-t border-slate-700/50"
+                      className="w-full text-left px-3 py-2.5 hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center gap-2 text-sm border-t border-slate-700/30"
                     >
                       {triggeringCron === "position-monitor" ? (
-                        <div className="spinner w-4 h-4 border-2" />
+                        <div className="spinner w-3.5 h-3.5 border-2" />
                       ) : (
                         <span>📊</span>
                       )}
-                      <div>
-                        <div className="text-white font-medium">
-                          Position Monitor
-                        </div>
-                        <div className="text-[10px] text-slate-400">
-                          Sync PnL & detect hits
-                        </div>
-                      </div>
+                      <span className="text-white text-xs">
+                        Position Monitor
+                      </span>
                     </button>
                     <button
                       onClick={() => {
@@ -639,44 +650,95 @@ export default function Dashboard() {
                         setShowCronMenu(false);
                       }}
                       disabled={triggeringCron === "tp-sl-monitor"}
-                      className="w-full text-left px-3 sm:px-4 py-2.5 sm:py-3 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center gap-2 sm:gap-3 text-sm border-t border-slate-700/50"
+                      className="w-full text-left px-3 py-2.5 hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center gap-2 text-sm border-t border-slate-700/30"
                     >
                       {triggeringCron === "tp-sl-monitor" ? (
-                        <div className="spinner w-4 h-4 border-2" />
+                        <div className="spinner w-3.5 h-3.5 border-2" />
                       ) : (
                         <span>🎯</span>
                       )}
-                      <div>
-                        <div className="text-white font-medium">
-                          TP/SL Monitor
-                        </div>
-                        <div className="text-[10px] text-slate-400">
-                          Place TP/SL for filled limits
-                        </div>
-                      </div>
+                      <span className="text-white text-xs">TP/SL Monitor</span>
                     </button>
+
+                    {/* Divider + Settings/Refresh */}
+                    <div className="border-t border-slate-700/50 flex">
+                      <a
+                        href="/settings"
+                        className="flex-1 text-center px-3 py-2.5 hover:bg-slate-800 transition text-xs text-slate-300"
+                      >
+                        ⚙️ Settings
+                      </a>
+                      <button
+                        onClick={() => {
+                          fetchData();
+                          setShowCronMenu(false);
+                        }}
+                        className="flex-1 text-center px-3 py-2.5 hover:bg-slate-800 transition text-xs text-slate-300 border-l border-slate-700/30"
+                      >
+                        🔄 Refresh
+                      </button>
+                    </div>
+
+                    {/* Unlock/Lock */}
+                    <div className="border-t border-slate-700/50 px-3 py-2.5">
+                      {isUnlocked ? (
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-emerald-400">
+                            🔓 Actions unlocked
+                          </span>
+                          <button
+                            onClick={() => {
+                              lock();
+                              setShowCronMenu(false);
+                            }}
+                            className="text-xs text-slate-400 hover:text-white transition px-2 py-1 rounded bg-slate-800 hover:bg-slate-700"
+                          >
+                            Lock
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="password"
+                              value={menuPassword}
+                              onChange={(e) => setMenuPassword(e.target.value)}
+                              onKeyDown={async (e) => {
+                                if (e.key === "Enter") {
+                                  const ok = await unlock(menuPassword);
+                                  if (ok) {
+                                    setMenuPassword("");
+                                    setShowCronMenu(false);
+                                  }
+                                }
+                              }}
+                              placeholder="🔒 Action password"
+                              className="flex-1 rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs text-white outline-none focus:border-primary-500"
+                              autoFocus
+                            />
+                            <button
+                              onClick={async () => {
+                                const ok = await unlock(menuPassword);
+                                if (ok) {
+                                  setMenuPassword("");
+                                  setShowCronMenu(false);
+                                }
+                              }}
+                              disabled={isVerifying || !menuPassword}
+                              className="rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                            >
+                              {isVerifying ? "..." : "Go"}
+                            </button>
+                          </div>
+                          {authError && (
+                            <p className="text-xs text-red-400">{authError}</p>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
-              <a
-                href="/agent"
-                className="bg-purple-700 hover:bg-purple-600 px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm transition flex items-center gap-1"
-              >
-                🤖 <span className="hidden sm:inline">Agent</span>
-              </a>
-              <UnlockModal />
-              <a
-                href="/settings"
-                className="bg-slate-700 hover:bg-slate-600 px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm transition"
-              >
-                ⚙️
-              </a>
-              <button
-                onClick={fetchData}
-                className="bg-slate-700 hover:bg-slate-600 px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm transition"
-              >
-                🔄
-              </button>
             </div>
           </div>
         </div>
@@ -963,10 +1025,7 @@ export default function Dashboard() {
                         ?.toLowerCase()
                         .includes("econnrefused")
                     ? `OKX servers are unreachable from your network (ISP blocking). Enable VPN to connect.`
-                    : displayExchangeError ||
-                      (visibleExchangeAccounts.length === 0
-                        ? "No connected exchange accounts found."
-                        : "No account data available.")}
+                    : displayExchangeError}
               </div>
             )}
           </div>

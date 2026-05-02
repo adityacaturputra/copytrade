@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { getStoredActionPassword } from "@/lib/action-auth";
 import { UnlockModal } from "@/lib/components/UnlockModal";
+import { useActionAuth } from "@/lib/action-auth-context";
 import {
   DEFAULT_ACCOUNT_EXCHANGE_PROVIDER,
   DEFAULT_EXCHANGE_PROVIDER,
@@ -212,6 +213,16 @@ function withActionPassword(
 // ─── Component ──────────────────────────────────────────────
 
 export default function SettingsPage() {
+  const { requestShowUnlock } = useActionAuth();
+
+  const check403 = (res: Response): boolean => {
+    if (res.status === 403) {
+      requestShowUnlock();
+      return true;
+    }
+    return false;
+  };
+
   const [activeTab, setActiveTab] = useState<"accounts" | "system">("accounts");
 
   // ─── Account state ────────────────────────────────────────
@@ -635,6 +646,10 @@ export default function SettingsPage() {
         body: JSON.stringify(body),
       });
 
+      if (check403(res)) {
+        setSaving(false);
+        return;
+      }
       const json = await res.json();
       if (json.success) {
         setShowForm(false);
@@ -737,6 +752,10 @@ export default function SettingsPage() {
         method: "DELETE",
         headers: withActionPassword(),
       });
+      if (check403(res)) {
+        setDeleting(null);
+        return;
+      }
       const json = await res.json();
       if (json.success) {
         await fetchAccounts();
@@ -760,6 +779,7 @@ export default function SettingsPage() {
         headers: withActionPassword({ "Content-Type": "application/json" }),
         body: JSON.stringify({ id: account._id, isActive: newActive }),
       });
+      if (check403(res)) return;
       const json = await res.json();
       if (json.success) {
         await fetchAccounts();
@@ -790,6 +810,7 @@ export default function SettingsPage() {
           disabledChannelIds: Array.from(disabled),
         }),
       });
+      if (check403(res)) return;
       const json = await res.json();
       if (json.success) {
         await fetchAccounts();
@@ -843,6 +864,10 @@ export default function SettingsPage() {
         headers: withActionPassword({ "Content-Type": "application/json" }),
         body: JSON.stringify({ risk: riskConfig }),
       });
+      if (check403(res)) {
+        setRiskSaving(false);
+        return;
+      }
       const json = await res.json();
       if (json.success) {
         setRiskSuccess(true);
@@ -867,6 +892,10 @@ export default function SettingsPage() {
         headers: withActionPassword({ "Content-Type": "application/json" }),
         body: JSON.stringify({ signal: signalCfg }),
       });
+      if (check403(res)) {
+        setSignalSaving(false);
+        return;
+      }
       const json = await res.json();
       if (json.success) {
         setSignalSuccess(true);
@@ -904,6 +933,10 @@ export default function SettingsPage() {
           jobs: cronJobs,
         }),
       });
+      if (check403(res)) {
+        setCronSaving(false);
+        return;
+      }
       const json = await res.json();
       if (json.success) {
         setCronSuccess(true);
@@ -940,6 +973,10 @@ export default function SettingsPage() {
         method: "PUT",
         headers: withActionPassword(),
       });
+      if (check403(res)) {
+        setCronPulling(false);
+        return;
+      }
       const json = await res.json();
       if (json.success) {
         if ("baseUrl" in (json.settings || {})) {
@@ -975,6 +1012,10 @@ export default function SettingsPage() {
         headers: withActionPassword({ "Content-Type": "application/json" }),
         body: JSON.stringify(body),
       });
+      if (check403(res)) {
+        setProxySaving(false);
+        return;
+      }
       const json = await res.json();
       if (json.success) {
         setProxyConfig(json.config);
@@ -1000,6 +1041,12 @@ export default function SettingsPage() {
         headers: withActionPassword({ "Content-Type": "application/json" }),
         body: JSON.stringify({}),
       });
+      if (check403(res)) {
+        setResetLoading(false);
+        setResetShowConfirm(false);
+        setResetConfirmText("");
+        return;
+      }
       const json = await res.json();
       setResetResult(json);
     } catch (err) {
@@ -1039,6 +1086,10 @@ export default function SettingsPage() {
         headers: withActionPassword({ "Content-Type": "application/json" }),
         body: JSON.stringify(payload),
       });
+      if (check403(res)) {
+        setLogCleanupLoading(null);
+        return;
+      }
       const json = await res.json();
 
       if (json.success) {

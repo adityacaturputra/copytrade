@@ -158,16 +158,6 @@ export default function AgentChatPage() {
       });
   }, [authenticate]);
 
-  const logout = () => {
-    streamControllerRef.current?.abort();
-    streamControllerRef.current = null;
-    sessionStorage.removeItem(STORAGE_SESSION_KEY);
-    setRole(null);
-    setMessages([]);
-    setError(null);
-    setLoading(false);
-    setSessionId(createSessionId());
-  };
 
   const applyStreamEventToMessage = useCallback(
     (
@@ -642,83 +632,85 @@ export default function AgentChatPage() {
                 Clear
               </button>
             ) : null}
-            {actionAuth.isUnlocked ? (
+            <div className="relative">
               <button
-                onClick={actionAuth.lock}
-                className="rounded-lg bg-emerald-900/30 text-emerald-400 border border-emerald-700/50 px-3 py-1.5 text-xs font-semibold hover:bg-emerald-900/50"
-                title="Actions unlocked – click to lock"
+                onClick={() => setShowUnlockDialog((v) => !v)}
+                className={`rounded-lg px-2.5 py-1.5 text-xs font-semibold ${
+                  actionAuth.isUnlocked
+                    ? "bg-emerald-900/30 text-emerald-400 border border-emerald-700/50"
+                    : "bg-slate-800 text-slate-400 border border-slate-700"
+                }`}
+                title={
+                  actionAuth.isUnlocked ? "Actions unlocked" : "Unlock actions"
+                }
               >
-                🔓 Actions
+                ⋯
               </button>
-            ) : (
-              <button
-                onClick={() => setShowUnlockDialog(true)}
-                className="rounded-lg bg-amber-900/30 text-amber-400 border border-amber-700/50 px-3 py-1.5 text-xs font-semibold hover:bg-amber-900/50"
-                title="Unlock to allow mutating actions"
-              >
-                🔒 Unlock Actions
-              </button>
-            )}
-            <button
-              onClick={logout}
-              className="rounded-lg bg-slate-800 px-3 py-1.5 text-xs text-slate-300"
-            >
-              Lock
-            </button>
+              {showUnlockDialog && (
+                <div className="absolute right-0 top-full mt-1 w-64 rounded-xl border border-slate-700 bg-slate-900 p-3 shadow-xl z-50">
+                  {actionAuth.isUnlocked ? (
+                    <>
+                      <p className="mb-2 text-xs text-emerald-400">
+                        🔓 Actions unlocked
+                      </p>
+                      <button
+                        onClick={() => {
+                          actionAuth.lock();
+                          setShowUnlockDialog(false);
+                        }}
+                        className="w-full rounded-lg bg-slate-800 px-3 py-2 text-xs text-slate-300 hover:bg-slate-700"
+                      >
+                        Lock Actions
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <input
+                        type="password"
+                        value={unlockInput}
+                        onChange={(e) => setUnlockInput(e.target.value)}
+                        onKeyDown={async (e) => {
+                          if (e.key === "Enter") {
+                            const ok = await actionAuth.unlock(
+                              unlockInput.trim(),
+                            );
+                            if (ok) {
+                              setShowUnlockDialog(false);
+                              setUnlockInput("");
+                            }
+                          }
+                        }}
+                        placeholder="Action password"
+                        className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white outline-none focus:border-primary-500"
+                        autoFocus
+                      />
+                      <button
+                        onClick={async () => {
+                          const ok = await actionAuth.unlock(
+                            unlockInput.trim(),
+                          );
+                          if (ok) {
+                            setShowUnlockDialog(false);
+                            setUnlockInput("");
+                          }
+                        }}
+                        disabled={actionAuth.isVerifying || !unlockInput.trim()}
+                        className="mt-2 w-full rounded-lg bg-primary-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
+                      >
+                        {actionAuth.isVerifying ? "..." : "Unlock"}
+                      </button>
+                      {actionAuth.error && (
+                        <p className="mt-2 text-xs text-red-400">
+                          {actionAuth.error}
+                        </p>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         </div>
-
-        {/* Inline unlock dialog */}
-        {showUnlockDialog && !actionAuth.isUnlocked && (
-          <div className="border-b border-slate-700 bg-slate-900/80 px-4 py-3">
-            <div className="mx-auto flex max-w-5xl items-center gap-3">
-              <input
-                type="password"
-                value={unlockInput}
-                onChange={(e) => setUnlockInput(e.target.value)}
-                onKeyDown={async (e) => {
-                  if (e.key === "Enter") {
-                    const ok = await actionAuth.unlock(unlockInput.trim());
-                    if (ok) {
-                      setShowUnlockDialog(false);
-                      setUnlockInput("");
-                    }
-                  }
-                }}
-                placeholder="Action password"
-                className="flex-1 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white outline-none focus:border-primary-500"
-                autoFocus
-              />
-              <button
-                onClick={async () => {
-                  const ok = await actionAuth.unlock(unlockInput.trim());
-                  if (ok) {
-                    setShowUnlockDialog(false);
-                    setUnlockInput("");
-                  }
-                }}
-                disabled={actionAuth.isVerifying || !unlockInput.trim()}
-                className="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-              >
-                {actionAuth.isVerifying ? "..." : "Unlock"}
-              </button>
-              <button
-                onClick={() => {
-                  setShowUnlockDialog(false);
-                  setUnlockInput("");
-                }}
-                className="rounded-lg bg-slate-800 px-3 py-2 text-sm text-slate-400"
-              >
-                Cancel
-              </button>
-            </div>
-            {actionAuth.error && (
-              <p className="mx-auto mt-2 max-w-5xl text-xs text-red-400">
-                {actionAuth.error}
-              </p>
-            )}
-          </div>
-        )}
       </header>
 
       {currentView === "chat" ? (

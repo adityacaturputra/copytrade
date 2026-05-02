@@ -25,6 +25,12 @@ interface ActionAuthState {
   unlock: (password: string) => Promise<boolean>;
   /** Lock actions (clear stored password) */
   lock: () => void;
+  /** Signal that a 403 was received — pages should show unlock UI */
+  unlockRequested: boolean;
+  /** Call to show the unlock modal/password input */
+  requestShowUnlock: () => void;
+  /** Call after the unlock UI has been shown (consumes the request) */
+  consumeUnlockRequest: () => void;
 }
 
 const ActionAuthContext = createContext<ActionAuthState>({
@@ -33,6 +39,9 @@ const ActionAuthContext = createContext<ActionAuthState>({
   error: null,
   unlock: async () => false,
   lock: () => {},
+  unlockRequested: false,
+  requestShowUnlock: () => {},
+  consumeUnlockRequest: () => {},
 });
 
 export function ActionAuthProvider({
@@ -43,6 +52,7 @@ export function ActionAuthProvider({
   const [isUnlocked, setIsUnlocked] = useState(false);
   const [isVerifying, setIsVerifying] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [unlockRequested, setUnlockRequested] = useState(false);
 
   // Check localStorage on mount
   useEffect(() => {
@@ -91,9 +101,26 @@ export function ActionAuthProvider({
     setError(null);
   }, []);
 
+  const requestShowUnlock = useCallback(() => {
+    setUnlockRequested(true);
+  }, []);
+
+  const consumeUnlockRequest = useCallback(() => {
+    setUnlockRequested(false);
+  }, []);
+
   return (
     <ActionAuthContext.Provider
-      value={{ isUnlocked, isVerifying, error, unlock, lock }}
+      value={{
+        isUnlocked,
+        isVerifying,
+        error,
+        unlock,
+        lock,
+        unlockRequested,
+        requestShowUnlock,
+        consumeUnlockRequest,
+      }}
     >
       {children}
     </ActionAuthContext.Provider>
