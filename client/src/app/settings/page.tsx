@@ -176,6 +176,11 @@ const RECOMMENDED_SCHEDULES: Record<
     label: "Every 5 minutes",
     description: "Place TP/SL for filled limit orders. Recommended: 5 min.",
   },
+  "orphan-cleanup": {
+    label: "Every 60 minutes",
+    description:
+      "Clean up orphan algo orders on exchange. Recommended: 60 min.",
+  },
 };
 
 const EXCHANGE_PROVIDER_OPTIONS = getExchangeProviderOptions();
@@ -305,6 +310,14 @@ export default function SettingsPage() {
       url: "/api/cron/tp-sl-monitor",
       id: "",
       schedule: { minutes: 5, hours: [], mdays: [], months: [], wdays: [] },
+    },
+    {
+      type: "orphan-cleanup",
+      enabled: true,
+      title: "CopyTrade — Orphan Cleanup",
+      url: "/api/cron/orphan-cleanup",
+      id: "",
+      schedule: { minutes: 60, hours: [], mdays: [], months: [], wdays: [] },
     },
   ]);
   const [cronSaving, setCronSaving] = useState(false);
@@ -465,7 +478,17 @@ export default function SettingsPage() {
         if ("baseUrl" in (json.settings || {})) {
           setCronBaseUrl(json.settings.baseUrl || "");
         }
-        if (json.settings?.jobs?.length > 0) setCronJobs(json.settings.jobs);
+        if (json.settings?.jobs?.length > 0) {
+          // Merge saved jobs with defaults so new job types are included
+          setCronJobs((prevDefaults) => {
+            const savedByType = new Map<string, (typeof prevDefaults)[number]>(
+              json.settings.jobs.map((j: any) => [j.type as string, j]),
+            );
+            return prevDefaults.map(
+              (defaultJob) => savedByType.get(defaultJob.type) ?? defaultJob,
+            );
+          });
+        }
         if (json.liveStatus) setCronLiveStatus(json.liveStatus);
       }
     } catch {

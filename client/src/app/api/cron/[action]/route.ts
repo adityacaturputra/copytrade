@@ -11,6 +11,7 @@ const ALLOWED_ACTIONS = new Set([
   "signal-check",
   "position-monitor",
   "tp-sl-monitor",
+  "orphan-cleanup",
   "status",
 ]);
 

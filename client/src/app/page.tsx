@@ -326,7 +326,11 @@ export default function Dashboard() {
   }, []);
 
   const triggerCron = async (
-    type: "signal-check" | "position-monitor" | "tp-sl-monitor",
+    type:
+      | "signal-check"
+      | "position-monitor"
+      | "tp-sl-monitor"
+      | "orphan-cleanup",
   ) => {
     setTriggeringCron(type);
     try {
@@ -650,6 +654,21 @@ export default function Dashboard() {
                         <span>🎯</span>
                       )}
                       <span className="text-white text-xs">TP/SL Monitor</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        triggerCron("orphan-cleanup");
+                        setShowCronMenu(false);
+                      }}
+                      disabled={triggeringCron === "orphan-cleanup"}
+                      className="w-full text-left px-3 py-2.5 hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center gap-2 text-sm border-t border-slate-700/30"
+                    >
+                      {triggeringCron === "orphan-cleanup" ? (
+                        <div className="spinner w-3.5 h-3.5 border-2" />
+                      ) : (
+                        <span>🧹</span>
+                      )}
+                      <span className="text-white text-xs">Orphan Cleanup</span>
                     </button>
 
                     {/* Divider + Settings/Refresh */}
@@ -3839,6 +3858,7 @@ function CronStatusPanel({
     "signal-check": "🔍 Signal Check",
     "position-monitor": "📊 Position Monitor",
     "tp-sl-monitor": "🎯 TP/SL Monitor",
+    "orphan-cleanup": "🧹 Orphan Cleanup",
   };
 
   return (
