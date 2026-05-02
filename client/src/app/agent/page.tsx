@@ -701,6 +701,26 @@ export default function AgentChatPage() {
               <div
                 className={`max-w-[85%] ${message.role === "user" ? "order-2" : "order-1"}`}
               >
+                {message.role === "assistant" && message.steps.length > 0 ? (
+                  <div className="mb-2">
+                    {expandedSteps.has(message.id) ? (
+                      <div className="mb-2 space-y-2">
+                        {message.steps.map((step, index) => (
+                          <StepCard key={`${message.id}-${index}`} step={step} />
+                        ))}
+                      </div>
+                    ) : null}
+                    <button
+                      onClick={() => toggleSteps(message.id)}
+                      className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-400 transition-colors"
+                    >
+                      {expandedSteps.has(message.id) ? "▲" : "▼"}{" "}
+                      {message.steps.filter((step) => step.type === "tool_call").length}{" "}
+                      tool calls
+                    </button>
+                  </div>
+                ) : null}
+
                 <div
                   className={`mb-1 flex items-center gap-2 ${message.role === "user" ? "justify-end" : ""}`}
                 >
@@ -741,35 +761,17 @@ export default function AgentChatPage() {
                 </div>
 
                 {message.approval ? (
-                  <ApprovalCard
-                    approval={message.approval}
-                    disabled={loading}
-                    onApprove={() =>
-                      void handleApproval(message.id, message.approval!, "approve")
-                    }
-                    onReject={() =>
-                      void handleApproval(message.id, message.approval!, "reject")
-                    }
-                  />
-                ) : null}
-
-                {message.role === "assistant" && message.steps.length > 0 ? (
                   <div className="mt-2">
-                    <button
-                      onClick={() => toggleSteps(message.id)}
-                      className="flex items-center gap-1 text-xs text-slate-500"
-                    >
-                      {expandedSteps.has(message.id) ? "▼" : "▶"}{" "}
-                      {message.steps.filter((step) => step.type === "tool_call").length}{" "}
-                      tool calls
-                    </button>
-                    {expandedSteps.has(message.id) ? (
-                      <div className="mt-2 space-y-2">
-                        {message.steps.map((step, index) => (
-                          <StepCard key={`${message.id}-${index}`} step={step} />
-                        ))}
-                      </div>
-                    ) : null}
+                    <ApprovalCard
+                      approval={message.approval}
+                      disabled={loading}
+                      onApprove={() =>
+                        void handleApproval(message.id, message.approval!, "approve")
+                      }
+                      onReject={() =>
+                        void handleApproval(message.id, message.approval!, "reject")
+                      }
+                    />
                   </div>
                 ) : null}
               </div>
