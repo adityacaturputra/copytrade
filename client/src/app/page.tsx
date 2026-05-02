@@ -764,7 +764,7 @@ export default function Dashboard() {
                     className="rounded-lg border border-slate-700/70 bg-slate-900/60 px-3 py-2"
                   >
                     <div className="text-[11px] uppercase tracking-wide text-slate-500">
-                      Total Balance {currency}
+                      All Accounts ({currency})
                     </div>
                     <div className="mt-1 text-sm font-semibold text-white">
                       {totals.totalBalance.toFixed(2)}
@@ -938,7 +938,9 @@ export default function Dashboard() {
                         .includes("econnrefused")
                     ? `OKX servers are unreachable from your network (ISP blocking). Enable VPN to connect.`
                     : displayExchangeError ||
-                      "Check your API keys and network connection."}
+                      (visibleExchangeAccounts.length === 0
+                        ? "No connected exchange accounts found."
+                        : "No account data available.")}
               </div>
             )}
           </div>
