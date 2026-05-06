@@ -6,6 +6,7 @@ const aiMocks = vi.hoisted(() => ({
   parseSignal: vi.fn(),
   preprocessImagesWithVision: vi.fn(),
   buildMessageAnalysisContext: vi.fn(),
+  buildNearbySourceContext: vi.fn(),
   logExecutorInfo: vi.fn(),
   logExecutorWarn: vi.fn(),
   logProcessStep: vi.fn(),
@@ -29,6 +30,10 @@ vi.mock("./executor-analysis-context", () => ({
   buildMessageAnalysisContext: aiMocks.buildMessageAnalysisContext,
 }));
 
+vi.mock("./executor-source-context", () => ({
+  buildNearbySourceContext: aiMocks.buildNearbySourceContext,
+}));
+
 vi.mock("./process-log", () => ({
   logExecutorInfo: aiMocks.logExecutorInfo,
   logExecutorWarn: aiMocks.logExecutorWarn,
@@ -46,6 +51,7 @@ beforeEach(() => {
   aiMocks.parseSignal.mockReset();
   aiMocks.preprocessImagesWithVision.mockReset();
   aiMocks.buildMessageAnalysisContext.mockReset();
+  aiMocks.buildNearbySourceContext.mockReset();
   aiMocks.logExecutorInfo.mockReset();
   aiMocks.logExecutorWarn.mockReset();
   aiMocks.logProcessStep.mockReset();
@@ -56,6 +62,7 @@ beforeEach(() => {
     includeImageUrls: true,
   });
   aiMocks.buildMessageAnalysisContext.mockResolvedValue("LIVE_CONTEXT");
+  aiMocks.buildNearbySourceContext.mockResolvedValue("");
   aiMocks.logExecutorInfo.mockResolvedValue(undefined);
   aiMocks.logExecutorWarn.mockResolvedValue(undefined);
   aiMocks.logProcessStep.mockResolvedValue(undefined);
@@ -127,6 +134,38 @@ test("analyzeMessagesWithAI reuses account context, handles unchanged vision con
     {
       messageId: "msg-2",
       signal: { action: null, symbol: null, confidence: null },
+    },
+  ]);
+});
+
+test("analyzeMessagesWithAI appends nearby source messages when available", async () => {
+  aiMocks.buildNearbySourceContext.mockResolvedValueOnce(
+    "[NEARBY SOURCE MESSAGES]\n- nearby_before 8s | content=caption text\n[END NEARBY SOURCE MESSAGES]",
+  );
+  aiMocks.parseBulkSignals.mockResolvedValue([
+    {
+      messageId: "msg-nearby",
+      signal: { action: "BUY", symbol: "ETHUSDT", confidence: 0.7 },
+    },
+  ]);
+
+  await analyzeMessagesWithAI([
+    {
+      messageId: "msg-nearby",
+      channelId: "chan-nearby",
+      author: "Trader",
+      content: "entry signal",
+      imageUrls: [],
+      sourceId: "acc-nearby",
+      processId: "proc-nearby",
+    },
+  ] as never);
+
+  assert.deepEqual(aiMocks.parseBulkSignals.mock.calls[0]?.[0], [
+    {
+      messageId: "msg-nearby",
+      content:
+        "entry signal\n\n[NEARBY SOURCE MESSAGES]\n- nearby_before 8s | content=caption text\n[END NEARBY SOURCE MESSAGES]\n\nLIVE_CONTEXT",
     },
   ]);
 });

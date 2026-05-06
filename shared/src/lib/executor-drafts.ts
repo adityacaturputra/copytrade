@@ -14,6 +14,23 @@ import type {
 import { logExecutorInfo, logProcessStep } from "./process-log";
 import { resolveEffectiveRiskConfig } from "./risk";
 
+function resolveOriginalContent(msg: DraftSourceMessage): string {
+  const original = msg.originalContent?.trim();
+  if (original) return original;
+
+  const content = msg.content?.trim();
+  if (content) return content;
+
+  const imageCount = msg.imageUrls?.length || 0;
+  const attachmentHint =
+    imageCount > 0
+      ? ` with ${imageCount} attachment${imageCount === 1 ? "" : "s"}`
+      : "";
+  const urlHint = msg.messageUrl ? ` ${msg.messageUrl}` : "";
+
+  return `[source message had no text content${attachmentHint}]${urlHint}`;
+}
+
 async function buildDraftPayload(
   signal: TradingSignal,
   msg: DraftSourceMessage,
@@ -113,7 +130,7 @@ async function buildDraftPayload(
     channelId: msg.channelId,
     messageUrl: msg.messageUrl,
     author: msg.author,
-    originalContent: msg.originalContent || msg.content,
+    originalContent: resolveOriginalContent(msg),
     imageUrls: msg.imageUrls,
     signalData: JSON.stringify(signal),
     action: signal.action,

@@ -273,6 +273,36 @@ test("createDraft auto-calculates TP targets and falls back to default leverage 
   assert.equal(draftExecutorMocks.logProcessStep.mock.calls.length, 0);
 });
 
+test("createDraft uses a safe placeholder when both originalContent and content are empty", async () => {
+  const draft = createDraftDoc({ id: "draft-empty-content" });
+  draftExecutorMocks.autoCalculateTPFromRR.mockReturnValue([160, 170]);
+  draftExecutorMocks.draftTradeCreate.mockResolvedValue(draft);
+
+  await createDraft(
+    {
+      action: "BUY",
+      symbol: "SOLUSDT",
+      entryPrice: 150,
+      stopLoss: 140,
+    } as never,
+    createMessage({
+      content: "   ",
+      originalContent: "",
+      imageUrls: [
+        "https://cdn.example.com/chart-1.png",
+        "https://cdn.example.com/chart-2.png",
+      ],
+      messageUrl: "https://discord.com/channels/test/empty",
+    }) as never,
+    "acc-1",
+  );
+
+  assert.equal(
+    draftExecutorMocks.draftTradeCreate.mock.calls[0][0].originalContent,
+    "[source message had no text content with 2 attachments] https://discord.com/channels/test/empty",
+  );
+});
+
 test("refreshDraftFromSignal rebuilds draft payload and skips process logging when no process id exists", async () => {
   const draft = createDraftDoc({
     accountId: "acc-9",

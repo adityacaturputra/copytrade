@@ -2,6 +2,7 @@ import { AIFactory } from "./ai/AIFactory";
 import { preprocessImagesWithVision } from "./ai/ImageAIFactory";
 import type { BulkMessageInput } from "./ai/types";
 import { buildMessageAnalysisContext } from "./executor-analysis-context";
+import { buildNearbySourceContext } from "./executor-source-context";
 import type {
   MessageAnalysisResult,
   ProcessTrackedMessage,
@@ -115,8 +116,13 @@ async function buildBulkInputForMessage(
     accountContextCache.set(contextKey, contextPromise);
   }
 
-  const liveContextBlock = await contextPromise;
-  content = `${content}\n\n${liveContextBlock}`;
+  const [liveContextBlock, nearbySourceContext] = await Promise.all([
+    contextPromise,
+    buildNearbySourceContext(msg),
+  ]);
+  content = [content, nearbySourceContext, liveContextBlock]
+    .filter(Boolean)
+    .join("\n\n");
 
   return {
     messageId: msg.messageId,
