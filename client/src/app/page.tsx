@@ -1,6 +1,13 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, Fragment } from "react";
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  Fragment,
+  type ReactNode,
+} from "react";
 import { calculateRisk } from "@copytrade/shared/lib/risk-calc";
 import { autoCalculateTPFromRR } from "@copytrade/shared/lib/executor-signal-utils";
 import { buildBackendApiUrl } from "../lib/backend-url";
@@ -1526,14 +1533,13 @@ function InlineLogDetails({ text }: { text?: string | null }) {
       return (
         <span className="break-words">
           {prefix}
-          <span className="relative group cursor-help inline-flex items-center mx-1 z-10 align-middle">
-            <span className="bg-emerald-950/40 text-emerald-400 text-[9px] px-1.5 py-0.5 rounded border border-emerald-900/50 hover:bg-emerald-900/50 transition-colors whitespace-nowrap">
-              ...{"{ }"} JSON
-            </span>
-            <span className="absolute z-[100] hidden group-hover:block bg-[#0D1117] text-slate-300 text-[10px] p-3 rounded-lg border border-slate-600 shadow-2xl min-w-[250px] max-w-[85vw] md:max-w-[600px] bottom-full left-0 sm:left-1/2 sm:-translate-x-1/2 mb-2 pointer-events-none whitespace-pre-wrap leading-relaxed max-h-[40vh] overflow-y-auto text-left">
-              {formatted}
-            </span>
-          </span>
+          <HoverTapTooltip
+            wrapperClassName="mx-1 align-middle"
+            triggerClassName="bg-emerald-950/60 text-emerald-300 text-[9px] px-1.5 py-0.5 rounded border border-emerald-800/80 hover:bg-emerald-900/70 transition-colors whitespace-nowrap"
+            tooltipClassName="min-w-[250px] max-w-[85vw] md:max-w-[600px] left-0 sm:left-1/2 sm:-translate-x-1/2 font-mono whitespace-pre-wrap text-left"
+            trigger={<>...{"{ }"} JSON</>}
+            content={formatted}
+          />
           {suffix}
         </span>
       );
@@ -1543,6 +1549,64 @@ function InlineLogDetails({ text }: { text?: string | null }) {
   }
 
   return <span className="break-words">{text}</span>;
+}
+
+function HoverTapTooltip({
+  trigger,
+  content,
+  wrapperClassName = "",
+  triggerClassName = "",
+  tooltipClassName = "",
+}: {
+  trigger: ReactNode;
+  content: ReactNode;
+  wrapperClassName?: string;
+  triggerClassName?: string;
+  tooltipClassName?: string;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const wrapperRef = useRef<HTMLSpanElement | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleOutside = (event: MouseEvent | TouchEvent) => {
+      if (!wrapperRef.current) return;
+      if (!wrapperRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleOutside);
+    document.addEventListener("touchstart", handleOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleOutside);
+      document.removeEventListener("touchstart", handleOutside);
+    };
+  }, [isOpen]);
+
+  return (
+    <span
+      ref={wrapperRef}
+      className={`relative inline-flex ${isOpen ? "z-[340]" : "z-0"} ${wrapperClassName}`}
+      onMouseEnter={() => setIsOpen(true)}
+      onMouseLeave={() => setIsOpen(false)}
+    >
+      <button
+        type="button"
+        onClick={() => setIsOpen((value) => !value)}
+        className={`appearance-none border-0 bg-transparent p-0 text-inherit ${triggerClassName}`}
+        aria-expanded={isOpen}
+      >
+        {trigger}
+      </button>
+      <span
+        className={`absolute bottom-full mb-2 z-[320] rounded-xl border border-slate-600/90 bg-slate-800 px-4 py-3 text-xs text-slate-100 shadow-2xl shadow-black/50 whitespace-normal leading-relaxed ${isOpen ? "block" : "hidden"} ${tooltipClassName}`}
+      >
+        {content}
+      </span>
+    </span>
+  );
 }
 
 function ProcessLogsAccordion({
@@ -1823,7 +1887,7 @@ function ProcessLogsAccordion({
               )}
 
               {/* Terminal Log View */}
-              <div className="flex flex-col-reverse h-[400px] overflow-y-auto bg-[#0D1117] rounded-lg border border-slate-800 p-3 font-mono text-[11px] leading-relaxed relative">
+              <div className="flex flex-col-reverse h-[400px] overflow-y-auto overflow-x-hidden bg-[#0D1117] rounded-lg border border-slate-800 p-3 font-mono text-[11px] leading-relaxed relative">
                 {loading && logs.length === 0 ? (
                   <div className="flex-1 flex flex-col items-center justify-center text-slate-500 py-8">
                     <div className="spinner mx-auto mb-3" />
@@ -1904,7 +1968,7 @@ function ProcessLogsAccordion({
                           </span>
 
                           {/* Detail Body */}
-                          <span className="text-slate-400 mt-1 sm:mt-0 leading-relaxed break-words">
+                          <span className="min-w-0 text-slate-400 mt-1 sm:mt-0 leading-relaxed whitespace-pre-wrap break-words">
                             <InlineLogDetails text={log.details} />
                             {log.error && (
                               <span className="text-red-400 ml-1 block sm:inline mt-1 sm:mt-0">
@@ -3170,16 +3234,21 @@ function PositionsTab({
                       </div>
                     )}
                     {pos.closeReason && (
-                      <div className="bg-slate-900/50 p-1.5 rounded mt-1 border border-slate-700/50 relative group">
+                      <div className="bg-slate-900/50 p-1.5 rounded mt-1 border border-slate-700/50 relative">
                         <span className="text-[9px] text-slate-500 uppercase block mb-0.5">
                           Close Reason
                         </span>
-                        <span className="text-slate-400 block truncate">
-                          {pos.closeReason}
-                        </span>
-                        <div className="absolute z-[100] hidden active:block sm:group-hover:block bg-slate-800 text-slate-200 text-[10px] p-2 rounded-lg border border-slate-600 shadow-2xl min-w-[200px] bottom-full left-0 mb-1 whitespace-normal leading-relaxed">
-                          {pos.closeReason}
-                        </div>
+                        <HoverTapTooltip
+                          wrapperClassName="z-20"
+                          triggerClassName="block max-w-full text-left text-slate-300"
+                          tooltipClassName="left-0 right-auto min-w-[220px] max-w-[min(22rem,calc(100vw-2rem))]"
+                          trigger={
+                            <span className="block truncate text-slate-400">
+                              {pos.closeReason}
+                            </span>
+                          }
+                          content={pos.closeReason}
+                        />
                       </div>
                     )}
                   </div>
@@ -3296,14 +3365,21 @@ function PositionsTab({
                           )}
                         </td>
                         {positionFilter === "closed" && (
-                          <td className="text-xs text-slate-400 relative group cursor-help">
-                            <span className="max-w-[120px] truncate block">
-                              {pos.closeReason || "-"}
-                            </span>
-                            {pos.closeReason && (
-                              <div className="absolute z-[100] hidden group-hover:block bg-slate-800 text-slate-200 text-[10px] p-2 rounded-lg border border-slate-600 shadow-2xl min-w-[200px] bottom-full left-0 mb-1 pointer-events-none whitespace-normal leading-relaxed">
-                                {pos.closeReason}
-                              </div>
+                          <td className="text-xs text-slate-400 whitespace-normal">
+                            {pos.closeReason ? (
+                              <HoverTapTooltip
+                                wrapperClassName="z-20 max-w-[340px]"
+                                triggerClassName="block w-full text-left"
+                                tooltipClassName="left-0 min-w-[220px] max-w-[360px]"
+                                trigger={
+                                  <span className="block whitespace-normal break-words text-slate-400">
+                                    {pos.closeReason}
+                                  </span>
+                                }
+                                content={pos.closeReason}
+                              />
+                            ) : (
+                              "-"
                             )}
                           </td>
                         )}
@@ -3350,7 +3426,7 @@ function PositionsTab({
                         <tr>
                           <td
                             colSpan={100}
-                            className="p-0 border-none bg-slate-900/10"
+                            className="p-0 border-none bg-slate-900/10 whitespace-normal"
                           >
                             <div className="px-4 py-2">
                               <ProcessLogsAccordion
