@@ -13,6 +13,7 @@ import {
   InstrumentSpecs,
 } from "./types";
 import { getProxyAgent } from "../proxy/ProxyFactory";
+import { buildHttpErrorMessage } from "../http-error";
 
 function getBinanceBaseUrl(simulated: boolean): string {
   return (
@@ -300,24 +301,10 @@ export class BinanceExchange implements ExchangeClient {
     context: string,
     params?: Record<string, string | number | boolean | undefined>,
   ): Error {
-    const payloadSuffix = params
-      ? ` | payload=${JSON.stringify(this.sanitizeParamsForLog(params))}`
-      : "";
-
-    if (axios.isAxiosError(error)) {
-      const data = error.response?.data as { code?: number; msg?: string };
-      const code =
-        data && typeof data.code === "number" ? ` code=${data.code}` : "";
-      const msg =
-        data && typeof data.msg === "string"
-          ? data.msg
-          : error.message || "Unknown Binance error";
-      return new Error(
-        `[Binance] ${context} failed${code}: ${msg}${payloadSuffix}`,
-      );
-    }
     return new Error(
-      `[Binance] ${context} failed: ${error instanceof Error ? error.message : String(error)}${payloadSuffix}`,
+      buildHttpErrorMessage(`[Binance] ${context} failed`, error, {
+        payload: params ? this.sanitizeParamsForLog(params) : undefined,
+      }),
     );
   }
 

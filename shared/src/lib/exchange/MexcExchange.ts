@@ -11,6 +11,7 @@ import {
   AlgoOrderInfo,
   HistoricalOrder,
 } from "./types";
+import { buildHttpErrorMessage } from "../http-error";
 
 // ==================== MEXC Exchange Adapter ====================
 
@@ -56,19 +57,70 @@ export class MexcExchange implements ExchangeClient {
     };
   }
 
+  private sanitizeParamsForLog(
+    params?: Record<string, string | number | boolean | undefined>,
+  ): Record<string, string | number | boolean> | undefined {
+    if (!params) return undefined;
+
+    const sanitized: Record<string, string | number | boolean> = {};
+    for (const [key, value] of Object.entries(params)) {
+      if (value === undefined) continue;
+      sanitized[key] =
+        key === "api_key" || key === "sign" ? "[redacted]" : value;
+    }
+    return sanitized;
+  }
+
+  private async get<T>(
+    path: string,
+    params?: Record<string, string | number | boolean | undefined>,
+  ): Promise<T> {
+    try {
+      const response = await this.client.get<T>(path, { params });
+      return response.data;
+    } catch (error) {
+      throw new Error(
+        buildHttpErrorMessage(`[MEXC] GET ${path} failed`, error, {
+          payload: this.sanitizeParamsForLog(params),
+        }),
+      );
+    }
+  }
+
+  private async post<T>(
+    path: string,
+    params?: Record<string, string | number | boolean | undefined>,
+  ): Promise<T> {
+    try {
+      const response = await this.client.post<T>(path, null, { params });
+      return response.data;
+    } catch (error) {
+      throw new Error(
+        buildHttpErrorMessage(`[MEXC] POST ${path} failed`, error, {
+          payload: this.sanitizeParamsForLog(params),
+        }),
+      );
+    }
+  }
+
   // ─── Account ────────────────────────────────────────────────────────
 
   async getAccountInfo(): Promise<AccountInfo> {
     const params = this.buildAuthParams();
     params["sign"] = this.sign(params);
 
-    const response = await this.client.get("/api/v1/private/account/assets", {
-      params,
-    });
-
-    const data = response.data;
+    const data = await this.get<{
+      success?: boolean;
+      message?: string;
+      data?: Array<{
+        currency: string;
+        totalBalance?: string;
+        availableBalance?: string;
+        unrealizedProfit?: string;
+      }>;
+    }>("/api/v1/private/account/assets", params);
     if (data.success) {
-      const usdtAsset = data.data.find(
+      const usdtAsset = (data.data || []).find(
         (asset: { currency: string }) => asset.currency === "USDT",
       );
       return {
@@ -84,12 +136,11 @@ export class MexcExchange implements ExchangeClient {
   // ─── Market Data ────────────────────────────────────────────────────
 
   async getTickerPrice(symbol: string): Promise<number> {
-    const response = await this.client.get(
+    const data = await this.get<{ success?: boolean; data?: { lastPrice?: string } }>(
       `/api/v1/contract/ticker?symbol=${symbol}`,
     );
-    const data = response.data;
     if (data.success) {
-      return parseFloat(data.data.lastPrice);
+      return parseFloat(data.data?.lastPrice || "0");
     }
     throw new Error(`Failed to get price for ${symbol}`);
   }
@@ -99,12 +150,11 @@ export class MexcExchange implements ExchangeClient {
     interval: string = "1h",
     limit: number = 24,
   ): Promise<KlineData[]> {
-    const response = await this.client.get(
+    const data = await this.get<{ success?: boolean; data?: number[][] }>(
       `/api/v1/contract/kline/${symbol}?interval=${interval}&limit=${limit}`,
     );
-    const data = response.data;
     if (data.success) {
-      return data.data.map((k: number[]) => ({
+      return (data.data || []).map((k: number[]) => ({
         time: k[0],
         open: parseFloat(String(k[1])),
         close: parseFloat(String(k[2])),
@@ -122,12 +172,26 @@ export class MexcExchange implements ExchangeClient {
     const params = this.buildAuthParams();
     params["sign"] = this.sign(params);
 
-    const response = await this.client.get(
+    const data = await this.get<{
+      success?: boolean;
+      message?: string;
+      data?: Array<{
+        symbol: string;
+        positionId: number;
+        type: number;
+        leverage: number;
+        openType: number;
+        entryPrice: number;
+        holdQty: number;
+        margin: number;
+        unrealizedPnl: number;
+        liquidationPrice: number;
+        marketPrice: number;
+      }>;
+    }>(
       "/api/v1/private/position/open_positions",
-      { params },
+      params,
     );
-
-    const data = response.data;
     if (data.success) {
       return (data.data || []).map(
         (pos: {
@@ -177,15 +241,13 @@ export class MexcExchange implements ExchangeClient {
     params["openType"] = marginType === "isolated" ? 1 : 2;
     params["sign"] = this.sign(params);
 
-    const response = await this.client.post(
+    const data = await this.post<{ success?: boolean; message?: string }>(
       "/api/v1/private/position/change_leverage",
-      null,
-      { params },
+      params,
     );
-
-    if (!response.data.success) {
+    if (!data.success) {
       console.warn(
-        `Failed to set leverage for ${symbol}: ${response.data.message}`,
+        `Failed to set leverage for ${symbol}: ${data.message}`,
       );
     }
     return leverage;
@@ -215,13 +277,14 @@ export class MexcExchange implements ExchangeClient {
 
     params["sign"] = this.sign(params);
 
-    const response = await this.client.post(
+    const data = await this.post<{
+      success?: boolean;
+      message?: string;
+      data?: string | number;
+    }>(
       "/api/v1/private/order/submit",
-      null,
-      { params },
+      params,
     );
-
-    const data = response.data;
     if (data.success) {
       const price =
         orderParams.price || (await this.getTickerPrice(orderParams.symbol));
@@ -251,13 +314,10 @@ export class MexcExchange implements ExchangeClient {
 
     params["sign"] = this.sign(params);
 
-    const response = await this.client.post(
+    const data = await this.post<{ success?: boolean; message?: string }>(
       "/api/v1/private/position/close",
-      null,
-      { params },
+      params,
     );
-
-    const data = response.data;
     if (!data.success) {
       throw new Error(
         `Failed to close position: ${data.message || "Unknown error"}`,
@@ -309,13 +369,14 @@ export class MexcExchange implements ExchangeClient {
     params["type"] = 1; // SL order
     params["sign"] = this.sign(params);
 
-    const response = await this.client.post(
+    const data = await this.post<{
+      success?: boolean;
+      message?: string;
+      data?: string | number;
+    }>(
       "/api/v1/private/plan/order/submit",
-      null,
-      { params },
+      params,
     );
-
-    const data = response.data;
     if (data.success) {
       return String(data.data);
     }
@@ -340,13 +401,14 @@ export class MexcExchange implements ExchangeClient {
     params["type"] = 2; // TP order
     params["sign"] = this.sign(params);
 
-    const response = await this.client.post(
+    const data = await this.post<{
+      success?: boolean;
+      message?: string;
+      data?: string | number;
+    }>(
       "/api/v1/private/plan/order/submit",
-      null,
-      { params },
+      params,
     );
-
-    const data = response.data;
     if (data.success) {
       return String(data.data);
     }
@@ -362,12 +424,24 @@ export class MexcExchange implements ExchangeClient {
     if (symbol) params["symbol"] = symbol;
     params["sign"] = this.sign(params);
 
-    const response = await this.client.get(
+    const data = await this.get<{
+      success?: boolean;
+      data?: Array<{
+        id: string;
+        symbol: string;
+        side: number;
+        type: number;
+        price: number;
+        vol: number;
+        dealVol: number;
+        state: number;
+        cTime?: number;
+        [key: string]: unknown;
+      }>;
+    }>(
       "/api/v1/private/order/list/open_orders",
-      { params },
+      params,
     );
-
-    const data = response.data;
     if (data.success && data.data) {
       return data.data.map(
         (o: {
@@ -404,13 +478,11 @@ export class MexcExchange implements ExchangeClient {
     params["orderId"] = orderId;
     params["sign"] = this.sign(params);
 
-    const response = await this.client.post(
+    const data = await this.post<{ success?: boolean }>(
       "/api/v1/private/order/cancel",
-      null,
-      { params },
+      params,
     );
-
-    return response.data.success === true;
+    return data.success === true;
   }
 
   async getAlgoOrders(symbol?: string): Promise<AlgoOrderInfo[]> {
@@ -418,11 +490,21 @@ export class MexcExchange implements ExchangeClient {
     if (symbol) params["symbol"] = symbol;
     params["sign"] = this.sign(params);
 
-    const response = await this.client.get("/api/v1/private/plan/order/list", {
-      params,
-    });
-
-    const data = response.data;
+    const data = await this.get<{
+      success?: boolean;
+      data?: Array<{
+        id: string;
+        symbol: string;
+        side: number;
+        type: number;
+        triggerPrice: number;
+        executePrice: number;
+        vol: number;
+        state: number;
+        cTime?: number;
+        [key: string]: unknown;
+      }>;
+    }>("/api/v1/private/plan/order/list", params);
     if (data.success && data.data) {
       return data.data.map(
         (o: {
@@ -468,18 +550,15 @@ export class MexcExchange implements ExchangeClient {
       params["sign"] = this.sign(params);
 
       try {
-        const response = await this.client.post(
+        const data = await this.post<{ success?: boolean; message?: string }>(
           "/api/v1/private/plan/order/cancel",
-          null,
-          { params },
+          params,
         );
 
-        if (response.data.success) {
+        if (data.success) {
           cancelled.push(order.orderId);
         } else {
-          errors.push(
-            `${order.orderId}: ${response.data.message || "Unknown error"}`,
-          );
+          errors.push(`${order.orderId}: ${data.message || "Unknown error"}`);
         }
       } catch (error) {
         errors.push(
@@ -500,12 +579,27 @@ export class MexcExchange implements ExchangeClient {
     params["limit"] = limit;
     params["sign"] = this.sign(params);
 
-    const response = await this.client.get(
+    const data = await this.get<{
+      success?: boolean;
+      data?: Array<{
+        id: string;
+        symbol: string;
+        side: number;
+        type: number;
+        price: number;
+        vol: number;
+        dealVol: number;
+        fee: number;
+        profit: number;
+        state: number;
+        cTime: number;
+        uTime?: number;
+        [key: string]: unknown;
+      }>;
+    }>(
       "/api/v1/private/order/list/history_orders",
-      { params },
+      params,
     );
-
-    const data = response.data;
     if (data.success && data.data) {
       return data.data.map(
         (o: {

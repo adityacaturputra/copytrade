@@ -414,7 +414,10 @@ test("mexc algo cancellation aggregates exchange and thrown errors", async () =>
 
   assert.deepEqual(await exchange.cancelAlgoOrders("BTCUSDT"), {
     cancelled: ["a1"],
-    errors: ["a2: busy", "a3: network"],
+    errors: [
+      "a2: busy",
+      "a3: [MEXC] POST /api/v1/private/plan/order/cancel failed: network | payload={\"api_key\":\"[redacted]\",\"timestamp\":123,\"symbol\":\"BTCUSDT\",\"orderId\":\"a3\",\"sign\":\"[redacted]\"}",
+    ],
   });
 });
 

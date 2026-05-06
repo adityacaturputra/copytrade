@@ -12,6 +12,7 @@ import {
   InstrumentSpecs,
 } from "./types";
 import { getProxyAgent } from "../proxy/ProxyFactory";
+import { buildHttpErrorMessage } from "../http-error";
 
 type MetaTraderConfig = {
   baseUrl: string;
@@ -290,22 +291,13 @@ export class MetaTraderExchange implements ExchangeClient {
       });
       return response.data;
     } catch (error) {
-      if (axios.isAxiosError(error)) {
-        const status = error.response?.status;
-        const message =
-          typeof error.response?.data === "string"
-            ? error.response.data
-            : JSON.stringify(error.response?.data || {});
-        throw new Error(
-          `[MetaTrader] ${method} ${path} failed${status ? ` (HTTP ${status})` : ""}: ${
-            message || error.message
-          }`,
-        );
-      }
       throw new Error(
-        `[MetaTrader] ${method} ${path} failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        buildHttpErrorMessage(`[MetaTrader] ${method} ${path} failed`, error, {
+          payload: {
+            params: options.params,
+            data: options.data,
+          },
+        }),
       );
     }
   }

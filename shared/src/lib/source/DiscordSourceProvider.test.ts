@@ -637,6 +637,31 @@ test("fetchMessagesFromSource delegates to provider and bot fetch errors are sur
     /bad channel/,
   );
 
+  discordSourceMocks.axiosGet.mockRejectedValueOnce({
+    __axiosError: true,
+    response: {
+      status: 404,
+      data: { message: "Unknown Channel", code: 10003 },
+    },
+    message: "Request failed with status code 404",
+  });
+
+  await assert.rejects(
+    () =>
+      fetchMessagesFromSource(
+        {
+          _id: "src-user-http-error",
+          name: "Discord User",
+          type: "discord",
+          method: "user",
+          token: "user-token",
+          channelIds: ["missing-room"],
+        } as never,
+        5,
+      ),
+    /status=404 code=10003: Unknown Channel.*response=\{"message":"Unknown Channel","code":10003\}/,
+  );
+
   assert.equal(errorSpy.mock.calls.length >= 2, true);
   errorSpy.mockRestore();
 });

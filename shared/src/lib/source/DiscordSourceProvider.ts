@@ -10,6 +10,7 @@
 import axios from "axios";
 import { Client, GatewayIntentBits, TextChannel } from "discord.js";
 import { SourceType } from "../enums";
+import { buildHttpErrorMessage } from "../http-error";
 import {
   ISourceProvider,
   BaseSourceMessage,
@@ -105,11 +106,14 @@ export class DiscordSourceProvider implements ISourceProvider {
           }
         }
       } catch (error) {
-        console.error(
-          `❌ Error fetching from source "${discordConfig.name}" channel ${channelId}:`,
-          error instanceof Error ? error.message : error,
+        const formattedError = buildHttpErrorMessage(
+          `[DiscordSource] fetchMessages channel=${channelId}`,
+          error,
         );
-        throw error;
+        console.error(
+          `❌ Error fetching from source "${discordConfig.name}" channel ${channelId}: ${formattedError}`,
+        );
+        throw new Error(formattedError);
       }
     }
 

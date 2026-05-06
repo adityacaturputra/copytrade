@@ -103,7 +103,7 @@ test("metatrader request wrapper builds headers and surfaces axios and generic e
   };
   await assert.rejects(
     () => exchange.request("POST", "/orders"),
-    /\[MetaTrader\] POST \/orders failed \(HTTP 503\): {"message":"down"}/,
+    /\[MetaTrader\] POST \/orders failed status=503: down \| payload=\{\} \| response=\{"message":"down"\}/,
   );
 
   exchange.client.request = async () => {

@@ -13,6 +13,7 @@ import {
   InstrumentSpecs,
 } from "./types";
 import { getProxyAgent } from "../proxy/ProxyFactory";
+import { buildHttpErrorMessage } from "../http-error";
 
 type HttpMethod = "GET" | "POST";
 
@@ -261,36 +262,17 @@ export class BybitExchange implements ExchangeClient {
     context: string,
     payload?: Record<string, unknown>,
   ): Error {
-    const payloadSuffix = payload
-      ? ` | payload=${JSON.stringify(payload)}`
-      : "";
-
-    if (axios.isAxiosError(error)) {
-      const data = error.response?.data as
-        | { retCode?: number; retMsg?: string }
-        | undefined;
-      const code =
-        typeof data?.retCode === "number" ? ` code=${data.retCode}` : "";
-      const status =
-        typeof error.response?.status === "number"
-          ? ` status=${error.response.status}`
-          : "";
-      const message = data?.retMsg || error.message || "Unknown Bybit error";
-      const environmentHint =
-        error.response?.status === 401
-          ? this.simulated
-            ? " | hint=Bybit demo keys must use api-demo.bybit.com. Testnet keys must use api-testnet.bybit.com."
-            : " | hint=Bybit production keys must use api.bybit.com."
-          : "";
-      return new Error(
-        `[Bybit] ${context} failed${status}${code}: ${message}${payloadSuffix} | baseUrl=${this.baseUrl}${environmentHint}`,
-      );
-    }
+    const environmentHint =
+      axios.isAxiosError(error) && error.response?.status === 401
+        ? this.simulated
+          ? " | hint=Bybit demo keys must use api-demo.bybit.com. Testnet keys must use api-testnet.bybit.com."
+          : " | hint=Bybit production keys must use api.bybit.com."
+        : "";
 
     return new Error(
-      `[Bybit] ${context} failed: ${
-        error instanceof Error ? error.message : String(error)
-      }${payloadSuffix}`,
+      `${buildHttpErrorMessage(`[Bybit] ${context} failed`, error, {
+        payload,
+      })} | baseUrl=${this.baseUrl}${environmentHint}`,
     );
   }
 
