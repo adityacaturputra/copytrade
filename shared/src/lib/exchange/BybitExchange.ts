@@ -123,11 +123,16 @@ type BybitCreateOrderResult = {
   orderLinkId?: string;
 };
 
+type BybitAccountInfoResult = {
+  unifiedMarginStatus?: number | string;
+};
+
 const BYBIT_LINEAR_CATEGORY = "linear";
 const BYBIT_SETTLE_COIN = "USDT";
 const BYBIT_ACCOUNT_TYPE = "UNIFIED";
 const BYBIT_RECV_WINDOW = "10000";
 const SPECS_CACHE_TTL = 30 * 60 * 1000;
+const ACCOUNT_INFO_CACHE_TTL = 5 * 60 * 1000;
 const BYBIT_MARGIN_MODE = {
   isolated: {
     account: "ISOLATED_MARGIN",
@@ -162,6 +167,7 @@ export class BybitExchange implements ExchangeClient {
     string,
     { specs: InstrumentSpecs; ts: number }
   >();
+  private accountInfoCache?: { unifiedMarginStatus: number; ts: number };
 
   constructor(apiKey: string, secretKey: string, simulated: boolean = false) {
     this.apiKey = apiKey.trim();
@@ -357,6 +363,33 @@ export class BybitExchange implements ExchangeClient {
     return rows;
   }
 
+  private async getUnifiedMarginStatus(): Promise<number> {
+    const cached = this.accountInfoCache;
+    if (cached && Date.now() - cached.ts < ACCOUNT_INFO_CACHE_TTL) {
+      return cached.unifiedMarginStatus;
+    }
+
+    const result = await this.signedRequest<BybitAccountInfoResult>(
+      "GET",
+      "/v5/account/info",
+    );
+    const unifiedMarginStatus = this.parseNumber(
+      result.unifiedMarginStatus,
+      0,
+    );
+
+    this.accountInfoCache = {
+      unifiedMarginStatus,
+      ts: Date.now(),
+    };
+
+    return unifiedMarginStatus;
+  }
+
+  private async isUnifiedLinearAccount(): Promise<boolean> {
+    return (await this.getUnifiedMarginStatus()) >= 3;
+  }
+
   private async fetchRealtimeOrders(
     orderFilter: "Order" | "StopOrder",
     symbol?: string,
@@ -528,7 +561,11 @@ export class BybitExchange implements ExchangeClient {
     leverage: number,
     marginType: "isolated" | "cross",
   ): Promise<void> {
+    const isUnifiedLinearAccount = await this.isUnifiedLinearAccount();
     await this.ensureAccountMarginMode(marginType);
+    if (isUnifiedLinearAccount) {
+      return;
+    }
     await this.ensureSymbolMarginMode(symbol, leverage, marginType);
   }
 

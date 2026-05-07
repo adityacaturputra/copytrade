@@ -25,7 +25,7 @@ function createExchange(specs?: MockSpecs) {
   return exchange as BybitExchange;
 }
 
-test("Bybit setLeverage ensures isolated margin mode before setting leverage", async () => {
+test("Bybit setLeverage keeps symbol margin switching for classic accounts", async () => {
   const exchange = createExchange() as any;
   const calls: Array<{
     method: string;
@@ -36,9 +36,12 @@ test("Bybit setLeverage ensures isolated margin mode before setting leverage", a
   exchange.signedRequest = async (
     method: string,
     path: string,
-    payload: Record<string, unknown>,
+    payload: Record<string, unknown> = {},
   ) => {
     calls.push({ method, path, payload });
+    if (path === "/v5/account/info") {
+      return { unifiedMarginStatus: 1 };
+    }
     return {};
   };
 
@@ -48,13 +51,50 @@ test("Bybit setLeverage ensures isolated margin mode before setting leverage", a
   assert.deepEqual(
     calls.map((item) => item.path),
     [
+      "/v5/account/info",
       "/v5/account/set-margin-mode",
       "/v5/position/switch-isolated",
       "/v5/position/set-leverage",
     ],
   );
-  assert.equal(calls[0]?.payload.setMarginMode, "ISOLATED_MARGIN");
-  assert.equal(calls[1]?.payload.tradeMode, 1);
+  assert.equal(calls[1]?.payload.setMarginMode, "ISOLATED_MARGIN");
+  assert.equal(calls[2]?.payload.tradeMode, 1);
+  assert.equal(calls[3]?.payload.buyLeverage, "7");
+  assert.equal(calls[3]?.payload.sellLeverage, "7");
+});
+
+test("Bybit setLeverage skips symbol margin switching for unified linear accounts", async () => {
+  const exchange = createExchange() as any;
+  const calls: Array<{
+    method: string;
+    path: string;
+    payload: Record<string, unknown>;
+  }> = [];
+
+  exchange.signedRequest = async (
+    method: string,
+    path: string,
+    payload: Record<string, unknown> = {},
+  ) => {
+    calls.push({ method, path, payload });
+    if (path === "/v5/account/info") {
+      return { unifiedMarginStatus: 5 };
+    }
+    return {};
+  };
+
+  const result = await exchange.setLeverage("BTCUSDT", 7);
+
+  assert.equal(result, 7);
+  assert.deepEqual(
+    calls.map((item) => item.path),
+    [
+      "/v5/account/info",
+      "/v5/account/set-margin-mode",
+      "/v5/position/set-leverage",
+    ],
+  );
+  assert.equal(calls[1]?.payload.setMarginMode, "ISOLATED_MARGIN");
   assert.equal(calls[2]?.payload.buyLeverage, "7");
   assert.equal(calls[2]?.payload.sellLeverage, "7");
 });
@@ -1163,9 +1203,12 @@ test("Bybit setLeverage tolerates not-modified responses and cross margin mode",
   exchange.signedRequest = async (
     _method: string,
     path: string,
-    payload: Record<string, unknown>,
+    payload: Record<string, unknown> = {},
   ) => {
     calls.push({ path, payload });
+    if (path === "/v5/account/info") {
+      return { unifiedMarginStatus: 1 };
+    }
     if (path === "/v5/account/set-margin-mode") {
       throw new Error("margin mode is not modified");
     }
@@ -1184,6 +1227,7 @@ test("Bybit setLeverage tolerates not-modified responses and cross margin mode",
   assert.deepEqual(
     calls.map((call) => [call.path, call.payload]),
     [
+      ["/v5/account/info", {}],
       ["/v5/account/set-margin-mode", { setMarginMode: "REGULAR_MARGIN" }],
       [
         "/v5/position/switch-isolated",
