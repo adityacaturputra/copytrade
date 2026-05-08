@@ -156,6 +156,30 @@ body {
   background: rgba(59, 130, 246, 0.05);
 }
 
+.data-table-compact {
+  table-layout: fixed;
+  font-size: 0.68rem;
+}
+
+.data-table-compact th,
+.data-table-compact td {
+  padding: 0.375rem 0.35rem;
+  white-space: normal;
+  vertical-align: top;
+  word-break: break-word;
+}
+
+@media (min-width: 640px) {
+  .data-table-compact {
+    font-size: 0.72rem;
+  }
+
+  .data-table-compact th,
+  .data-table-compact td {
+    padding: 0.5rem 0.45rem;
+  }
+}
+
 /* Pulse animation for active status */
 @keyframes pulse-dot {
   0%,

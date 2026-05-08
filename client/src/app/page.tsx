@@ -30,12 +30,15 @@ interface Position {
   id?: number;
   accountId?: string;
   channelId?: string;
+  sourceName?: string;
   symbol: string;
   side: string;
   entryPrice: number;
   currentPrice?: number;
   quantity: number;
   leverage: number;
+  marginType?: "isolated" | "cross";
+  margin?: number | null;
   takeProfitTargets?: any[];
   stopLossPrice?: number;
   pnl: number;
@@ -100,6 +103,73 @@ function getLogLevelBadgeClass(level: string) {
   if (level === "processing" || level === "started") return "badge-info";
   if (level === "debug") return "badge-neutral";
   return "badge-neutral";
+}
+
+function formatUsd(value?: number | null, { estimated = false } = {}) {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return "-";
+  }
+  return `${estimated ? "~" : ""}$${value.toFixed(value >= 100 ? 2 : 3)}`;
+}
+
+function estimatePositionMargin(position: Position): number | null {
+  if (
+    !Number.isFinite(position.entryPrice) ||
+    !Number.isFinite(position.quantity) ||
+    !Number.isFinite(position.leverage) ||
+    position.entryPrice <= 0 ||
+    position.quantity <= 0 ||
+    position.leverage <= 0
+  ) {
+    return null;
+  }
+
+  return (position.entryPrice * position.quantity) / position.leverage;
+}
+
+function formatCompactDateTime(value?: string | Date | null) {
+  if (!value) return "-";
+  return new Date(value).toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function getCompactDateTimeParts(value?: string | Date | null) {
+  if (!value) return { date: "-", time: "" };
+  const date = new Date(value);
+  return {
+    date: date.toLocaleDateString([], {
+      month: "short",
+      day: "numeric",
+    }),
+    time: date.toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+    }),
+  };
+}
+
+function formatMarginMode(mode?: "isolated" | "cross" | null) {
+  return mode === "cross" ? "Cross" : "Iso";
+}
+
+function getPositionSourceLabel(
+  position: Pick<Position, "sourceName" | "channelId">,
+  channelNames: Record<string, string>,
+) {
+  if (position.sourceName?.trim()) return position.sourceName.trim();
+  if (position.channelId && channelNames[position.channelId]) {
+    return channelNames[position.channelId];
+  }
+  if (position.channelId) {
+    return position.channelId.length > 12
+      ? `...${position.channelId.slice(-10)}`
+      : position.channelId;
+  }
+  return "-";
 }
 
 interface DraftTrade {
@@ -1107,15 +1177,17 @@ export default function Dashboard() {
                 />
               )}
             </h2>
-            <div className="overflow-x-auto">
-              <table className="data-table">
+            <div className="overflow-visible">
+              <table className="data-table data-table-compact">
                 <thead>
                   <tr>
                     <th>Symbol</th>
                     <th>Side</th>
+                    <th>Source</th>
                     <th>Entry</th>
                     <th>Current</th>
-                    <th>Leverage</th>
+                    <th>Mode</th>
+                    <th>Margin</th>
                     <th>TP</th>
                     <th>SL</th>
                     <th>PnL</th>
@@ -1133,10 +1205,20 @@ export default function Dashboard() {
                           {pos.side}
                         </span>
                       </td>
-                      <td>{pos.entryPrice?.toFixed(2)}</td>
-                      <td>{pos.currentPrice?.toFixed(2) || "-"}</td>
-                      <td>{pos.leverage}x</td>
-                      <td className="text-success">
+                      <td className="text-slate-300">
+                        {getPositionSourceLabel(pos, data?.channelNames || {})}
+                      </td>
+                      <td className="whitespace-nowrap">{pos.entryPrice?.toFixed(2)}</td>
+                      <td className="whitespace-nowrap">{pos.currentPrice?.toFixed(2) || "-"}</td>
+                      <td>
+                        <span className="badge badge-neutral">
+                          {formatMarginMode(pos.marginType)}
+                        </span>
+                      </td>
+                      <td className="font-mono whitespace-nowrap">
+                        {formatUsd(pos.margin)}
+                      </td>
+                      <td className="text-success min-w-0">
                         {pos.takeProfitTargets
                           ?.filter((t: any) => t.status === "pending")
                           .map(
@@ -1145,7 +1227,7 @@ export default function Dashboard() {
                           )
                           .join(", ") || "-"}
                       </td>
-                      <td className="text-danger">
+                      <td className="text-danger whitespace-nowrap">
                         {pos.stopLossPrice?.toFixed(2) || "-"}
                       </td>
                       <td
@@ -1154,8 +1236,8 @@ export default function Dashboard() {
                         {(pos.pnl || 0) >= 0 ? "+" : ""}
                         {pos.pnl?.toFixed(2) || "0.00"}
                       </td>
-                      <td className="text-slate-400 text-xs">
-                        {new Date(pos.openedAt).toLocaleString()}
+                      <td className="text-slate-400 text-[10px] whitespace-nowrap">
+                        {formatCompactDateTime(pos.openedAt)}
                       </td>
                     </tr>
                   ))}
@@ -1175,15 +1257,117 @@ export default function Dashboard() {
                 ({pendingPositions.length} waiting to fill)
               </span>
             </h2>
-            <div className="overflow-x-auto">
-              <table className="data-table">
+            <div className="sm:hidden flex flex-col gap-3">
+              {pendingPositions.map((pos) => {
+                const estimatedMargin =
+                  pos.margin ?? estimatePositionMargin(pos);
+                const sourceLabel = getPositionSourceLabel(
+                  pos,
+                  data?.channelNames || {},
+                );
+
+                return (
+                  <div
+                    key={`pending-mobile-${pos._id || pos.id}`}
+                    className="rounded-xl border border-amber-700/20 bg-slate-900/30 p-3"
+                  >
+                    <div className="flex items-start justify-between gap-3 mb-3">
+                      <div>
+                        <div className="font-semibold text-slate-100">
+                          {pos.symbol}
+                        </div>
+                        <div className="text-xs text-slate-400 mt-0.5">
+                          {sourceLabel}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`badge ${pos.side === "LONG" ? "badge-success" : "badge-danger"}`}
+                        >
+                          {pos.side}
+                        </span>
+                        <span className="inline-flex items-center gap-1 badge badge-warning">
+                          <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" />
+                          Pending
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-xs mb-3">
+                      <div className="rounded-lg bg-slate-950/40 p-2">
+                        <div className="text-slate-500 uppercase tracking-wide text-[10px]">
+                          Limit
+                        </div>
+                        <div className="font-mono text-slate-200 mt-1">
+                          {pos.entryPrice?.toFixed(2) || "-"}
+                        </div>
+                      </div>
+                      <div className="rounded-lg bg-slate-950/40 p-2">
+                        <div className="text-slate-500 uppercase tracking-wide text-[10px]">
+                          Mode
+                        </div>
+                        <div className="text-slate-200 mt-1">
+                          {formatMarginMode(pos.marginType)}
+                        </div>
+                      </div>
+                      <div className="rounded-lg bg-slate-950/40 p-2">
+                        <div className="text-slate-500 uppercase tracking-wide text-[10px]">
+                          Margin
+                        </div>
+                        <div className="font-mono text-slate-200 mt-1">
+                          {formatUsd(estimatedMargin, {
+                            estimated: pos.margin == null,
+                          })}
+                        </div>
+                      </div>
+                      <div className="rounded-lg bg-slate-950/40 p-2">
+                        <div className="text-slate-500 uppercase tracking-wide text-[10px]">
+                          Created
+                        </div>
+                        <div className="text-slate-200 mt-1">
+                          {formatCompactDateTime(pos.openedAt)}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2 text-xs">
+                      <div>
+                        <span className="text-slate-500 uppercase tracking-wide text-[10px] block mb-1">
+                          Take Profit
+                        </span>
+                        <div className="text-success break-words">
+                          {pos.takeProfitTargets
+                            ?.filter((t: any) => t.status === "pending")
+                            .map(
+                              (t: any, i: number) =>
+                                `TP${i + 1}: ${t.price.toFixed(2)}`,
+                            )
+                            .join(" • ") || "-"}
+                        </div>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 uppercase tracking-wide text-[10px] block mb-1">
+                          Stop Loss
+                        </span>
+                        <div className="text-danger">
+                          {pos.stopLossPrice?.toFixed(2) || "-"}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="hidden sm:block overflow-visible">
+              <table className="data-table data-table-compact">
                 <thead>
                   <tr>
                     <th>Symbol</th>
                     <th>Side</th>
+                    <th>Source</th>
                     <th>Limit Price</th>
-                    <th>Qty</th>
-                    <th>Leverage</th>
+                    <th>Mode</th>
+                    <th>Margin</th>
                     <th>TP</th>
                     <th>SL</th>
                     <th>Status</th>
@@ -1191,51 +1375,69 @@ export default function Dashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {pendingPositions.map((pos) => (
-                    <tr key={pos._id || pos.id} className="opacity-80">
-                      <td className="font-medium">{pos.symbol}</td>
-                      <td>
-                        <span
-                          className={`badge ${pos.side === "LONG" ? "badge-success" : "badge-danger"}`}
-                        >
-                          {pos.side}
-                        </span>
-                      </td>
-                      <td className="font-mono">
-                        {pos.entryPrice?.toFixed(2)}
-                      </td>
-                      <td>{pos.quantity}</td>
-                      <td>{pos.leverage}x</td>
-                      <td className="text-success">
-                        {pos.takeProfitTargets
-                          ?.filter((t: any) => t.status === "pending")
-                          .map(
-                            (t: any, i: number) =>
-                              `TP${i + 1}: ${t.price.toFixed(2)}`,
-                          )
-                          .join(", ") || "-"}
-                      </td>
-                      <td className="text-danger">
-                        {pos.stopLossPrice?.toFixed(2) || "-"}
-                      </td>
-                      <td>
-                        <span className="inline-flex items-center gap-1.5 badge badge-warning">
-                          <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" />
-                          Pending
-                        </span>
-                      </td>
-                      <td className="text-slate-400 text-xs">
-                        {new Date(pos.openedAt).toLocaleString()}
-                      </td>
-                    </tr>
-                  ))}
+                  {pendingPositions.map((pos) => {
+                    const estimatedMargin =
+                      pos.margin ?? estimatePositionMargin(pos);
+
+                    return (
+                      <tr key={pos._id || pos.id} className="opacity-80">
+                        <td className="font-medium">{pos.symbol}</td>
+                        <td>
+                          <span
+                            className={`badge ${pos.side === "LONG" ? "badge-success" : "badge-danger"}`}
+                          >
+                            {pos.side}
+                          </span>
+                        </td>
+                        <td className="text-slate-300">
+                          {getPositionSourceLabel(pos, data?.channelNames || {})}
+                        </td>
+                        <td className="font-mono whitespace-nowrap">
+                          {pos.entryPrice?.toFixed(2)}
+                        </td>
+                        <td>
+                          <span className="badge badge-neutral">
+                            {formatMarginMode(pos.marginType)}
+                          </span>
+                        </td>
+                        <td className="font-mono whitespace-nowrap">
+                          {formatUsd(estimatedMargin, {
+                            estimated: pos.margin == null,
+                          })}
+                        </td>
+                        <td className="text-success min-w-0">
+                          {pos.takeProfitTargets
+                            ?.filter((t: any) => t.status === "pending")
+                            .map(
+                              (t: any, i: number) =>
+                                `TP${i + 1}: ${t.price.toFixed(2)}`,
+                            )
+                            .join(", ") || "-"}
+                        </td>
+                        <td className="text-danger whitespace-nowrap">
+                          {pos.stopLossPrice?.toFixed(2) || "-"}
+                        </td>
+                        <td>
+                          <span className="inline-flex items-center gap-1.5 badge badge-warning">
+                            <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" />
+                            Pending
+                          </span>
+                        </td>
+                        <td className="text-slate-400 text-[10px] whitespace-nowrap">
+                          {formatCompactDateTime(pos.openedAt)}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
             <p className="text-xs text-slate-500 mt-3">
               ⏳ These limit orders are placed on the exchange and waiting for
-              the price to reach the entry level. SL and TP are already set on
-              the exchange.
+              the price to reach the entry level. Margin is shown from the
+              planned trade sizing when available, otherwise estimated from
+              entry value divided by leverage. SL and TP are already set on the
+              exchange.
             </p>
           </div>
         )}
@@ -1420,6 +1622,7 @@ export default function Dashboard() {
               accountIdFilter={selectedAccountId}
               refreshKey={refreshKey}
               livePositions={data?.openPositions || []}
+              channelNames={data?.channelNames || {}}
             />
           )}
           {activeTab === "signals" && (
@@ -1588,7 +1791,7 @@ function HoverTapTooltip({
   return (
     <span
       ref={wrapperRef}
-      className={`relative inline-flex ${isOpen ? "z-[340]" : "z-0"} ${wrapperClassName}`}
+      className={`relative inline-flex ${isOpen ? "z-30" : "z-0"} ${wrapperClassName}`}
       onMouseEnter={() => setIsOpen(true)}
       onMouseLeave={() => setIsOpen(false)}
     >
@@ -1601,7 +1804,7 @@ function HoverTapTooltip({
         {trigger}
       </button>
       <span
-        className={`absolute bottom-full mb-2 z-[320] rounded-xl border border-slate-600/90 bg-slate-800 px-4 py-3 text-xs text-slate-100 shadow-2xl shadow-black/50 whitespace-normal leading-relaxed ${isOpen ? "block" : "hidden"} ${tooltipClassName}`}
+        className={`absolute bottom-full mb-2 z-20 rounded-xl border border-slate-600/90 bg-slate-800 px-4 py-3 text-xs text-slate-100 shadow-2xl shadow-black/50 whitespace-normal leading-relaxed ${isOpen ? "block" : "hidden"} ${tooltipClassName}`}
       >
         {content}
       </span>
@@ -2920,11 +3123,13 @@ function PositionsTab({
   accountIdFilter,
   refreshKey,
   livePositions = [],
+  channelNames,
 }: {
   channelIdFilter: string;
   accountIdFilter: string;
   refreshKey: number;
   livePositions?: Position[];
+  channelNames: Record<string, string>;
 }) {
   const [positions, setPositions] = useState<Position[]>([]);
   const [page, setPage] = useState(1);
@@ -3133,6 +3338,9 @@ function PositionsTab({
             {positions.map((pos) => {
               let displayPnl = pos.pnl || 0;
               let displayCurrentPrice = pos.currentPrice || pos.entryPrice;
+              let displayLeverage = pos.leverage;
+              let displayMarginType = pos.marginType;
+              let displayMargin = pos.margin;
 
               if (pos.status === "open" && livePositions.length > 0) {
                 const livePos = livePositions.find(
@@ -3142,14 +3350,21 @@ function PositionsTab({
                   displayPnl = livePos.pnl || 0;
                   displayCurrentPrice =
                     livePos.currentPrice || livePos.entryPrice;
+                  displayLeverage = livePos.leverage || pos.leverage;
+                  displayMarginType = livePos.marginType || pos.marginType;
+                  displayMargin = livePos.margin ?? pos.margin;
                 }
               }
+
+              const estimatedMargin =
+                displayMargin ?? estimatePositionMargin(pos);
+              const sourceLabel = getPositionSourceLabel(pos, channelNames);
 
               const pnlPercent =
                 displayCurrentPrice && pos.entryPrice && pos.entryPrice > 0
                   ? ((displayCurrentPrice - pos.entryPrice) / pos.entryPrice) *
                     100 *
-                    pos.leverage *
+                    displayLeverage *
                     (pos.side === "LONG" ? 1 : -1)
                   : 0;
 
@@ -3193,10 +3408,10 @@ function PositionsTab({
                     </div>
                     <div className="bg-slate-900/50 rounded p-1.5 flex flex-col">
                       <span className="text-[9px] text-slate-500 uppercase">
-                        Qty
+                        Mode
                       </span>
                       <span className="text-xs font-mono text-slate-300">
-                        {pos.quantity}
+                        {formatMarginMode(displayMarginType)}
                       </span>
                     </div>
                     <div className="bg-slate-900/50 rounded p-1.5 flex flex-col">
@@ -3220,30 +3435,48 @@ function PositionsTab({
                         </span>
                       </div>
                     </div>
+                    <div className="bg-slate-900/50 rounded p-1.5 flex flex-col">
+                      <span className="text-[9px] text-slate-500 uppercase">
+                        Margin
+                      </span>
+                      <span className="text-xs font-mono text-slate-300">
+                        {formatUsd(estimatedMargin, {
+                          estimated: displayMargin == null,
+                        })}
+                      </span>
+                    </div>
+                    <div className="bg-slate-900/50 rounded p-1.5 flex flex-col">
+                      <span className="text-[9px] text-slate-500 uppercase">
+                        Source
+                      </span>
+                      <span className="text-xs text-slate-300 truncate">
+                        {sourceLabel}
+                      </span>
+                    </div>
                   </div>
 
                   <div className="flex flex-col gap-1 mb-3 text-[10px] text-slate-500">
                     <div className="flex justify-between">
                       <span>Opened</span>
-                      <span>{new Date(pos.openedAt).toLocaleString()}</span>
+                      <span>{formatCompactDateTime(pos.openedAt)}</span>
                     </div>
                     {pos.closedAt && (
                       <div className="flex justify-between">
                         <span>Closed</span>
-                        <span>{new Date(pos.closedAt).toLocaleString()}</span>
+                        <span>{formatCompactDateTime(pos.closedAt)}</span>
                       </div>
                     )}
                     {pos.closeReason && (
-                      <div className="bg-slate-900/50 p-1.5 rounded mt-1 border border-slate-700/50 relative">
+                      <div className="bg-slate-900/50 p-1.5 rounded mt-1 border border-slate-700/50 relative min-w-0 overflow-visible">
                         <span className="text-[9px] text-slate-500 uppercase block mb-0.5">
                           Close Reason
                         </span>
                         <HoverTapTooltip
-                          wrapperClassName="z-20"
-                          triggerClassName="block max-w-full text-left text-slate-300"
-                          tooltipClassName="left-0 right-auto min-w-[220px] max-w-[min(22rem,calc(100vw-2rem))]"
+                          wrapperClassName="block min-w-0 max-w-full"
+                          triggerClassName="block w-full min-w-0 text-left text-slate-300"
+                          tooltipClassName="left-0 right-auto top-full bottom-auto mt-2 mb-0 min-w-[220px] max-w-[min(22rem,calc(100vw-2rem))]"
                           trigger={
-                            <span className="block truncate text-slate-400">
+                            <span className="block w-full overflow-hidden text-ellipsis whitespace-nowrap text-slate-400">
                               {pos.closeReason}
                             </span>
                           }
@@ -3284,16 +3517,17 @@ function PositionsTab({
           </div>
 
           {/* Desktop Table View */}
-          <div className="hidden sm:block overflow-x-auto">
-            <table className="data-table">
+          <div className="hidden sm:block overflow-visible">
+            <table className="data-table data-table-compact">
               <thead>
                 <tr>
                   <th>Symbol</th>
                   <th>Side</th>
+                  <th>Source</th>
                   <th>Entry</th>
                   {positionFilter === "open" && <th>Current</th>}
-                  <th>Qty</th>
-                  <th>Leverage</th>
+                  <th>Mode</th>
+                  <th>Margin</th>
                   <th>PnL</th>
                   {positionFilter === "closed" && <th>Close Reason</th>}
                   {positionFilter === "pending" && <th>Status</th>}
@@ -3306,6 +3540,9 @@ function PositionsTab({
                 {positions.map((pos) => {
                   let displayPnl = pos.pnl || 0;
                   let displayCurrentPrice = pos.currentPrice || pos.entryPrice;
+                  let displayLeverage = pos.leverage;
+                  let displayMarginType = pos.marginType;
+                  let displayMargin = pos.margin;
 
                   if (pos.status === "open" && livePositions.length > 0) {
                     const livePos = livePositions.find(
@@ -3315,15 +3552,24 @@ function PositionsTab({
                       displayPnl = livePos.pnl || 0;
                       displayCurrentPrice =
                         livePos.currentPrice || livePos.entryPrice;
+                      displayLeverage = livePos.leverage || pos.leverage;
+                      displayMarginType = livePos.marginType || pos.marginType;
+                      displayMargin = livePos.margin ?? pos.margin;
                     }
                   }
+
+                  const estimatedMargin =
+                    displayMargin ?? estimatePositionMargin(pos);
+                  const sourceLabel = getPositionSourceLabel(pos, channelNames);
+                  const openedAtParts = getCompactDateTimeParts(pos.openedAt);
+                  const closedAtParts = getCompactDateTimeParts(pos.closedAt);
 
                   const pnlPercent =
                     displayCurrentPrice && pos.entryPrice && pos.entryPrice > 0
                       ? ((displayCurrentPrice - pos.entryPrice) /
                           pos.entryPrice) *
                         100 *
-                        pos.leverage *
+                        displayLeverage *
                         (pos.side === "LONG" ? 1 : -1)
                       : 0;
 
@@ -3344,35 +3590,54 @@ function PositionsTab({
                             {pos.side}
                           </span>
                         </td>
-                        <td>{pos.entryPrice?.toFixed(4)}</td>
+                        <td className="text-slate-300">
+                          <HoverTapTooltip
+                            wrapperClassName="max-w-[120px]"
+                            triggerClassName="block truncate"
+                            tooltipClassName="left-0 min-w-[160px] max-w-[280px]"
+                            trigger={<span className="block truncate">{sourceLabel}</span>}
+                            content={sourceLabel}
+                          />
+                        </td>
+                        <td className="whitespace-nowrap">{pos.entryPrice?.toFixed(4)}</td>
                         {positionFilter === "open" && (
-                          <td>{displayCurrentPrice?.toFixed(4) || "-"}</td>
+                          <td className="whitespace-nowrap">{displayCurrentPrice?.toFixed(4) || "-"}</td>
                         )}
-                        <td>{pos.quantity}</td>
-                        <td>{pos.leverage}x</td>
+                        <td>
+                          <span className="badge badge-neutral">
+                            {formatMarginMode(displayMarginType)}
+                          </span>
+                        </td>
+                        <td className="font-mono whitespace-nowrap">
+                          {formatUsd(estimatedMargin, {
+                            estimated:
+                              positionFilter === "pending" &&
+                              displayMargin == null,
+                          })}
+                        </td>
                         <td
-                          className={`font-mono flex items-center gap-1.5 ${displayPnl >= 0 ? "text-success" : "text-danger"}`}
+                          className={`font-mono whitespace-nowrap ${displayPnl >= 0 ? "text-success" : "text-danger"}`}
                         >
-                          <span>
+                          <span className="inline-flex items-center gap-1">
                             {displayPnl >= 0 ? "+" : ""}
                             {displayPnl.toFixed(2)}
                           </span>
                           {positionFilter === "open" && (
-                            <span className="text-[10px] opacity-80">
+                            <span className="text-[10px] opacity-80 whitespace-nowrap">
                               ({displayPnl >= 0 ? "+" : ""}
                               {pnlPercent.toFixed(2)}%)
                             </span>
                           )}
                         </td>
                         {positionFilter === "closed" && (
-                          <td className="text-xs text-slate-400 whitespace-normal">
+                          <td className="text-xs text-slate-400 min-w-0 max-w-[12rem]">
                             {pos.closeReason ? (
                               <HoverTapTooltip
-                                wrapperClassName="z-20 max-w-[340px]"
+                                wrapperClassName="block max-w-full w-full"
                                 triggerClassName="block w-full text-left"
                                 tooltipClassName="left-0 min-w-[220px] max-w-[360px]"
                                 trigger={
-                                  <span className="block whitespace-normal break-words text-slate-400">
+                                  <span className="block w-full truncate text-slate-400">
                                     {pos.closeReason}
                                   </span>
                                 }
@@ -3385,20 +3650,26 @@ function PositionsTab({
                         )}
                         {positionFilter === "pending" && (
                           <td>
-                            <span className="inline-flex items-center gap-1.5 badge badge-warning">
+                            <span className="inline-flex items-center gap-1 badge badge-warning">
                               <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" />
                               Pending
                             </span>
                           </td>
                         )}
-                        <td className="text-xs text-slate-400">
-                          {new Date(pos.openedAt).toLocaleString()}
+                        <td className="text-[10px] text-slate-400 leading-tight whitespace-nowrap">
+                          <div>{openedAtParts.date}</div>
+                          <div className="text-slate-500">{openedAtParts.time}</div>
                         </td>
                         {positionFilter === "closed" && (
-                          <td className="text-xs text-slate-400">
-                            {pos.closedAt
-                              ? new Date(pos.closedAt).toLocaleString()
-                              : "-"}
+                          <td className="text-[10px] text-slate-400 leading-tight whitespace-nowrap">
+                            {pos.closedAt ? (
+                              <>
+                                <div>{closedAtParts.date}</div>
+                                <div className="text-slate-500">{closedAtParts.time}</div>
+                              </>
+                            ) : (
+                              "-"
+                            )}
                           </td>
                         )}
                         <td className="text-right">

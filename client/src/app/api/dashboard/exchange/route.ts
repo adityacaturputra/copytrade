@@ -107,9 +107,14 @@ export async function GET() {
         const exchangeSymbols = new Set<string>();
         let exchangePositions: Array<{
           symbol: string;
+          side: string;
           markPrice: number;
           unrealizedPnl: number;
           entryPrice: number;
+          leverage: number;
+          quantity: number;
+          marginType: string;
+          margin: number;
         }> = [];
 
         if (exchangeEntry) {
@@ -119,9 +124,14 @@ export async function GET() {
               exchangeSymbols.add(p.symbol);
               return {
                 symbol: p.symbol,
+                side: p.side,
                 markPrice: p.markPrice,
                 unrealizedPnl: p.unrealizedPnl,
                 entryPrice: p.entryPrice,
+                leverage: p.leverage,
+                quantity: p.quantity,
+                marginType: p.marginType,
+                margin: p.margin,
               };
             });
           } catch (err) {
@@ -164,13 +174,17 @@ export async function GET() {
           } else if (exchangeSymbols.size > 0 || exchangeEntry) {
             // Position is still on exchange — enrich with real-time data
             const exPos = exchangePositions.find(
-              (ep) => ep.symbol === pos.symbol,
+              (ep) => ep.symbol === pos.symbol && ep.side === pos.side,
             );
             enrichedPositions.push({
               ...pos,
               currentPrice: exPos?.markPrice ?? pos.currentPrice ?? null,
               pnl: exPos?.unrealizedPnl ?? pos.pnl ?? 0,
               entryPrice: exPos?.entryPrice ?? pos.entryPrice,
+              leverage: exPos?.leverage ?? pos.leverage,
+              quantity: exPos?.quantity ?? pos.quantity,
+              marginType: exPos?.marginType ?? pos.marginType ?? "isolated",
+              margin: exPos?.margin ?? pos.margin ?? null,
             });
           } else {
             // No exchange connection — keep position as-is

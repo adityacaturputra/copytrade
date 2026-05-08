@@ -905,6 +905,7 @@ export async function executeTrade(
   let orderQuantity = quantity;
   let orderLeverage = leverage;
   let riskAccountBalance: number | undefined;
+  let plannedMarginUsdt: number | undefined;
 
   try {
     const account = await exchange.getAccountInfo();
@@ -949,6 +950,7 @@ export async function executeTrade(
       const originalOrderLeverage = orderLeverage;
       orderQuantity = riskCalc.quantity;
       orderLeverage = riskCalc.leverage;
+      plannedMarginUsdt = riskCalc.marginUsdt;
       await logExecutorInfo(
         `${lp}🛡️ Risk management applied: qty=${originalOrderQuantity.toFixed(6)} → ${orderQuantity.toFixed(6)}, leverage=${originalOrderLeverage} → ${orderLeverage}`,
         {
@@ -1040,6 +1042,11 @@ export async function executeTrade(
   );
 
   const filledQty = orderResult.quantity || orderQuantity;
+  const effectiveEntryPrice = entryPrice || orderResult.price || 0;
+  const estimatedMarginUsdt =
+    orderLeverage > 0 && effectiveEntryPrice > 0
+      ? (filledQty * effectiveEntryPrice) / orderLeverage
+      : undefined;
 
   // ─── Place TP/SL via plan orders ────────────────────────────────
   // Only for MARKET orders. For LIMIT orders, deferred to tp-sl-monitor.
@@ -1145,9 +1152,11 @@ export async function executeTrade(
     processId: processId || undefined,
     symbol,
     side,
-    entryPrice: entryPrice || orderResult.price || 0,
-    quantity: orderResult.quantity || orderQuantity,
+    entryPrice: effectiveEntryPrice,
+    quantity: filledQty,
     leverage: orderLeverage,
+    marginType: "isolated",
+    margin: plannedMarginUsdt ?? estimatedMarginUsdt,
     takeProfitTargets: tpTargetObjects,
     stopLossPrice: stopLoss || undefined,
     orderId: orderResult.orderId,

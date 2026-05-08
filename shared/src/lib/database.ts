@@ -115,6 +115,8 @@ export interface IPosition extends Document {
   currentPrice?: number;
   quantity: number;
   leverage: number;
+  marginType?: "isolated" | "cross";
+  margin?: number;
   takeProfitTargets: ITPTarget[];
   stopLossPrice?: number;
   orderId?: string;
@@ -388,6 +390,12 @@ const PositionSchema = new Schema<IPosition>(
     currentPrice: { type: Number, default: null },
     quantity: { type: Number, default: 0 },
     leverage: { type: Number, default: 10 },
+    marginType: {
+      type: String,
+      enum: ["isolated", "cross"],
+      default: "isolated",
+    },
+    margin: { type: Number, default: null },
     takeProfitTargets: [
       {
         price: { type: Number, required: true },
