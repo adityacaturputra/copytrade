@@ -6,6 +6,7 @@ const orphanCleanupMocks = vi.hoisted(() => ({
   positionFind: vi.fn(),
   getClientForAccount: vi.fn(),
   toExchangeCredentials: vi.fn(),
+  createTradeLog: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@copytrade/shared/lib/database", () => ({
@@ -21,6 +22,10 @@ vi.mock("@copytrade/shared/lib/exchange/ExchangeFactory", () => ({
   ExchangeFactory: {
     getClientForAccount: orphanCleanupMocks.getClientForAccount,
   },
+}));
+
+vi.mock("@copytrade/shared/lib/trade-log-store", () => ({
+  createTradeLog: orphanCleanupMocks.createTradeLog,
 }));
 
 vi.mock("./agent/tooling/shared", () => ({
@@ -45,8 +50,12 @@ beforeEach(() => {
   orphanCleanupMocks.positionFind.mockReset();
   orphanCleanupMocks.getClientForAccount.mockReset();
   orphanCleanupMocks.toExchangeCredentials.mockReset();
+  orphanCleanupMocks.createTradeLog.mockReset();
 
-  orphanCleanupMocks.toExchangeCredentials.mockReturnValue({ provider: "bybit" });
+  orphanCleanupMocks.toExchangeCredentials.mockReturnValue({
+    provider: "bybit",
+  });
+  orphanCleanupMocks.createTradeLog.mockResolvedValue(undefined);
 });
 
 test("orphan cleanup monitor removes stale TP/SL based only on tracked and live positions", async () => {
@@ -95,7 +104,23 @@ test("orphan cleanup monitor removes stale TP/SL based only on tracked and live 
   assert.equal(result.accountsChecked, 1);
   assert.equal(result.algoOrdersChecked, 2);
   assert.equal(result.orphansCancelled, 1);
+  assert.deepEqual(result.cancelledOrderIds, ["algo-flock"]);
   assert.deepEqual(result.errors, []);
+
+  // Verify createTradeLog was called for candidate detection, cancellation, and summary
+  const logCalls = orphanCleanupMocks.createTradeLog.mock.calls.map(
+    (call: any[]) => call[0].action,
+  );
+  assert.ok(
+    logCalls.includes("orphan_cleanup_candidate"),
+    "should log candidates",
+  );
+  assert.ok(
+    logCalls.includes("orphan_cleanup_cancelled"),
+    "should log cancellations",
+  );
+  assert.ok(logCalls.includes("orphan_cleanup_summary"), "should log summary");
+
   assert.equal(exchange.cancelAlgoOrders.mock.calls.length, 1);
   assert.deepEqual(exchange.cancelAlgoOrders.mock.calls[0], ["FLOCKUSDT"]);
   assert.equal(exchange.getOpenOrders.mock.calls.length, 0);

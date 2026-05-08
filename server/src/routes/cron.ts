@@ -1,4 +1,9 @@
-import { Router, Request, Response, type Router as ExpressRouter } from "express";
+import {
+  Router,
+  Request,
+  Response,
+  type Router as ExpressRouter,
+} from "express";
 import { runSignalCheck } from "@copytrade/shared/lib/executor";
 import { runTpslMonitor } from "@copytrade/shared/lib/tp-sl-monitor";
 import { connectDB } from "@copytrade/shared/lib/database";
@@ -104,7 +109,10 @@ async function runSignalCheckWork() {
       result: result.errors.length > 0 ? "partial" : "success",
     });
 
-    finishCron(SIGNAL_CHECK_NAME, result.errors.length > 0 ? "error" : "success");
+    finishCron(
+      SIGNAL_CHECK_NAME,
+      result.errors.length > 0 ? "error" : "success",
+    );
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : "Unknown error";
     console.error("[Cron] Signal check error:", errMsg);
@@ -183,7 +191,10 @@ async function runPositionMonitorWork() {
       result: result.errors.length > 0 ? "partial" : "success",
     });
 
-    finishCron(POSITION_MONITOR_NAME, result.errors.length > 0 ? "error" : "success");
+    finishCron(
+      POSITION_MONITOR_NAME,
+      result.errors.length > 0 ? "error" : "success",
+    );
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : "Unknown error";
     console.error("[Cron] Position monitor error:", errMsg);
@@ -262,7 +273,10 @@ async function runTpSlMonitorWork() {
       result: result.errors.length > 0 ? "partial" : "success",
     });
 
-    finishCron(TP_SL_MONITOR_NAME, result.errors.length > 0 ? "error" : "success");
+    finishCron(
+      TP_SL_MONITOR_NAME,
+      result.errors.length > 0 ? "error" : "success",
+    );
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : "Unknown error";
     console.error("[Cron] TP/SL Monitor error:", errMsg);
@@ -310,7 +324,10 @@ async function handleOrphanCleanup(req: Request, res: Response) {
 
 async function runOrphanCleanupWork() {
   try {
-    console.log("[Cron] Orphan cleanup monitor started at", new Date().toISOString());
+    console.log(
+      "[Cron] Orphan cleanup monitor started at",
+      new Date().toISOString(),
+    );
 
     await connectDB();
     updateProgress(ORPHAN_CLEANUP_NAME, "Connected to database");
@@ -328,20 +345,27 @@ async function runOrphanCleanupWork() {
 
     updateProgress(
       ORPHAN_CLEANUP_NAME,
-      `Done — accounts: ${result.accountsChecked}, checked: ${result.algoOrdersChecked}, cancelled: ${result.orphansCancelled}`,
+      `Done — accounts: ${result.accountsChecked}, checked: ${result.algoOrdersChecked}, cancelled: ${result.orphansCancelled}${result.symbolsCleaned.length ? `, symbols: ${result.symbolsCleaned.join(", ")}` : ""}`,
       result.errors.length > 0 ? "warning" : "success",
+    );
+
+    console.log(
+      `[Cron] Orphan cleanup finished: accounts=${result.accountsChecked}, algoChecked=${result.algoOrdersChecked}, cancelled=${result.orphansCancelled}${result.symbolsCleaned.length ? `, symbols=${result.symbolsCleaned.join(", ")}` : ""}${result.cancelledOrderIds.length ? `, orderIds=[${result.cancelledOrderIds.join(", ")}]` : ""}${result.errors.length ? `, errors=${result.errors.length}` : ""}`,
     );
 
     await connectDB();
     await createTradeLog({
       type: "cron",
       action: "orphan_cleanup_end",
-      details: `Accounts: ${result.accountsChecked}, Algo Checked: ${result.algoOrdersChecked}, Cancelled: ${result.orphansCancelled}, Errors: ${result.errors.length}`,
+      details: `Accounts: ${result.accountsChecked}, Algo Checked: ${result.algoOrdersChecked}, Cancelled: ${result.orphansCancelled}, Symbols: ${result.symbolsCleaned.join(", ") || "-"}, Order IDs: [${result.cancelledOrderIds.join(", ") || "-"}], Errors: ${result.errors.length}`,
       level: "debug",
       result: result.errors.length > 0 ? "partial" : "success",
     });
 
-    finishCron(ORPHAN_CLEANUP_NAME, result.errors.length > 0 ? "error" : "success");
+    finishCron(
+      ORPHAN_CLEANUP_NAME,
+      result.errors.length > 0 ? "error" : "success",
+    );
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : "Unknown error";
     console.error("[Cron] Orphan cleanup monitor error:", errMsg);
