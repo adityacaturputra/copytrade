@@ -623,6 +623,66 @@ test("position ops cleans orphan protection orders only for symbols without trac
   assert.equal(positionOpsMocks.logProcessStep.mock.calls.at(-1)?.[0]?.action, "cleanup_orphan_protection_orders");
 });
 
+test("position ops orphan cleanup ignores standard open orders and still cleans stale TP/SL without positions", async () => {
+  const exchange = {
+    getAlgoOrders: vi.fn().mockResolvedValue([
+      {
+        orderId: "algo-stale",
+        symbol: "FLOCKUSDT",
+        side: "SELL",
+        type: "tp",
+        triggerPrice: 0.2,
+        quantity: 1000,
+        status: "NEW",
+      },
+    ]),
+    getOpenPositions: vi.fn().mockResolvedValue([]),
+    getOpenOrders: vi.fn().mockResolvedValue([
+      {
+        orderId: "limit-1",
+        symbol: "FLOCKUSDT",
+        side: "BUY",
+        type: "limit",
+        price: 0.1,
+        quantity: 1000,
+        filledQuantity: 0,
+        status: "NEW",
+      },
+    ]),
+    cancelAlgoOrders: vi.fn().mockResolvedValue({
+      cancelled: ["algo-stale"],
+      errors: [],
+    }),
+  };
+
+  positionOpsMocks.resolveExchangeContext.mockResolvedValue({
+    exchange,
+    accountId: "acc-1",
+    accountName: "VIP",
+    provider: "bybit",
+  });
+  positionOpsMocks.positionFind.mockReturnValue(createQuery([]));
+
+  const preview = JSON.parse(
+    await positionOpsToolImplementations.cleanup_orphan_protection_orders({
+      accountId: "acc-1",
+    }),
+  );
+  const applied = JSON.parse(
+    await positionOpsToolImplementations.cleanup_orphan_protection_orders({
+      accountId: "acc-1",
+      dryRun: false,
+    }),
+  );
+
+  assert.equal(preview.orphanCandidates.length, 1);
+  assert.equal(preview.orphanCandidates[0].symbol, "FLOCKUSDT");
+  assert.equal(applied.cleanupResults.length, 1);
+  assert.equal(applied.cleanupResults[0].symbol, "FLOCKUSDT");
+  assert.equal(exchange.cancelAlgoOrders.mock.calls.length, 1);
+  assert.equal(exchange.getOpenOrders.mock.calls.length, 0);
+});
+
 test("position ops manage_position covers partial close, breakeven, trailing stop, take-profit updates, cancel orders, and validation errors", async () => {
   const exchange = {
     closePosition: vi.fn().mockResolvedValue(undefined),

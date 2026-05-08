@@ -1078,7 +1078,7 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
     function: {
       name: "cleanup_orphan_protection_orders",
       description:
-        "Audit and optionally cancel stale TP/SL algo orders on an account when there is no matching tracked open/pending position, no live exchange position, and no live standard open order for the symbol. Use dryRun=true first to inspect orphan candidates, then dryRun=false to cancel them.",
+        "Audit and optionally cancel stale TP/SL algo orders on an account when there is no matching tracked open/pending position and no live exchange position for the symbol. Use dryRun=true first to inspect orphan candidates, then dryRun=false to cancel them.",
       parameters: {
         type: "object",
         properties: {

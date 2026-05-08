@@ -716,9 +716,8 @@ export const positionOpsToolImplementations: Record<string, ToolExecutor> = {
     const symbol = parseOptionalString(args.symbol);
     const dryRun = args.dryRun !== false;
 
-    const [algoOrders, openOrders, exchangePositions, trackedPositions] = await Promise.all([
+    const [algoOrders, exchangePositions, trackedPositions] = await Promise.all([
       exchange.getAlgoOrders(symbol),
-      exchange.getOpenOrders(symbol),
       exchange.getOpenPositions(),
       Position.find({
         accountId,
@@ -731,14 +730,12 @@ export const positionOpsToolImplementations: Record<string, ToolExecutor> = {
 
     const trackedSymbols = new Set(trackedPositions.map((position) => position.symbol));
     const livePositionSymbols = new Set(exchangePositions.map((position) => position.symbol));
-    const openOrderSymbols = new Set(openOrders.map((order) => order.symbol));
 
     const orphanCandidates = algoOrders.filter((order) => {
       if (symbol && order.symbol !== symbol) return false;
       return (
         !trackedSymbols.has(order.symbol) &&
-        !livePositionSymbols.has(order.symbol) &&
-        !openOrderSymbols.has(order.symbol)
+        !livePositionSymbols.has(order.symbol)
       );
     });
 
@@ -781,7 +778,6 @@ export const positionOpsToolImplementations: Record<string, ToolExecutor> = {
       cleanupResults,
       trackedSymbols: [...trackedSymbols],
       livePositionSymbols: [...livePositionSymbols],
-      openOrderSymbols: [...openOrderSymbols],
     };
 
     await logProcessStep({

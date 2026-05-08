@@ -25,11 +25,11 @@ export async function runOrphanCleanupMonitor() {
         const credentials = toExchangeCredentials(account as unknown as AccountRecord);
         const exchange = ExchangeFactory.getClientForAccount(credentials);
         
-        // Fetch exchange state
-        const [algoOrders, openPositions, openOrders, trackedPositions] = await Promise.all([
+        // Fetch exchange state. Orphan cleanup must only preserve protection
+        // for symbols that still have a tracked or live position.
+        const [algoOrders, openPositions, trackedPositions] = await Promise.all([
           exchange.getAlgoOrders(), // Call without symbol to get all
           exchange.getOpenPositions(),
-          exchange.getOpenOrders(), // Fetch live limit pending orders
           Position.find({
             accountId: String(account._id),
             status: { $in: ["open", "pending"] },
@@ -45,14 +45,12 @@ export async function runOrphanCleanupMonitor() {
         // Collect valid symbols
         const trackedSymbols = new Set(trackedPositions.map((pos: any) => pos.symbol));
         const livePositionSymbols = new Set(openPositions.map((pos: any) => pos.symbol));
-        const openOrderSymbols = new Set(openOrders.map((order: any) => order.symbol));
 
         // Find orphaned algo orders
         const orphanCandidates = algoOrders.filter(
           (order: any) =>
             !trackedSymbols.has(order.symbol) &&
-            !livePositionSymbols.has(order.symbol) &&
-            !openOrderSymbols.has(order.symbol)
+            !livePositionSymbols.has(order.symbol)
         );
 
         const symbolsToCleanup = [...new Set(orphanCandidates.map((o: any) => o.symbol))];
