@@ -14,6 +14,8 @@ const baseConfig: RiskConfig = {
   defaultPositionSize: 50,
   defaultLeverage: 10,
   maxPositions: 5,
+  autoRaiseMinOrderEnabled: false,
+  autoRaiseMinOrderMaxMarginUsdt: 0,
 };
 
 test("account risk overrides replace global config", () => {

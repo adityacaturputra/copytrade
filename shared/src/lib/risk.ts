@@ -16,6 +16,8 @@ export interface RiskConfig {
   defaultPositionSize: number; // default 50 — fallback position size (USDT) when signal has no size
   defaultLeverage: number; // default 10 — fallback leverage when signal has no leverage
   maxPositions: number; // default 5 — max concurrent open positions (0 = unlimited)
+  autoRaiseMinOrderEnabled: boolean; // allow auto-raising margin to meet exchange minimums
+  autoRaiseMinOrderMaxMarginUsdt: number; // max margin in USDT allowed for auto-raise
 }
 
 export interface RiskCalculation {
@@ -49,6 +51,8 @@ export interface EffectiveRiskConfig extends RiskConfig {
     defaultPositionSize: "global" | "account" | "source_chat";
     defaultLeverage: "global" | "account" | "source_chat";
     maxPositions: "global" | "account" | "source_chat";
+    autoRaiseMinOrderEnabled: "global" | "account" | "source_chat";
+    autoRaiseMinOrderMaxMarginUsdt: "global" | "account" | "source_chat";
   };
 }
 
@@ -63,6 +67,8 @@ const DEFAULT_RISK_CONFIG: RiskConfig = {
   defaultPositionSize: 50,
   defaultLeverage: 10,
   maxPositions: 5,
+  autoRaiseMinOrderEnabled: false,
+  autoRaiseMinOrderMaxMarginUsdt: 0,
 };
 
 type RiskConfigField = keyof RiskConfig;
@@ -76,6 +82,8 @@ const RISK_CONFIG_FIELDS: RiskConfigField[] = [
   "defaultPositionSize",
   "defaultLeverage",
   "maxPositions",
+  "autoRaiseMinOrderEnabled",
+  "autoRaiseMinOrderMaxMarginUsdt",
 ];
 
 function toRiskOverrideConfig(value: unknown): RiskOverrideConfig {
@@ -94,8 +102,11 @@ function toRiskOverrideConfig(value: unknown): RiskOverrideConfig {
       continue;
     }
 
-    if (typeof fieldValue === "boolean" && field === "skipNoSL") {
-      overrides.skipNoSL = fieldValue;
+    if (
+      typeof fieldValue === "boolean" &&
+      (field === "skipNoSL" || field === "autoRaiseMinOrderEnabled")
+    ) {
+      overrides[field] = fieldValue as never;
     }
   }
 
@@ -145,6 +156,8 @@ export function mergeRiskConfigOverrides(
     defaultPositionSize: "global",
     defaultLeverage: "global",
     maxPositions: "global",
+    autoRaiseMinOrderEnabled: "global",
+    autoRaiseMinOrderMaxMarginUsdt: "global",
   };
 
   for (const field of RISK_CONFIG_FIELDS) {
@@ -180,6 +193,10 @@ export async function getRiskConfig(): Promise<RiskConfig> {
         defaultPositionSize: settings.defaultPositionSize ?? 50,
         defaultLeverage: settings.defaultLeverage ?? 10,
         maxPositions: settings.maxPositions ?? 5,
+        autoRaiseMinOrderEnabled:
+          settings.autoRaiseMinOrderEnabled ?? false,
+        autoRaiseMinOrderMaxMarginUsdt:
+          settings.autoRaiseMinOrderMaxMarginUsdt ?? 0,
       };
     }
   } catch (err) {
@@ -220,6 +237,13 @@ export async function setRiskConfig(
   if (config.maxPositions !== undefined) {
     update.maxPositions = config.maxPositions;
   }
+  if (config.autoRaiseMinOrderEnabled !== undefined) {
+    update.autoRaiseMinOrderEnabled = config.autoRaiseMinOrderEnabled;
+  }
+  if (config.autoRaiseMinOrderMaxMarginUsdt !== undefined) {
+    update.autoRaiseMinOrderMaxMarginUsdt =
+      config.autoRaiseMinOrderMaxMarginUsdt;
+  }
   const doc = await RiskSettingsModel.findOneAndUpdate({}, update, {
     upsert: true,
     new: true,
@@ -233,6 +257,8 @@ export async function setRiskConfig(
     defaultPositionSize: doc.defaultPositionSize ?? 50,
     defaultLeverage: doc.defaultLeverage ?? 10,
     maxPositions: doc.maxPositions ?? 5,
+    autoRaiseMinOrderEnabled: doc.autoRaiseMinOrderEnabled ?? false,
+    autoRaiseMinOrderMaxMarginUsdt: doc.autoRaiseMinOrderMaxMarginUsdt ?? 0,
   };
 }
 

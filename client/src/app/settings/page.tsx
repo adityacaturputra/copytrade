@@ -50,6 +50,8 @@ interface AccountData {
   disabledChannelIds?: string[];
   riskOverrides?: {
     riskPerTradePercent?: number;
+    autoRaiseMinOrderEnabled?: boolean;
+    autoRaiseMinOrderMaxMarginUsdt?: number;
     [key: string]: unknown;
   } | null;
   channelConfigs?: Record<
@@ -57,6 +59,8 @@ interface AccountData {
     {
       riskOverrides?: {
         riskPerTradePercent?: number;
+        autoRaiseMinOrderEnabled?: boolean;
+        autoRaiseMinOrderMaxMarginUsdt?: number;
         [key: string]: unknown;
       };
       [key: string]: unknown;
@@ -77,10 +81,14 @@ interface HealthStatus {
   needsRefresh: boolean;
 }
 
+type AutoRaiseOverrideMode = "inherit" | "enabled" | "disabled";
+
 interface ChannelEntry {
   id: string;
   name: string;
   riskPerTradePercent: string;
+  autoRaiseMinOrderMode: AutoRaiseOverrideMode;
+  autoRaiseMinOrderMaxMarginUsdt: string;
 }
 
 interface AccountFormData {
@@ -97,6 +105,8 @@ interface AccountFormData {
   // Channels
   channels: ChannelEntry[];
   accountRiskPerTradePercent: string;
+  accountAutoRaiseMinOrderMode: AutoRaiseOverrideMode;
+  accountAutoRaiseMinOrderMaxMarginUsdt: string;
   // Exchange
   tradingPlatform: string;
   exchangeValues: ExchangeFormValues;
@@ -112,8 +122,18 @@ const emptyForm: AccountFormData = {
   refreshToken: "",
   autoRefresh: true,
   botToken: "",
-  channels: [{ id: "", name: "", riskPerTradePercent: "" }],
+  channels: [
+    {
+      id: "",
+      name: "",
+      riskPerTradePercent: "",
+      autoRaiseMinOrderMode: "inherit",
+      autoRaiseMinOrderMaxMarginUsdt: "",
+    },
+  ],
   accountRiskPerTradePercent: "",
+  accountAutoRaiseMinOrderMode: "inherit",
+  accountAutoRaiseMinOrderMaxMarginUsdt: "",
   tradingPlatform: DEFAULT_ACCOUNT_EXCHANGE_PROVIDER,
   exchangeValues: createEmptyExchangeFormValues(),
   exchangeIsDemo: false,
@@ -122,7 +142,15 @@ const emptyForm: AccountFormData = {
 function createEmptyAccountForm(): AccountFormData {
   return {
     ...emptyForm,
-    channels: [{ id: "", name: "", riskPerTradePercent: "" }],
+    channels: [
+      {
+        id: "",
+        name: "",
+        riskPerTradePercent: "",
+        autoRaiseMinOrderMode: "inherit",
+        autoRaiseMinOrderMaxMarginUsdt: "",
+      },
+    ],
     exchangeValues: createEmptyExchangeFormValues(),
   };
 }
@@ -136,6 +164,8 @@ interface RiskConfig {
   defaultPositionSize: number;
   defaultLeverage: number;
   maxPositions: number;
+  autoRaiseMinOrderEnabled: boolean;
+  autoRaiseMinOrderMaxMarginUsdt: number;
 }
 
 const defaultRiskConfig: RiskConfig = {
@@ -147,6 +177,8 @@ const defaultRiskConfig: RiskConfig = {
   defaultPositionSize: 50,
   defaultLeverage: 10,
   maxPositions: 5,
+  autoRaiseMinOrderEnabled: false,
+  autoRaiseMinOrderMaxMarginUsdt: 0,
 };
 
 interface SignalConfigType {
@@ -200,10 +232,24 @@ function parseOptionalPositiveNumber(value: string): number | null {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
+function parseOptionalNonNegativeNumber(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
 function formatOptionalNumber(value: unknown): string {
   return typeof value === "number" && Number.isFinite(value)
     ? String(value)
     : "";
+}
+
+function toAutoRaiseOverrideMode(value: unknown): AutoRaiseOverrideMode {
+  if (value === true) return "enabled";
+  if (value === false) return "disabled";
+  return "inherit";
 }
 
 // Helper to add action password header to mutation requests
@@ -544,8 +590,15 @@ export default function SettingsPage() {
     const channelNamesMap: Record<string, string> = {};
     const channelConfigs: Record<
       string,
-      { riskOverrides?: { riskPerTradePercent?: number } }
+      {
+        riskOverrides?: {
+          riskPerTradePercent?: number;
+          autoRaiseMinOrderEnabled?: boolean;
+          autoRaiseMinOrderMaxMarginUsdt?: number;
+        };
+      }
     > = {};
+    const accountRiskOverrides: Record<string, unknown> = {};
     validChannels.forEach((c) => {
       if (c.name.trim()) {
         channelNamesMap[c.id.trim()] = c.name.trim();
@@ -553,21 +606,70 @@ export default function SettingsPage() {
       const channelRiskPerTradePercent = parseOptionalPositiveNumber(
         c.riskPerTradePercent,
       );
+      const channelAutoRaiseMinOrderMaxMarginUsdt =
+        parseOptionalNonNegativeNumber(c.autoRaiseMinOrderMaxMarginUsdt);
+      const channelRiskOverrides: Record<string, unknown> = {};
       if (channelRiskPerTradePercent !== null) {
+        channelRiskOverrides.riskPerTradePercent = channelRiskPerTradePercent;
+      }
+      if (c.autoRaiseMinOrderMode !== "inherit") {
+        channelRiskOverrides.autoRaiseMinOrderEnabled =
+          c.autoRaiseMinOrderMode === "enabled";
+      }
+      if (channelAutoRaiseMinOrderMaxMarginUsdt !== null) {
+        channelRiskOverrides.autoRaiseMinOrderMaxMarginUsdt =
+          channelAutoRaiseMinOrderMaxMarginUsdt;
+      }
+      if (Object.keys(channelRiskOverrides).length > 0) {
         channelConfigs[c.id.trim()] = {
-          riskOverrides: {
-            riskPerTradePercent: channelRiskPerTradePercent,
-          },
+          riskOverrides: channelRiskOverrides,
         };
       }
     });
     const accountRiskPerTradePercent = parseOptionalPositiveNumber(
       form.accountRiskPerTradePercent,
     );
+    const accountAutoRaiseMinOrderMaxMarginUsdt = parseOptionalNonNegativeNumber(
+      form.accountAutoRaiseMinOrderMaxMarginUsdt,
+    );
+    if (accountRiskPerTradePercent !== null) {
+      accountRiskOverrides.riskPerTradePercent = accountRiskPerTradePercent;
+    }
+    if (form.accountAutoRaiseMinOrderMode !== "inherit") {
+      accountRiskOverrides.autoRaiseMinOrderEnabled =
+        form.accountAutoRaiseMinOrderMode === "enabled";
+    }
+    if (accountAutoRaiseMinOrderMaxMarginUsdt !== null) {
+      accountRiskOverrides.autoRaiseMinOrderMaxMarginUsdt =
+        accountAutoRaiseMinOrderMaxMarginUsdt;
+    }
 
     // Validation
     if (!form.name || channelIdsArray.length === 0) {
       setFormError("Name and at least one channel ID are required.");
+      setSaving(false);
+      return;
+    }
+
+    if (
+      form.accountAutoRaiseMinOrderMaxMarginUsdt.trim() &&
+      accountAutoRaiseMinOrderMaxMarginUsdt === null
+    ) {
+      setFormError(
+        "Account auto-raise max margin override must be a non-negative number.",
+      );
+      setSaving(false);
+      return;
+    }
+
+    if (
+      form.accountAutoRaiseMinOrderMode === "enabled" &&
+      (!accountAutoRaiseMinOrderMaxMarginUsdt ||
+        accountAutoRaiseMinOrderMaxMarginUsdt <= 0)
+    ) {
+      setFormError(
+        "Account auto-raise max margin must be greater than 0 when enabled.",
+      );
       setSaving(false);
       return;
     }
@@ -578,6 +680,27 @@ export default function SettingsPage() {
     ) {
       setFormError(
         "Account Risk Per Trade override must be a positive number.",
+      );
+      setSaving(false);
+      return;
+    }
+
+    const invalidChannelAutoRaise = validChannels.find((channel) => {
+      const parsed = parseOptionalNonNegativeNumber(
+        channel.autoRaiseMinOrderMaxMarginUsdt,
+      );
+      if (channel.autoRaiseMinOrderMaxMarginUsdt.trim() && parsed === null) {
+        return true;
+      }
+
+      return (
+        channel.autoRaiseMinOrderMode === "enabled" &&
+        (!parsed || parsed <= 0)
+      );
+    });
+    if (invalidChannelAutoRaise) {
+      setFormError(
+        `Channel auto-raise max margin override for ${invalidChannelAutoRaise.id || "selected chat"} must be greater than 0 when enabled.`,
       );
       setSaving(false);
       return;
@@ -670,8 +793,8 @@ export default function SettingsPage() {
         channelIds: channelIdsArray,
         channelNames: channelNamesMap,
         riskOverrides:
-          accountRiskPerTradePercent !== null
-            ? { riskPerTradePercent: accountRiskPerTradePercent }
+          Object.keys(accountRiskOverrides).length > 0
+            ? accountRiskOverrides
             : null,
         channelConfigs,
         tradingPlatform: form.tradingPlatform,
@@ -725,9 +848,22 @@ export default function SettingsPage() {
         riskPerTradePercent: formatOptionalNumber(
           account.channelConfigs?.[cid]?.riskOverrides?.riskPerTradePercent,
         ),
+        autoRaiseMinOrderMode: toAutoRaiseOverrideMode(
+          account.channelConfigs?.[cid]?.riskOverrides?.autoRaiseMinOrderEnabled,
+        ),
+        autoRaiseMinOrderMaxMarginUsdt: formatOptionalNumber(
+          account.channelConfigs?.[cid]?.riskOverrides
+            ?.autoRaiseMinOrderMaxMarginUsdt,
+        ),
       })),
       accountRiskPerTradePercent: formatOptionalNumber(
         account.riskOverrides?.riskPerTradePercent,
+      ),
+      accountAutoRaiseMinOrderMode: toAutoRaiseOverrideMode(
+        account.riskOverrides?.autoRaiseMinOrderEnabled,
+      ),
+      accountAutoRaiseMinOrderMaxMarginUsdt: formatOptionalNumber(
+        account.riskOverrides?.autoRaiseMinOrderMaxMarginUsdt,
       ),
       // Exchange
       tradingPlatform: resolveAccountFormTradingPlatform(
@@ -758,9 +894,22 @@ export default function SettingsPage() {
         riskPerTradePercent: formatOptionalNumber(
           account.channelConfigs?.[cid]?.riskOverrides?.riskPerTradePercent,
         ),
+        autoRaiseMinOrderMode: toAutoRaiseOverrideMode(
+          account.channelConfigs?.[cid]?.riskOverrides?.autoRaiseMinOrderEnabled,
+        ),
+        autoRaiseMinOrderMaxMarginUsdt: formatOptionalNumber(
+          account.channelConfigs?.[cid]?.riskOverrides
+            ?.autoRaiseMinOrderMaxMarginUsdt,
+        ),
       })),
       accountRiskPerTradePercent: formatOptionalNumber(
         account.riskOverrides?.riskPerTradePercent,
+      ),
+      accountAutoRaiseMinOrderMode: toAutoRaiseOverrideMode(
+        account.riskOverrides?.autoRaiseMinOrderEnabled,
+      ),
+      accountAutoRaiseMinOrderMaxMarginUsdt: formatOptionalNumber(
+        account.riskOverrides?.autoRaiseMinOrderMaxMarginUsdt,
       ),
       tradingPlatform: resolveAccountFormTradingPlatform(
         account.tradingPlatform,
@@ -896,6 +1045,16 @@ export default function SettingsPage() {
     setRiskSaving(true);
     setRiskError(null);
     setRiskSuccess(false);
+    if (
+      riskConfig.autoRaiseMinOrderEnabled &&
+      riskConfig.autoRaiseMinOrderMaxMarginUsdt <= 0
+    ) {
+      setRiskError(
+        "Auto-raise max margin must be greater than 0 when the global setting is enabled.",
+      );
+      setRiskSaving(false);
+      return;
+    }
     try {
       const res = await fetch("/api/settings", {
         method: "POST",
@@ -1451,33 +1610,78 @@ export default function SettingsPage() {
                       Channels *
                     </label>
                     <div className="rounded-lg border border-slate-700 p-4 bg-slate-900/30">
-                      <label className="block text-sm text-slate-400 mb-1">
-                        Account Risk Per Trade Override (%)
-                      </label>
-                      <input
-                        type="number"
-                        step="0.1"
-                        min="0.1"
-                        value={form.accountRiskPerTradePercent}
-                        onChange={(e) =>
-                          setForm({
-                            ...form,
-                            accountRiskPerTradePercent: e.target.value,
-                          })
-                        }
-                        placeholder="Leave empty to use global setting"
-                        className="w-full md:w-72 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none"
-                      />
+                      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+                        <div>
+                          <label className="block text-sm text-slate-400 mb-1">
+                            Account Risk Per Trade Override (%)
+                          </label>
+                          <input
+                            type="number"
+                            step="0.1"
+                            min="0.1"
+                            value={form.accountRiskPerTradePercent}
+                            onChange={(e) =>
+                              setForm({
+                                ...form,
+                                accountRiskPerTradePercent: e.target.value,
+                              })
+                            }
+                            placeholder="Leave empty to use global setting"
+                            className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm text-slate-400 mb-1">
+                            Account Min Order Auto-Raise
+                          </label>
+                          <select
+                            value={form.accountAutoRaiseMinOrderMode}
+                            onChange={(e) =>
+                              setForm({
+                                ...form,
+                                accountAutoRaiseMinOrderMode:
+                                  e.target.value as AutoRaiseOverrideMode,
+                              })
+                            }
+                            className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
+                          >
+                            <option value="inherit">Use inherited</option>
+                            <option value="enabled">Enabled</option>
+                            <option value="disabled">Disabled</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-sm text-slate-400 mb-1">
+                            Account Auto-Raise Max Margin (USDT)
+                          </label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={form.accountAutoRaiseMinOrderMaxMarginUsdt}
+                            onChange={(e) =>
+                              setForm({
+                                ...form,
+                                accountAutoRaiseMinOrderMaxMarginUsdt:
+                                  e.target.value,
+                              })
+                            }
+                            placeholder="Leave empty to use inherited cap"
+                            className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none"
+                          />
+                        </div>
+                      </div>
                       <p className="text-xs text-slate-500 mt-2">
-                        Ini override level account. Kalau channel tertentu punya
-                        override sendiri, channel itu akan lebih prioritas.
+                        Override account berlaku di atas global. Channel tertentu
+                        tetap bisa override lagi, termasuk saat account di-set
+                        disabled dan channel di-set enabled.
                       </p>
                     </div>
                     <div className="space-y-2">
                       {form.channels.map((ch, idx) => (
                         <div
                           key={idx}
-                          className="grid grid-cols-1 md:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_220px_auto] gap-2"
+                          className="grid grid-cols-1 md:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_190px_180px_220px_auto] gap-2"
                         >
                           <input
                             type="text"
@@ -1527,6 +1731,39 @@ export default function SettingsPage() {
                             placeholder="Channel RPT override %"
                             className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none"
                           />
+                          <select
+                            value={ch.autoRaiseMinOrderMode}
+                            onChange={(e) => {
+                              const updated = [...form.channels];
+                              updated[idx] = {
+                                ...updated[idx],
+                                autoRaiseMinOrderMode:
+                                  e.target.value as AutoRaiseOverrideMode,
+                              };
+                              setForm({ ...form, channels: updated });
+                            }}
+                            className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
+                          >
+                            <option value="inherit">Min auto-raise: inherit</option>
+                            <option value="enabled">Min auto-raise: on</option>
+                            <option value="disabled">Min auto-raise: off</option>
+                          </select>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={ch.autoRaiseMinOrderMaxMarginUsdt}
+                            onChange={(e) => {
+                              const updated = [...form.channels];
+                              updated[idx] = {
+                                ...updated[idx],
+                                autoRaiseMinOrderMaxMarginUsdt: e.target.value,
+                              };
+                              setForm({ ...form, channels: updated });
+                            }}
+                            placeholder="Auto-raise cap USDT"
+                            className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none"
+                          />
                           {form.channels.length > 1 && (
                             <button
                               type="button"
@@ -1550,7 +1787,13 @@ export default function SettingsPage() {
                             ...form,
                             channels: [
                               ...form.channels,
-                              { id: "", name: "", riskPerTradePercent: "" },
+                              {
+                                id: "",
+                                name: "",
+                                riskPerTradePercent: "",
+                                autoRaiseMinOrderMode: "inherit",
+                                autoRaiseMinOrderMaxMarginUsdt: "",
+                              },
                             ],
                           })
                         }
@@ -1818,6 +2061,21 @@ export default function SettingsPage() {
                                 {account.riskOverrides.riskPerTradePercent}%
                               </span>
                             ) : null}
+                            {account.riskOverrides?.autoRaiseMinOrderEnabled !==
+                            undefined ? (
+                              <span className="text-xs px-2 py-1 rounded border border-amber-700/40 bg-amber-900/20 text-amber-300">
+                                Account Min Auto-Raise:{" "}
+                                {account.riskOverrides.autoRaiseMinOrderEnabled
+                                  ? `ON${
+                                      account.riskOverrides
+                                        .autoRaiseMinOrderMaxMarginUsdt !==
+                                      undefined
+                                        ? ` ≤ $${account.riskOverrides.autoRaiseMinOrderMaxMarginUsdt}`
+                                        : ""
+                                    }`
+                                  : "OFF"}
+                              </span>
+                            ) : null}
                             {(account.channelIds || []).map((cid: string) => {
                               const isDisabled = (
                                 account.disabledChannelIds || []
@@ -1826,6 +2084,12 @@ export default function SettingsPage() {
                               const channelRPT =
                                 account.channelConfigs?.[cid]?.riskOverrides
                                   ?.riskPerTradePercent;
+                              const channelAutoRaiseEnabled =
+                                account.channelConfigs?.[cid]?.riskOverrides
+                                  ?.autoRaiseMinOrderEnabled;
+                              const channelAutoRaiseCap =
+                                account.channelConfigs?.[cid]?.riskOverrides
+                                  ?.autoRaiseMinOrderMaxMarginUsdt;
                               return (
                                 <button
                                   key={cid}
@@ -1845,6 +2109,11 @@ export default function SettingsPage() {
                                 >
                                   {cname}
                                   {channelRPT ? ` • ${channelRPT}%` : ""}
+                                  {channelAutoRaiseEnabled !== undefined
+                                    ? channelAutoRaiseEnabled
+                                      ? ` • min≤$${channelAutoRaiseCap ?? "?"}`
+                                      : " • min off"
+                                    : ""}
                                 </button>
                               );
                             })}
@@ -2065,6 +2334,45 @@ export default function SettingsPage() {
                       setRiskConfigState({
                         ...riskConfig,
                         maxPositions: parseInt(e.target.value),
+                      })
+                    }
+                    className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
+                  />
+                </div>
+                <div className="sm:col-span-2 lg:col-span-1">
+                  <label className="block text-xs text-slate-400 mb-1">
+                    Minimum Order Auto-Raise
+                  </label>
+                  <label className="flex items-center gap-2 h-[42px] px-3 bg-slate-800 border border-slate-600 rounded-lg text-sm text-white">
+                    <input
+                      type="checkbox"
+                      checked={riskConfig.autoRaiseMinOrderEnabled}
+                      onChange={(e) =>
+                        setRiskConfigState({
+                          ...riskConfig,
+                          autoRaiseMinOrderEnabled: e.target.checked,
+                        })
+                      }
+                      className="rounded border-slate-500 bg-slate-900 text-primary-500 focus:ring-primary-500"
+                    />
+                    <span>Allow auto-raise to exchange minimum</span>
+                  </label>
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">
+                    Auto-Raise Max Margin (USDT)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={riskConfig.autoRaiseMinOrderMaxMarginUsdt}
+                    onChange={(e) =>
+                      setRiskConfigState({
+                        ...riskConfig,
+                        autoRaiseMinOrderMaxMarginUsdt: parseFloat(
+                          e.target.value,
+                        ),
                       })
                     }
                     className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"

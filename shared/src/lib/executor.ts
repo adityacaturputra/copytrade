@@ -20,7 +20,6 @@ import {
 } from "./exchange/ExchangeFactory";
 import {
   calculateRiskBasedPosition,
-  getRiskConfig,
   resolveEffectiveRiskConfig,
 } from "./risk";
 import { getSignalConfig } from "./signal-config";
@@ -120,6 +119,24 @@ export async function splitQuantityForTPs(
   );
 
   return quantities;
+}
+
+function roundUpToStep(
+  value: number,
+  step: number,
+  decimals: number,
+): number {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  if (!Number.isFinite(step) || step <= 0) {
+    return Number(value.toFixed(Math.max(0, decimals)));
+  }
+
+  const units = Math.ceil((value + Number.EPSILON) / step);
+  return Number((units * step).toFixed(Math.max(0, decimals)));
+}
+
+function formatUsd(value: number): string {
+  return value.toFixed(2);
 }
 
 export async function runSignalCheck(): Promise<{
@@ -1007,6 +1024,112 @@ export async function executeTrade(
         action: "console_set_leverage_failed",
       },
     );
+  }
+
+  try {
+    const specs = await exchange.getInstrumentSpecs(symbol);
+    const minNotional = specs.minNotional ?? 0;
+
+    if (minNotional > 0) {
+      let referencePrice = entryPrice && entryPrice > 0 ? entryPrice : 0;
+      if (referencePrice <= 0 && orderType !== "LIMIT") {
+        try {
+          referencePrice = await exchange.getTickerPrice(symbol);
+        } catch (tickerErr) {
+          await logExecutorWarn(
+            `${lp}⚠️ Failed to fetch reference price for minimum-order guard: ${tickerErr instanceof Error ? tickerErr.message : String(tickerErr)}`,
+            {
+              accountId,
+              processId,
+              symbol,
+              action: "console_min_order_guard_price_failed",
+            },
+          );
+        }
+      }
+
+      if (referencePrice > 0) {
+        const currentNotional = orderQuantity * referencePrice;
+        if (currentNotional + 1e-9 < minNotional) {
+          const effectiveRiskConfig = await resolveEffectiveRiskConfig({
+            accountId,
+            channelId,
+          });
+          const requiredQty = roundUpToStep(
+            Math.max(minNotional / referencePrice, specs.minSz),
+            specs.lotSz,
+            specs.qtyDecimals,
+          );
+          const requiredNotional = requiredQty * referencePrice;
+          const requiredMargin =
+            orderLeverage > 0 ? requiredNotional / orderLeverage : Number.POSITIVE_INFINITY;
+          const autoRaiseCap = effectiveRiskConfig.autoRaiseMinOrderEnabled
+            ? effectiveRiskConfig.autoRaiseMinOrderMaxMarginUsdt
+            : 0;
+
+          if (
+            effectiveRiskConfig.autoRaiseMinOrderEnabled &&
+            requiredMargin <= autoRaiseCap + 1e-9 &&
+            (!riskAccountBalance || requiredMargin <= riskAccountBalance + 1e-9)
+          ) {
+            const originalQuantity = orderQuantity;
+            orderQuantity = requiredQty;
+            plannedMarginUsdt = requiredMargin;
+            await logExecutorInfo(
+              `${lp}📏 Auto-raised qty for exchange minimum: qty=${originalQuantity.toFixed(specs.qtyDecimals)} → ${orderQuantity.toFixed(specs.qtyDecimals)}, minNotional=$${formatUsd(minNotional)}, margin=$${formatUsd(requiredMargin)} at ${orderLeverage}x`,
+              {
+                accountId,
+                processId,
+                symbol,
+                action: "console_min_order_auto_raised",
+              },
+            );
+          } else {
+            let rejectMessage = `Trade rejected: exchange minimum requires margin $${formatUsd(requiredMargin)} at ${orderLeverage}x, but allowed auto-raise cap is $${formatUsd(autoRaiseCap)}`;
+
+            if (
+              riskAccountBalance &&
+              requiredMargin > riskAccountBalance + 1e-9
+            ) {
+              rejectMessage = `Trade rejected: exchange minimum requires margin $${formatUsd(requiredMargin)} at ${orderLeverage}x, but available balance is $${formatUsd(riskAccountBalance)}`;
+            }
+
+            await logExecutorWarn(`${lp}⚠️ ${rejectMessage}`, {
+              accountId,
+              processId,
+              symbol,
+              action: "console_min_order_rejected",
+            });
+            throw new Error(rejectMessage);
+          }
+        }
+      }
+    }
+  } catch (minOrderErr) {
+    if (minOrderErr instanceof Error) {
+      if (minOrderErr.message.startsWith("Trade rejected:")) {
+        throw minOrderErr;
+      }
+      await logExecutorWarn(
+        `${lp}⚠️ Minimum-order guard skipped: ${minOrderErr.message}`,
+        {
+          accountId,
+          processId,
+          symbol,
+          action: "console_min_order_guard_skipped",
+        },
+      );
+    } else {
+      await logExecutorWarn(
+        `${lp}⚠️ Minimum-order guard skipped: ${String(minOrderErr)}`,
+        {
+          accountId,
+          processId,
+          symbol,
+          action: "console_min_order_guard_skipped",
+        },
+      );
+    }
   }
 
   const orderSide = action === "BUY" ? "BUY" : "SELL";

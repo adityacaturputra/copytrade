@@ -114,6 +114,7 @@ type BybitInstrumentInfoResult = {
     lotSizeFilter?: {
       qtyStep?: string;
       minOrderQty?: string;
+      minNotionalValue?: string;
     };
   }>;
 };
@@ -1198,11 +1199,16 @@ export class BybitExchange implements ExchangeClient {
 
     const lotSz = this.parseNumber(instrument.lotSizeFilter?.qtyStep, 1);
     const minSz = this.parseNumber(instrument.lotSizeFilter?.minOrderQty, lotSz);
+    const minNotional = this.parseNumber(
+      instrument.lotSizeFilter?.minNotionalValue,
+      0,
+    );
     const tickSz = this.parseNumber(instrument.priceFilter?.tickSize, 0.01);
     const specs: InstrumentSpecs = {
       ctVal: 1,
       lotSz,
       minSz,
+      ...(minNotional > 0 ? { minNotional } : {}),
       ctValCcy:
         instrument.baseCoin ||
         normalized.replace(/USDT|USDC|USD$/, ""),

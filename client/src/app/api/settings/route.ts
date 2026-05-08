@@ -64,6 +64,8 @@ export async function POST(request: NextRequest) {
         maxLeverage,
         minLeverage,
         skipNoSL,
+        autoRaiseMinOrderEnabled,
+        autoRaiseMinOrderMaxMarginUsdt,
       } = body.risk;
 
       // Validation
@@ -100,6 +102,34 @@ export async function POST(request: NextRequest) {
       if (minLeverage !== undefined && (minLeverage < 1 || minLeverage > 125)) {
         return NextResponse.json(
           { success: false, error: "Min leverage must be between 1 and 125" },
+          { status: 400 },
+        );
+      }
+      if (
+        autoRaiseMinOrderEnabled !== undefined &&
+        typeof autoRaiseMinOrderEnabled !== "boolean"
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Auto-raise minimum order must be enabled or disabled",
+          },
+          { status: 400 },
+        );
+      }
+      if (
+        autoRaiseMinOrderMaxMarginUsdt !== undefined &&
+        (typeof autoRaiseMinOrderMaxMarginUsdt !== "number" ||
+          !Number.isFinite(autoRaiseMinOrderMaxMarginUsdt) ||
+          autoRaiseMinOrderMaxMarginUsdt < 0 ||
+          autoRaiseMinOrderMaxMarginUsdt > 1_000_000)
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "Auto-raise max margin must be between 0 and 1,000,000 USDT",
+          },
           { status: 400 },
         );
       }
@@ -156,6 +186,12 @@ export async function POST(request: NextRequest) {
         ...(defaultPositionSize !== undefined && { defaultPositionSize }),
         ...(defaultLeverage !== undefined && { defaultLeverage }),
         ...(maxPositions !== undefined && { maxPositions }),
+        ...(autoRaiseMinOrderEnabled !== undefined && {
+          autoRaiseMinOrderEnabled,
+        }),
+        ...(autoRaiseMinOrderMaxMarginUsdt !== undefined && {
+          autoRaiseMinOrderMaxMarginUsdt,
+        }),
       });
     }
 

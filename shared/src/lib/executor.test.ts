@@ -213,6 +213,8 @@ beforeEach(() => {
     defaultRR: 2,
     maxPositions: 0,
     skipNoSL: false,
+    autoRaiseMinOrderEnabled: false,
+    autoRaiseMinOrderMaxMarginUsdt: 0,
   });
   executorMocks.sanitizeLeverage.mockImplementation((value) => {
     if (typeof value === "number") return value;
@@ -977,6 +979,151 @@ test("executeTrade uses the paper exchange fallback, applies risk sizing, and st
   assert.equal(executorMocks.positionCreate.mock.calls[0]?.[0].status, "open");
   assert.equal(executorMocks.positionCreate.mock.calls[0]?.[0].tpSlPlaced, true);
   assert.equal(position._id.toString(), "pos-created");
+});
+
+test("executeTrade rejects early when exchange minimum order needs more margin than the allowed auto-raise cap", async () => {
+  const exchange = {
+    name: "paper",
+    getAccountInfo: vi
+      .fn()
+      .mockResolvedValue({ availableBalance: 1, totalBalance: 1 }),
+    setLeverage: vi.fn().mockResolvedValue(12),
+    placeOrder: vi.fn(),
+    getInstrumentSpecs: vi.fn().mockResolvedValue({
+      lotSz: 0.001,
+      minSz: 0.001,
+      minNotional: 5,
+      qtyDecimals: 3,
+      ctVal: 1,
+      ctValCcy: "GIGGLE",
+      tickSz: 0.01,
+      priceDecimals: 2,
+    }),
+    placeTakeProfit: vi.fn(),
+    placeStopLoss: vi.fn(),
+  };
+  executorMocks.getPaperClient.mockReturnValue(exchange);
+  executorMocks.calculateRiskBasedPosition.mockResolvedValue({
+    applied: true,
+    quantity: 0.041494,
+    leverage: 12,
+    accountBalance: 1,
+    marginUsdt: 0.1,
+    slDistancePercent: 0.0731,
+    notionalSize: 1.37,
+  });
+  executorMocks.resolveEffectiveRiskConfig.mockResolvedValue({
+    defaultLeverage: 10,
+    defaultPositionSize: 1,
+    defaultRR: 2,
+    maxPositions: 0,
+    skipNoSL: false,
+    autoRaiseMinOrderEnabled: false,
+    autoRaiseMinOrderMaxMarginUsdt: 0,
+  });
+
+  await assert.rejects(
+    () =>
+      executeTrade({
+        symbol: "GIGGLEUSDT",
+        action: "BUY",
+        entryPrice: 32.97,
+        stopLoss: 30.56,
+        takeProfitTargets: [35],
+        leverage: 10,
+        quantity: 1,
+        orderType: "LIMIT",
+        channelId: "chan-min-reject",
+        signalData: "{}",
+      } as never),
+    /Trade rejected: exchange minimum requires margin \$0\.42 at 12x, but allowed auto-raise cap is \$0\.00/,
+  );
+
+  assert.equal(exchange.placeOrder.mock.calls.length, 0);
+  assert.equal(executorMocks.positionCreate.mock.calls.length, 0);
+  assert.ok(
+    executorMocks.logExecutorWarn.mock.calls.some(
+      (call) =>
+        String(call[0]).includes(
+          "Trade rejected: exchange minimum requires margin $0.42 at 12x, but allowed auto-raise cap is $0.00",
+        ) && call[1]?.action === "console_min_order_rejected",
+    ),
+  );
+});
+
+test("executeTrade auto-raises quantity to the exchange minimum when enabled within the configured margin cap", async () => {
+  const exchange = {
+    name: "paper",
+    getAccountInfo: vi
+      .fn()
+      .mockResolvedValue({ availableBalance: 1, totalBalance: 1 }),
+    setLeverage: vi.fn().mockResolvedValue(12),
+    placeOrder: vi.fn().mockResolvedValue({
+      orderId: "limit-min-raised",
+      price: 32.97,
+      quantity: 0.152,
+    }),
+    getInstrumentSpecs: vi.fn().mockResolvedValue({
+      lotSz: 0.001,
+      minSz: 0.001,
+      minNotional: 5,
+      qtyDecimals: 3,
+      ctVal: 1,
+      ctValCcy: "GIGGLE",
+      tickSz: 0.01,
+      priceDecimals: 2,
+    }),
+    placeTakeProfit: vi.fn(),
+    placeStopLoss: vi.fn(),
+  };
+  executorMocks.getPaperClient.mockReturnValue(exchange);
+  executorMocks.calculateRiskBasedPosition.mockResolvedValue({
+    applied: true,
+    quantity: 0.041494,
+    leverage: 12,
+    accountBalance: 1,
+    marginUsdt: 0.1,
+    slDistancePercent: 0.0731,
+    notionalSize: 1.37,
+  });
+  executorMocks.resolveEffectiveRiskConfig.mockResolvedValue({
+    defaultLeverage: 10,
+    defaultPositionSize: 1,
+    defaultRR: 2,
+    maxPositions: 0,
+    skipNoSL: false,
+    autoRaiseMinOrderEnabled: true,
+    autoRaiseMinOrderMaxMarginUsdt: 0.5,
+  });
+  executorMocks.positionCreate.mockImplementation(async (payload) => ({
+    _id: { toString: () => "raised-min-pos" },
+    side: payload.side,
+    ...payload,
+  }));
+
+  const position = await executeTrade({
+    symbol: "GIGGLEUSDT",
+    action: "BUY",
+    entryPrice: 32.97,
+    stopLoss: 30.56,
+    takeProfitTargets: [35],
+    leverage: 10,
+    quantity: 1,
+    orderType: "LIMIT",
+    channelId: "chan-min-raise",
+    signalData: "{}",
+  } as never);
+
+  assert.equal(exchange.placeOrder.mock.calls[0]?.[0].quantity, 0.152);
+  assert.equal(position._id.toString(), "raised-min-pos");
+  assert.equal(position.margin?.toFixed(2), "0.42");
+  assert.ok(
+    executorMocks.logExecutorInfo.mock.calls.some(
+      (call) =>
+        String(call[0]).includes("Auto-raised qty for exchange minimum") &&
+        call[1]?.action === "console_min_order_auto_raised",
+    ),
+  );
 });
 
 test("executeTrade uses account exchange credentials for limit orders and skips TP/SL placement", async () => {

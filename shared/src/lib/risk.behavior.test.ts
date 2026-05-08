@@ -51,6 +51,8 @@ test("getRiskConfig returns DB-backed settings and falls back to defaults on fai
         defaultPositionSize: 100,
         defaultLeverage: 12,
         maxPositions: 7,
+        autoRaiseMinOrderEnabled: true,
+        autoRaiseMinOrderMaxMarginUsdt: 25,
       }),
     }),
   });
@@ -65,6 +67,8 @@ test("getRiskConfig returns DB-backed settings and falls back to defaults on fai
     defaultPositionSize: 100,
     defaultLeverage: 12,
     maxPositions: 7,
+    autoRaiseMinOrderEnabled: true,
+    autoRaiseMinOrderMaxMarginUsdt: 25,
   });
 
   const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -80,6 +84,8 @@ test("getRiskConfig returns DB-backed settings and falls back to defaults on fai
     defaultPositionSize: 50,
     defaultLeverage: 10,
     maxPositions: 5,
+    autoRaiseMinOrderEnabled: false,
+    autoRaiseMinOrderMaxMarginUsdt: 0,
   });
   assert.equal(warnSpy.mock.calls.length, 1);
 
@@ -97,6 +103,8 @@ test("setRiskConfig persists provided fields and normalizes missing optional val
       defaultPositionSize: undefined,
       defaultLeverage: undefined,
       maxPositions: undefined,
+      autoRaiseMinOrderEnabled: undefined,
+      autoRaiseMinOrderMaxMarginUsdt: undefined,
     }),
   });
 
@@ -122,6 +130,8 @@ test("setRiskConfig persists provided fields and normalizes missing optional val
     defaultPositionSize: 50,
     defaultLeverage: 10,
     maxPositions: 5,
+    autoRaiseMinOrderEnabled: false,
+    autoRaiseMinOrderMaxMarginUsdt: 0,
   });
 });
 
@@ -136,6 +146,8 @@ test("setRiskConfig persists all remaining override fields", async () => {
       defaultPositionSize: 125,
       defaultLeverage: 7,
       maxPositions: 9,
+      autoRaiseMinOrderEnabled: true,
+      autoRaiseMinOrderMaxMarginUsdt: 6,
     }),
   });
 
@@ -146,6 +158,8 @@ test("setRiskConfig persists all remaining override fields", async () => {
     defaultPositionSize: 125,
     defaultLeverage: 7,
     maxPositions: 9,
+    autoRaiseMinOrderEnabled: true,
+    autoRaiseMinOrderMaxMarginUsdt: 6,
   });
 
   assert.deepEqual(riskMocks.riskFindOneAndUpdate.mock.calls.at(-1), [
@@ -157,6 +171,8 @@ test("setRiskConfig persists all remaining override fields", async () => {
       defaultPositionSize: 125,
       defaultLeverage: 7,
       maxPositions: 9,
+      autoRaiseMinOrderEnabled: true,
+      autoRaiseMinOrderMaxMarginUsdt: 6,
     },
     { upsert: true, new: true },
   ]);
@@ -166,6 +182,8 @@ test("setRiskConfig persists all remaining override fields", async () => {
   assert.equal(config.defaultPositionSize, 125);
   assert.equal(config.defaultLeverage, 7);
   assert.equal(config.maxPositions, 9);
+  assert.equal(config.autoRaiseMinOrderEnabled, true);
+  assert.equal(config.autoRaiseMinOrderMaxMarginUsdt, 6);
 });
 
 test("resolveEffectiveRiskConfig merges global, account, and channel overrides", async () => {
@@ -180,6 +198,8 @@ test("resolveEffectiveRiskConfig merges global, account, and channel overrides",
         defaultPositionSize: 50,
         defaultLeverage: 10,
         maxPositions: 5,
+        autoRaiseMinOrderEnabled: false,
+        autoRaiseMinOrderMaxMarginUsdt: 0,
       }),
     }),
   });
@@ -191,6 +211,7 @@ test("resolveEffectiveRiskConfig merges global, account, and channel overrides",
           riskOverrides: {
             riskPerTradePercent: 2,
             skipNoSL: false,
+            autoRaiseMinOrderEnabled: false,
             bad: "ignored",
           },
           channelConfigs: {
@@ -198,6 +219,8 @@ test("resolveEffectiveRiskConfig merges global, account, and channel overrides",
               riskOverrides: {
                 defaultLeverage: 15,
                 maxPositions: 2,
+                autoRaiseMinOrderEnabled: true,
+                autoRaiseMinOrderMaxMarginUsdt: 4.2,
               },
             },
           },
@@ -215,9 +238,13 @@ test("resolveEffectiveRiskConfig merges global, account, and channel overrides",
   assert.equal(merged.skipNoSL, false);
   assert.equal(merged.defaultLeverage, 15);
   assert.equal(merged.maxPositions, 2);
+  assert.equal(merged.autoRaiseMinOrderEnabled, true);
+  assert.equal(merged.autoRaiseMinOrderMaxMarginUsdt, 4.2);
   assert.equal(merged.sources.riskPerTradePercent, "account");
   assert.equal(merged.sources.defaultLeverage, "source_chat");
   assert.equal(merged.sources.maxPositions, "source_chat");
+  assert.equal(merged.sources.autoRaiseMinOrderEnabled, "source_chat");
+  assert.equal(merged.sources.autoRaiseMinOrderMaxMarginUsdt, "source_chat");
 });
 
 test("resolveEffectiveRiskConfig returns global config when no accountId is provided", async () => {
@@ -232,6 +259,8 @@ test("resolveEffectiveRiskConfig returns global config when no accountId is prov
         defaultPositionSize: 80,
         defaultLeverage: 5,
         maxPositions: 1,
+        autoRaiseMinOrderEnabled: true,
+        autoRaiseMinOrderMaxMarginUsdt: 8,
       }),
     }),
   });
@@ -254,6 +283,8 @@ test("resolveEffectiveRiskConfig handles map-based channel configs and empty cha
         defaultPositionSize: 50,
         defaultLeverage: 10,
         maxPositions: 5,
+        autoRaiseMinOrderEnabled: true,
+        autoRaiseMinOrderMaxMarginUsdt: 9,
       }),
     }),
   });
@@ -265,6 +296,7 @@ test("resolveEffectiveRiskConfig handles map-based channel configs and empty cha
           riskOverrides: {
             riskPerTradePercent: Number.NaN,
             skipNoSL: false,
+            autoRaiseMinOrderEnabled: false,
           },
           channelConfigs: new Map([
             [
@@ -274,6 +306,8 @@ test("resolveEffectiveRiskConfig handles map-based channel configs and empty cha
                   defaultLeverage: 12,
                   maxPositions: 1,
                   skipNoSL: true,
+                  autoRaiseMinOrderEnabled: true,
+                  autoRaiseMinOrderMaxMarginUsdt: 1.75,
                 },
               },
             ],
@@ -290,6 +324,8 @@ test("resolveEffectiveRiskConfig handles map-based channel configs and empty cha
   assert.equal(withMap.skipNoSL, true);
   assert.equal(withMap.defaultLeverage, 12);
   assert.equal(withMap.maxPositions, 1);
+  assert.equal(withMap.autoRaiseMinOrderEnabled, true);
+  assert.equal(withMap.autoRaiseMinOrderMaxMarginUsdt, 1.75);
   assert.equal(withMap.sources.skipNoSL, "source_chat");
 
   const emptyChannel = await resolveEffectiveRiskConfig({
@@ -298,6 +334,7 @@ test("resolveEffectiveRiskConfig handles map-based channel configs and empty cha
   });
   assert.equal(emptyChannel.skipNoSL, false);
   assert.equal(emptyChannel.defaultLeverage, 10);
+  assert.equal(emptyChannel.autoRaiseMinOrderEnabled, false);
   assert.equal(emptyChannel.sources.skipNoSL, "account");
 
   const missingChannel = await resolveEffectiveRiskConfig({
@@ -305,6 +342,7 @@ test("resolveEffectiveRiskConfig handles map-based channel configs and empty cha
   });
   assert.equal(missingChannel.skipNoSL, false);
   assert.equal(missingChannel.defaultLeverage, 10);
+  assert.equal(missingChannel.autoRaiseMinOrderEnabled, false);
 });
 
 test("calculateRiskBasedPosition handles invalid balances and missing stop losses", async () => {

@@ -198,6 +198,8 @@ export interface InstrumentSpecs {
   lotSz: number;
   /** Minimum order size in contracts */
   minSz: number;
+  /** Minimum notional/order value in quote currency when provided by exchange */
+  minNotional?: number;
   /** Contract value currency (e.g., "BTC") */
   ctValCcy: string;
   /** Price tick size (e.g., 0.1 for BTC-USDT-SWAP) */

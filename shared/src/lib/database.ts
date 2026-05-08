@@ -244,6 +244,8 @@ export interface IAccount extends Document {
     defaultPositionSize?: number;
     defaultLeverage?: number;
     maxPositions?: number;
+    autoRaiseMinOrderEnabled?: boolean;
+    autoRaiseMinOrderMaxMarginUsdt?: number;
     [key: string]: unknown;
   };
   /** Per-channel risk overrides keyed by channelId */
@@ -259,6 +261,8 @@ export interface IAccount extends Document {
         defaultPositionSize?: number;
         defaultLeverage?: number;
         maxPositions?: number;
+        autoRaiseMinOrderEnabled?: boolean;
+        autoRaiseMinOrderMaxMarginUsdt?: number;
         [key: string]: unknown;
       };
       [key: string]: unknown;
@@ -287,6 +291,8 @@ export interface IRiskSettings extends Document {
   defaultPositionSize: number; // default 50 (USDT) — fallback position size when signal has no size
   defaultLeverage: number; // default 10 — fallback leverage when signal has no leverage
   maxPositions: number; // default 5 — max concurrent open positions (0 = unlimited)
+  autoRaiseMinOrderEnabled: boolean; // default false — do not auto-raise unless explicitly enabled
+  autoRaiseMinOrderMaxMarginUsdt: number; // default 0 — no auto-raise budget
   updatedAt: Date;
 }
 
@@ -560,6 +566,8 @@ const RiskSettingsSchema = new Schema<IRiskSettings>(
     defaultPositionSize: { type: Number, default: 50, min: 1 },
     defaultLeverage: { type: Number, default: 10, min: 1, max: 125 },
     maxPositions: { type: Number, default: 5, min: 0 },
+    autoRaiseMinOrderEnabled: { type: Boolean, default: false },
+    autoRaiseMinOrderMaxMarginUsdt: { type: Number, default: 0, min: 0 },
   },
   { timestamps: { createdAt: false, updatedAt: true } },
 );

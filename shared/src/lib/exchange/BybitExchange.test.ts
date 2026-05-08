@@ -425,7 +425,11 @@ test("Bybit getInstrumentSpecs caches normalized instrument metadata", async () 
           symbol: "BTCUSDT",
           baseCoin: "BTC",
           priceFilter: { tickSize: "0.10" },
-          lotSizeFilter: { qtyStep: "0.001", minOrderQty: "0.010" },
+          lotSizeFilter: {
+            qtyStep: "0.001",
+            minOrderQty: "0.010",
+            minNotionalValue: "5",
+          },
         },
       ],
     };
@@ -439,6 +443,7 @@ test("Bybit getInstrumentSpecs caches normalized instrument metadata", async () 
     ctVal: 1,
     lotSz: 0.001,
     minSz: 0.01,
+    minNotional: 5,
     ctValCcy: "BTC",
     tickSz: 0.1,
     qtyDecimals: 3,
@@ -1339,6 +1344,7 @@ test("Bybit cancelAlgoOrders skips positions without TP/SL and getInstrumentSpec
         lotSizeFilter: {
           qtyStep: "0.01",
           minOrderQty: "0.05",
+          minNotionalValue: "5",
         },
         priceFilter: {
           tickSize: "0.1",
@@ -1356,6 +1362,7 @@ test("Bybit cancelAlgoOrders skips positions without TP/SL and getInstrumentSpec
     ctVal: 1,
     lotSz: 0.01,
     minSz: 0.05,
+    minNotional: 5,
     ctValCcy: "ETH",
     tickSz: 0.1,
     qtyDecimals: 2,
