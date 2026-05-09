@@ -207,37 +207,45 @@ function resolveProviderConfig(provider?: string) {
     .toLowerCase()
     .trim();
 
+  const normalized =
+    selectedProvider === "codex" ? "patungin" : selectedProvider;
+
   const rawApiKey =
-    selectedProvider === "kimi"
+    normalized === "kimi"
       ? process.env.ANTHROPIC_API_KEY
-      : selectedProvider === "openai"
+      : normalized === "openai"
         ? process.env.OPENAI_API_KEY
-        : selectedProvider === "codex" || selectedProvider === "patungin"
+        : normalized === "patungin"
           ? codexPatunginCfg.apiKey
-          : process.env.GLM_API_KEY;
+          : normalized === "konektika"
+            ? process.env.KONEKTIKA_API_KEY
+            : process.env.GLM_API_KEY;
 
   const baseURL =
-    selectedProvider === "kimi"
+    normalized === "kimi"
       ? process.env.ANTHROPIC_BASE_URL || "https://api.kimi.com/coding/"
-      : selectedProvider === "openai"
+      : normalized === "openai"
         ? process.env.OPENAI_BASE_URL || "https://api.openai.com/v1"
-        : selectedProvider === "codex" || selectedProvider === "patungin"
+        : normalized === "patungin"
           ? codexPatunginCfg.baseURL
-          : process.env.GLM_BASE_URL || "https://api.z.ai/api/coding/paas/v4";
+          : normalized === "konektika"
+            ? process.env.KONEKTIKA_BASE_URL ||
+              "https://konektikacloud.web.id/v1"
+            : process.env.GLM_BASE_URL || "https://api.z.ai/api/coding/paas/v4";
 
   const model =
-    selectedProvider === "kimi"
+    normalized === "kimi"
       ? process.env.ANTHROPIC_MODEL || "kimi-latest"
-      : selectedProvider === "openai"
+      : normalized === "openai"
         ? process.env.OPENAI_MODEL || "gpt-4o-mini"
-        : selectedProvider === "codex" || selectedProvider === "patungin"
+        : normalized === "patungin"
           ? codexPatunginCfg.model
-          : process.env.GLM_MODEL || "glm-4-flash";
+          : normalized === "konektika"
+            ? process.env.KONEKTIKA_MODEL || "konektika-pro"
+            : process.env.GLM_MODEL || "glm-4-flash";
 
   const providerHeaders =
-    selectedProvider === "codex" || selectedProvider === "patungin"
-      ? codexPatunginCfg.headers
-      : undefined;
+    normalized === "patungin" ? codexPatunginCfg.headers : undefined;
 
   const apiKeys = (rawApiKey || "")
     .split(",")
@@ -245,13 +253,48 @@ function resolveProviderConfig(provider?: string) {
     .filter(Boolean);
 
   return {
-    selectedProvider,
+    selectedProvider: normalized,
     baseURL,
     model,
     providerHeaders,
     apiKeys,
-    contextLimits: getContextLimits(selectedProvider),
+    contextLimits: getContextLimits(normalized),
   };
+}
+
+function parseAgentFallbackProviders(primary: string): string[] {
+  const raw = process.env.AI_PROVIDER_FALLBACK;
+  if (!raw || !raw.trim()) return [];
+  const valid = new Set([
+    "glm",
+    "kimi",
+    "openai",
+    "codex",
+    "patungin",
+    "konektika",
+  ]);
+  const normalizedPrimary = primary === "codex" ? "patungin" : primary;
+  return raw
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter((p) => valid.has(p))
+    .map((p) => (p === "codex" ? "patungin" : p))
+    .filter((p) => p !== normalizedPrimary);
+}
+
+function buildAgentProviderChain(provider?: string): string[] {
+  const config = resolveProviderConfig(provider);
+  const primary = config.selectedProvider;
+  const fallbacks = parseAgentFallbackProviders(primary);
+  const seen = new Set<string>([primary]);
+  const chain = [primary];
+  for (const fb of fallbacks) {
+    if (!seen.has(fb)) {
+      seen.add(fb);
+      chain.push(fb);
+    }
+  }
+  return chain;
 }
 
 async function* streamAssistantResponse(input: {
@@ -268,119 +311,127 @@ async function* streamAssistantResponse(input: {
       toolCalls: PendingToolCall[];
     }
 > {
-  const config = resolveProviderConfig(input.provider);
-  if (config.apiKeys.length === 0) {
-    throw new Error(
-      "No valid API keys configured for the selected AI provider.",
-    );
-  }
+  const chain = buildAgentProviderChain(input.provider);
+  let lastError: Error | null = null;
 
-  let currentKeyIndex = 0;
+  for (const currentProvider of chain) {
+    const config = resolveProviderConfig(currentProvider);
+    if (config.apiKeys.length === 0) continue;
 
-  while (currentKeyIndex < config.apiKeys.length) {
-    throwIfAborted(input.signal);
+    let currentKeyIndex = 0;
 
-    const client = new OpenAI({
-      apiKey: config.apiKeys[currentKeyIndex],
-      baseURL: config.baseURL,
-      ...(config.providerHeaders &&
-      Object.keys(config.providerHeaders).length > 0
-        ? { defaultHeaders: config.providerHeaders }
-        : {}),
-    });
+    while (currentKeyIndex < config.apiKeys.length) {
+      throwIfAborted(input.signal);
 
-    try {
-      const stream = await client.chat.completions.create(
-        {
-          model: config.model,
-          messages: input.messages,
-          tools: agentTools,
-          tool_choice: "auto",
-          temperature: 0.3,
-          max_tokens: 2048,
-          stream: true,
-        },
-        {
-          signal: input.signal,
-        },
-      );
+      const client = new OpenAI({
+        apiKey: config.apiKeys[currentKeyIndex],
+        baseURL: config.baseURL,
+        ...(config.providerHeaders &&
+        Object.keys(config.providerHeaders).length > 0
+          ? { defaultHeaders: config.providerHeaders }
+          : {}),
+      });
 
-      let assistantContent = "";
-      const toolCalls = new Map<number, PendingToolCall>();
+      try {
+        const stream = await client.chat.completions.create(
+          {
+            model: config.model,
+            messages: input.messages,
+            tools: agentTools,
+            tool_choice: "auto",
+            temperature: 0.3,
+            max_tokens: 2048,
+            stream: true,
+          },
+          {
+            signal: input.signal,
+          },
+        );
 
-      for await (const chunk of stream) {
-        throwIfAborted(input.signal);
+        let assistantContent = "";
+        const toolCalls = new Map<number, PendingToolCall>();
 
-        const delta = chunk.choices[0]?.delta;
-        if (!delta) continue;
+        for await (const chunk of stream) {
+          throwIfAborted(input.signal);
 
-        if (typeof delta.content === "string" && delta.content.length > 0) {
-          assistantContent += delta.content;
-          yield {
-            type: "token",
-            token: delta.content,
-          };
-        }
+          const delta = chunk.choices[0]?.delta;
+          if (!delta) continue;
 
-        if (Array.isArray(delta.tool_calls)) {
-          for (const toolCallDelta of delta.tool_calls) {
-            const index = toolCallDelta.index ?? 0;
-            const existing = toolCalls.get(index) || {
-              id: "",
-              name: "",
-              arguments: "",
+          if (typeof delta.content === "string" && delta.content.length > 0) {
+            assistantContent += delta.content;
+            yield {
+              type: "token",
+              token: delta.content,
             };
+          }
 
-            if (toolCallDelta.id) {
-              existing.id = toolCallDelta.id;
+          if (Array.isArray(delta.tool_calls)) {
+            for (const toolCallDelta of delta.tool_calls) {
+              const index = toolCallDelta.index ?? 0;
+              const existing = toolCalls.get(index) || {
+                id: "",
+                name: "",
+                arguments: "",
+              };
+
+              if (toolCallDelta.id) {
+                existing.id = toolCallDelta.id;
+              }
+
+              if (toolCallDelta.function?.name) {
+                existing.name += toolCallDelta.function.name;
+              }
+
+              if (toolCallDelta.function?.arguments) {
+                existing.arguments += toolCallDelta.function.arguments;
+              }
+
+              toolCalls.set(index, existing);
             }
-
-            if (toolCallDelta.function?.name) {
-              existing.name += toolCallDelta.function.name;
-            }
-
-            if (toolCallDelta.function?.arguments) {
-              existing.arguments += toolCallDelta.function.arguments;
-            }
-
-            toolCalls.set(index, existing);
           }
         }
+
+        yield {
+          type: "complete",
+          provider: config.selectedProvider,
+          model: config.model,
+          content: assistantContent,
+          toolCalls: Array.from(toolCalls.entries())
+            .sort(([left], [right]) => left - right)
+            .map(([, value]) => value),
+        };
+        return;
+      } catch (error) {
+        if (isAbortError(error)) {
+          throw error;
+        }
+
+        lastError = error as Error;
+        const message = getErrorMessage(error).toLowerCase();
+        const retryable =
+          message.includes("401") ||
+          message.includes("403") ||
+          message.includes("429") ||
+          message.includes("token expired") ||
+          message.includes("invalid") ||
+          message.includes("balance") ||
+          message.includes("rate limit");
+
+        if (!retryable || currentKeyIndex === config.apiKeys.length - 1) {
+          console.warn(
+            `[AgentLoop] Provider ${currentProvider} failed (key ${currentKeyIndex + 1}/${config.apiKeys.length}): ${getErrorMessage(error).substring(0, 120)}`,
+          );
+          break;
+        }
+
+        currentKeyIndex += 1;
       }
-
-      yield {
-        type: "complete",
-        provider: config.selectedProvider,
-        model: config.model,
-        content: assistantContent,
-        toolCalls: Array.from(toolCalls.entries())
-          .sort(([left], [right]) => left - right)
-          .map(([, value]) => value),
-      };
-      return;
-    } catch (error) {
-      if (isAbortError(error)) {
-        throw error;
-      }
-
-      const message = getErrorMessage(error).toLowerCase();
-      const retryable =
-        message.includes("401") ||
-        message.includes("403") ||
-        message.includes("429") ||
-        message.includes("token expired") ||
-        message.includes("invalid") ||
-        message.includes("balance");
-
-      if (!retryable || currentKeyIndex === config.apiKeys.length - 1) {
-        throw error;
-      }
-
-      currentKeyIndex += 1;
     }
   }
 
-  throw new Error("No response from AI provider.");
+  throw new Error(
+    `All AI providers failed for agent loop. Last error: ${lastError?.message || "Unknown error"}`,
+  );
 }
 
 function parseToolArgs(input: string): Record<string, unknown> {

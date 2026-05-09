@@ -102,6 +102,7 @@ function streamFromDeltas(
 beforeEach(() => {
   process.env.GLM_API_KEY = "glm-key";
   delete process.env.AI_PROVIDER;
+  delete process.env.AI_PROVIDER_FALLBACK;
 
   loopMocks.openaiCreate.mockReset();
   loopMocks.providerClients.length = 0;
@@ -644,10 +645,7 @@ test("runAgentLoopStreaming reports missing provider keys and uses kimi provider
     }
 
     assert.equal(noKeyEvents.at(-1)?.type, "error");
-    assert.match(
-      String(noKeyEvents.at(-1)?.error),
-      /No valid API keys configured for the selected AI provider/,
-    );
+    assert.match(String(noKeyEvents.at(-1)?.error), /All AI providers failed/);
   } finally {
     process.env.GLM_API_KEY = originalKey;
   }
