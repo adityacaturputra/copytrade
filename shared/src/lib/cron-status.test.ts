@@ -41,6 +41,7 @@ test("cron-status initializes default entries and returns defensive copies", () 
     "signal-check",
     "position-monitor",
     "tp-sl-monitor",
+    "orphan-cleanup",
   ]);
 });
 

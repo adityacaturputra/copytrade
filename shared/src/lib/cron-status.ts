@@ -46,6 +46,7 @@ export function getAllCronStatus(): Record<string, CronRunStatus> {
     "signal-check": getCronStatus("signal-check"),
     "position-monitor": getCronStatus("position-monitor"),
     "tp-sl-monitor": getCronStatus("tp-sl-monitor"),
+    "orphan-cleanup": getCronStatus("orphan-cleanup"),
   };
 }
 

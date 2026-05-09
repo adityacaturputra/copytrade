@@ -349,6 +349,38 @@ async function runOrphanCleanupWork() {
 
     updateProgress(
       ORPHAN_CLEANUP_NAME,
+      `Checked ${result.accountsChecked} account(s) and ${result.algoOrdersChecked} algo order(s)`,
+      "info",
+    );
+
+    if (result.symbolsCleaned.length > 0) {
+      updateProgress(
+        ORPHAN_CLEANUP_NAME,
+        `Cleaned orphan protection on: ${result.symbolsCleaned.join(", ")}`,
+        "success",
+      );
+    } else {
+      updateProgress(
+        ORPHAN_CLEANUP_NAME,
+        `No orphan protection orders found across ${result.accountsChecked} account(s)`,
+        "info",
+      );
+    }
+
+    if (result.cancelledOrderIds.length > 0) {
+      updateProgress(
+        ORPHAN_CLEANUP_NAME,
+        `Cancelled order IDs: ${result.cancelledOrderIds.join(", ")}`,
+        "success",
+      );
+    }
+
+    for (const error of result.errors) {
+      updateProgress(ORPHAN_CLEANUP_NAME, error, "warning");
+    }
+
+    updateProgress(
+      ORPHAN_CLEANUP_NAME,
       `Done — accounts: ${result.accountsChecked}, checked: ${result.algoOrdersChecked}, cancelled: ${result.orphansCancelled}${result.symbolsCleaned.length ? `, symbols: ${result.symbolsCleaned.join(", ")}` : ""}`,
       result.errors.length > 0 ? "warning" : "success",
     );
