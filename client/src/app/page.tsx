@@ -3378,7 +3378,7 @@ function PositionsTab({
   const [loading, setLoading] = useState(true);
   const [positionFilter, setPositionFilter] = useState<
     "open" | "closed" | "pending"
-  >("open");
+  >("closed");
   const [statusCounts, setStatusCounts] = useState<{
     open: number;
     closed: number;
@@ -3389,6 +3389,42 @@ function PositionsTab({
     pending: 0,
   });
   const [expandedPosId, setExpandedPosId] = useState<string | null>(null);
+  const expandedLogsRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll to expanded logs panel when opened, scroll back to row when closed
+  useEffect(() => {
+    if (expandedPosId) {
+      // Small delay to let React render the logs panel
+      const timer = setTimeout(() => {
+        expandedLogsRef.current?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+      }, 100);
+      return () => clearTimeout(timer);
+    } else {
+      // Scroll back to the position row (if any was previously expanded)
+      // We rely on the browser's native scroll-restoration for the row
+    }
+  }, [expandedPosId]);
+
+  const handleToggleExpand = useCallback(
+    (posId: string) => {
+      if (expandedPosId === posId) {
+        // Closing — scroll back to the row first, then close
+        const row = document.getElementById(`pos-row-${posId}`);
+        if (row) {
+          row.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+        // Small delay so scroll starts before the panel disappears
+        setTimeout(() => setExpandedPosId(null), 150);
+      } else {
+        // Opening — just set the id, useEffect handles scroll
+        setExpandedPosId(posId);
+      }
+    },
+    [expandedPosId],
+  );
 
   const fetchStatusCounts = useCallback(async () => {
     try {
@@ -3804,161 +3840,192 @@ function PositionsTab({
                   const closedAtParts = getCompactDateTimeParts(pos.closedAt);
 
                   return (
-                    <Fragment key={`desktop-${pos._id || pos.id}`}>
-                      <tr
-                        className={
-                          positionFilter === "pending"
-                            ? "opacity-80 border-b border-slate-700/50"
-                            : "border-b border-slate-700/50"
-                        }
-                      >
-                        <td className="font-medium">{pos.symbol}</td>
-                        <td>
-                          <span
-                            className={`badge ${pos.side === "LONG" ? "badge-success" : "badge-danger"}`}
-                          >
-                            {pos.side}
-                          </span>
-                        </td>
-                        <td className="text-slate-300">
-                          <HoverTapTooltip
-                            wrapperClassName="max-w-[120px]"
-                            triggerClassName="block truncate"
-                            tooltipClassName="left-0 min-w-[160px] max-w-[280px]"
-                            trigger={
-                              <span className="block truncate">
-                                {sourceLabel}
-                              </span>
-                            }
-                            content={sourceLabel}
-                          />
-                        </td>
-                        <td className="whitespace-nowrap">
-                          {pos.entryPrice?.toFixed(4)}
-                        </td>
-                        {positionFilter === "open" && (
-                          <td className="whitespace-nowrap">
-                            {displayCurrentPrice?.toFixed(4) || "-"}
-                          </td>
-                        )}
-                        <td>
-                          <span className="badge badge-neutral">
-                            {formatMarginMode(displayMarginType)}
-                          </span>
-                        </td>
-                        <td className="font-mono whitespace-nowrap">
-                          {formatUsd(estimatedMargin, {
-                            estimated:
-                              positionFilter === "pending" &&
-                              displayPosition.margin == null,
-                          })}
-                        </td>
-                        <td
-                          className={`font-mono whitespace-nowrap ${pnlClass}`}
+                    <tr
+                      id={`pos-row-${pos._id || pos.id}`}
+                      key={`desktop-${pos._id || pos.id}`}
+                      className={
+                        positionFilter === "pending"
+                          ? "opacity-80 border-b border-slate-700/50"
+                          : "border-b border-slate-700/50"
+                      }
+                    >
+                      <td className="font-medium">{pos.symbol}</td>
+                      <td>
+                        <span
+                          className={`badge ${pos.side === "LONG" ? "badge-success" : "badge-danger"}`}
                         >
-                          <span className="inline-flex items-center gap-1">
-                            {positionFilter === "pending" ||
-                            pnlUsdDisplay.value === null
-                              ? "-"
-                              : `${pnlUsdDisplay.value >= 0 ? "+" : ""}${formatUsd(pnlUsdDisplay.value, { estimated: pnlUsdDisplay.estimated })}`}
-                          </span>
-                          {positionFilter === "open" && pnlPercent !== null && (
-                            <span className="text-[10px] opacity-80 whitespace-nowrap">
-                              ({pnlPercent >= 0 ? "+" : ""}
-                              {pnlPercent.toFixed(2)}%)
+                          {pos.side}
+                        </span>
+                      </td>
+                      <td className="text-slate-300">
+                        <HoverTapTooltip
+                          wrapperClassName="max-w-[120px]"
+                          triggerClassName="block truncate"
+                          tooltipClassName="left-0 min-w-[160px] max-w-[280px]"
+                          trigger={
+                            <span className="block truncate">
+                              {sourceLabel}
                             </span>
+                          }
+                          content={sourceLabel}
+                        />
+                      </td>
+                      <td className="whitespace-nowrap">
+                        {pos.entryPrice?.toFixed(4)}
+                      </td>
+                      {positionFilter === "open" && (
+                        <td className="whitespace-nowrap">
+                          {displayCurrentPrice?.toFixed(4) || "-"}
+                        </td>
+                      )}
+                      <td>
+                        <span className="badge badge-neutral">
+                          {formatMarginMode(displayMarginType)}
+                        </span>
+                      </td>
+                      <td className="font-mono whitespace-nowrap">
+                        {formatUsd(estimatedMargin, {
+                          estimated:
+                            positionFilter === "pending" &&
+                            displayPosition.margin == null,
+                        })}
+                      </td>
+                      <td className={`font-mono whitespace-nowrap ${pnlClass}`}>
+                        <span className="inline-flex items-center gap-1">
+                          {positionFilter === "pending" ||
+                          pnlUsdDisplay.value === null
+                            ? "-"
+                            : `${pnlUsdDisplay.value >= 0 ? "+" : ""}${formatUsd(pnlUsdDisplay.value, { estimated: pnlUsdDisplay.estimated })}`}
+                        </span>
+                        {positionFilter === "open" && pnlPercent !== null && (
+                          <span className="text-[10px] opacity-80 whitespace-nowrap">
+                            ({pnlPercent >= 0 ? "+" : ""}
+                            {pnlPercent.toFixed(2)}%)
+                          </span>
+                        )}
+                      </td>
+                      {positionFilter === "closed" && (
+                        <td className="text-xs text-slate-400 min-w-0 max-w-[12rem]">
+                          {pos.closeReason ? (
+                            <HoverTapTooltip
+                              wrapperClassName="block max-w-full w-full"
+                              triggerClassName="block w-full text-left"
+                              tooltipClassName="left-0 min-w-[220px] max-w-[360px]"
+                              trigger={
+                                <span className="block w-full truncate text-slate-400">
+                                  {pos.closeReason}
+                                </span>
+                              }
+                              content={pos.closeReason}
+                            />
+                          ) : (
+                            "-"
                           )}
                         </td>
-                        {positionFilter === "closed" && (
-                          <td className="text-xs text-slate-400 min-w-0 max-w-[12rem]">
-                            {pos.closeReason ? (
-                              <HoverTapTooltip
-                                wrapperClassName="block max-w-full w-full"
-                                triggerClassName="block w-full text-left"
-                                tooltipClassName="left-0 min-w-[220px] max-w-[360px]"
-                                trigger={
-                                  <span className="block w-full truncate text-slate-400">
-                                    {pos.closeReason}
-                                  </span>
-                                }
-                                content={pos.closeReason}
-                              />
-                            ) : (
-                              "-"
-                            )}
-                          </td>
-                        )}
-                        {positionFilter === "pending" && (
-                          <td>
-                            <span className="inline-flex items-center gap-1 badge badge-warning">
-                              <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" />
-                              Pending
-                            </span>
-                          </td>
-                        )}
-                        <td className="text-[10px] text-slate-400 leading-tight whitespace-nowrap">
-                          <div>{openedAtParts.date}</div>
-                          <div className="text-slate-500">
-                            {openedAtParts.time}
-                          </div>
-                        </td>
-                        {positionFilter === "closed" && (
-                          <td className="text-[10px] text-slate-400 leading-tight whitespace-nowrap">
-                            {pos.closedAt ? (
-                              <>
-                                <div>{closedAtParts.date}</div>
-                                <div className="text-slate-500">
-                                  {closedAtParts.time}
-                                </div>
-                              </>
-                            ) : (
-                              "-"
-                            )}
-                          </td>
-                        )}
-                        <td className="text-right">
-                          <button
-                            onClick={() =>
-                              setExpandedPosId(
-                                expandedPosId === (pos._id || String(pos.id))
-                                  ? null
-                                  : pos._id || String(pos.id),
-                              )
-                            }
-                            className={`text-[10px] px-2 py-1 rounded transition-colors ${
-                              expandedPosId === (pos._id || String(pos.id))
-                                ? "bg-slate-700 text-white"
-                                : "bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200"
-                            }`}
-                          >
-                            {expandedPosId === (pos._id || String(pos.id))
-                              ? "▼ Hide"
-                              : "▶ Logs"}
-                          </button>
-                        </td>
-                      </tr>
-                      {expandedPosId === (pos._id || String(pos.id)) && (
-                        <tr>
-                          <td
-                            colSpan={100}
-                            className="p-0 border-none bg-slate-900/10 whitespace-normal"
-                          >
-                            <div className="px-4 py-2 w-full min-w-0 overflow-hidden">
-                              <ProcessLogsAccordion
-                                processId={pos.processId}
-                                refreshKey={refreshKey}
-                                hideHeader={true}
-                                defaultOpen={true}
-                              />
-                            </div>
-                          </td>
-                        </tr>
                       )}
-                    </Fragment>
+                      {positionFilter === "pending" && (
+                        <td>
+                          <span className="inline-flex items-center gap-1 badge badge-warning">
+                            <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" />
+                            Pending
+                          </span>
+                        </td>
+                      )}
+                      <td className="text-[10px] text-slate-400 leading-tight whitespace-nowrap">
+                        <div>{openedAtParts.date}</div>
+                        <div className="text-slate-500">
+                          {openedAtParts.time}
+                        </div>
+                      </td>
+                      {positionFilter === "closed" && (
+                        <td className="text-[10px] text-slate-400 leading-tight whitespace-nowrap">
+                          {pos.closedAt ? (
+                            <>
+                              <div>{closedAtParts.date}</div>
+                              <div className="text-slate-500">
+                                {closedAtParts.time}
+                              </div>
+                            </>
+                          ) : (
+                            "-"
+                          )}
+                        </td>
+                      )}
+                      <td className="text-right">
+                        <button
+                          onClick={() =>
+                            handleToggleExpand(pos._id || String(pos.id))
+                          }
+                          className={`text-[10px] px-2 py-1 rounded transition-colors ${
+                            expandedPosId === (pos._id || String(pos.id))
+                              ? "bg-slate-700 text-white"
+                              : "bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200"
+                          }`}
+                        >
+                          {expandedPosId === (pos._id || String(pos.id))
+                            ? "▼ Hide"
+                            : "▶ Logs"}
+                        </button>
+                      </td>
+                    </tr>
                   );
                 })}
               </tbody>
             </table>
+
+            {/* Expanded Logs — rendered outside the table to avoid table-layout constraints */}
+            {expandedPosId && (
+              <div
+                ref={expandedLogsRef}
+                className="mt-4 rounded-lg border border-slate-700/70 bg-slate-900/30 p-4"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-slate-200">
+                      📋 Process Logs
+                    </span>
+                    {(() => {
+                      const expandedPos = positions.find(
+                        (p) => (p._id || String(p.id)) === expandedPosId,
+                      );
+                      return expandedPos ? (
+                        <>
+                          <span className="badge badge-neutral">
+                            {expandedPos.symbol}
+                          </span>
+                          <span
+                            className={`badge ${expandedPos.side === "LONG" ? "badge-success" : "badge-danger"}`}
+                          >
+                            {expandedPos.side}
+                          </span>
+                          {expandedPos.processId && (
+                            <span className="truncate rounded bg-slate-800 px-2 py-0.5 font-mono text-[10px] text-slate-400">
+                              {expandedPos.processId}
+                            </span>
+                          )}
+                        </>
+                      ) : null;
+                    })()}
+                  </div>
+                  <button
+                    onClick={() => handleToggleExpand(expandedPosId)}
+                    className="text-xs text-slate-400 hover:text-white transition px-2 py-1 rounded bg-slate-800 hover:bg-slate-700"
+                  >
+                    ✕ Close
+                  </button>
+                </div>
+                <ProcessLogsAccordion
+                  processId={
+                    positions.find(
+                      (p) => (p._id || String(p.id)) === expandedPosId,
+                    )?.processId
+                  }
+                  refreshKey={refreshKey}
+                  hideHeader={true}
+                  defaultOpen={true}
+                />
+              </div>
+            )}
           </div>
         </>
       )}
