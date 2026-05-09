@@ -302,6 +302,7 @@ export interface ISignalConfig extends Document {
   batchSize: number; // default 5 — how many messages to send to AI per bulk request
   includeImageUrls: boolean; // default false — whether to include images in AI prompts
   visionAIEnabled: boolean; // default false — enable Gemini Vision pre-layer for image analysis
+  monitorVisionImages: boolean; // default false — inject Discord chart images into position monitor agent vision
   updatedAt: Date;
 }
 
@@ -321,12 +322,7 @@ export interface IAgentTurn extends Document {
   processId: string;
   role: "viewer" | "operator" | "admin";
   provider: string;
-  status:
-    | "running"
-    | "awaiting_approval"
-    | "completed"
-    | "failed"
-    | "aborted";
+  status: "running" | "awaiting_approval" | "completed" | "failed" | "aborted";
   userMessage: string;
   assistantResponse?: string;
   error?: string;
@@ -579,6 +575,7 @@ const SignalConfigSchema = new Schema<ISignalConfig>(
     batchSize: { type: Number, default: 5, min: 1, max: 50 },
     includeImageUrls: { type: Boolean, default: false },
     visionAIEnabled: { type: Boolean, default: false },
+    monitorVisionImages: { type: Boolean, default: false },
   },
   { timestamps: { createdAt: false, updatedAt: true } },
 );
@@ -618,13 +615,7 @@ const AgentTurnSchema = new Schema<IAgentTurn>(
     provider: { type: String, required: true },
     status: {
       type: String,
-      enum: [
-        "running",
-        "awaiting_approval",
-        "completed",
-        "failed",
-        "aborted",
-      ],
+      enum: ["running", "awaiting_approval", "completed", "failed", "aborted"],
       default: "running",
     },
     userMessage: { type: String, required: true },

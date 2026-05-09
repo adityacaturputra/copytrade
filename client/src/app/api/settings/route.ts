@@ -127,8 +127,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json(
           {
             success: false,
-            error:
-              "Auto-raise max margin must be between 0 and 1,000,000 USDT",
+            error: "Auto-raise max margin must be between 0 and 1,000,000 USDT",
           },
           { status: 400 },
         );
@@ -232,12 +231,14 @@ export async function POST(request: NextRequest) {
 
       const includeImageUrls = body.signal.includeImageUrls;
       const visionAIEnabled = body.signal.visionAIEnabled;
+      const monitorVisionImages = body.signal.monitorVisionImages;
       await setSignalConfig({
         ...(fetchLimit !== undefined && { fetchLimit }),
         ...(timeWindowHours !== undefined && { timeWindowHours }),
         ...(batchSize !== undefined && { batchSize }),
         ...(includeImageUrls !== undefined && { includeImageUrls }),
         ...(visionAIEnabled !== undefined && { visionAIEnabled }),
+        ...(monitorVisionImages !== undefined && { monitorVisionImages }),
       });
     }
 

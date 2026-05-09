@@ -13,6 +13,7 @@ import {
 } from "@copytrade/shared/lib/exchange/ExchangeFactory";
 import type { ExchangeClient } from "@copytrade/shared/lib/exchange/types";
 import { inspectPendingLimitOrder } from "@copytrade/shared/lib/pending-order-sync";
+import { getSignalConfig } from "@copytrade/shared/lib/signal-config";
 import {
   logExecutorError,
   logExecutorInfo,
@@ -248,6 +249,7 @@ async function runInternalPositionAgent(input: {
   systemPrompt: string;
   userPrompt: string;
   provider?: string;
+  visionImagesEnabled?: boolean;
 }): Promise<InternalAgentResult> {
   const messages: OpenAI.ChatCompletionMessageParam[] = [
     { role: "system", content: input.systemPrompt },
@@ -383,10 +385,11 @@ async function runInternalPositionAgent(input: {
           content: result,
         });
 
-        // Inject Discord images as vision content if provider supports it
+        // Inject Discord images as vision content if provider supports it and setting is enabled
         const imageUrls = extractImageUrlsFromToolResult(toolCall.name, result);
         if (
           imageUrls.length > 0 &&
+          input.visionImagesEnabled &&
           VISION_CAPABLE_PROVIDERS.has(usedProvider)
         ) {
           console.log(
@@ -781,7 +784,10 @@ async function cleanupOrphanProtectionForAccounts(
   }
 }
 
-async function runPositionAgentForDoc(position: PositionDocLike) {
+async function runPositionAgentForDoc(
+  position: PositionDocLike,
+  visionImagesEnabled: boolean,
+) {
   const processId = await ensurePersistedProcessId(position, "posagent");
 
   console.log(
@@ -806,6 +812,7 @@ async function runPositionAgentForDoc(position: PositionDocLike) {
     processId,
     systemPrompt: buildPositionMonitorSystemPrompt(),
     userPrompt: buildPositionMonitorUserPrompt(position, processId),
+    visionImagesEnabled,
   });
 
   try {
@@ -890,9 +897,16 @@ export async function runPositionMonitorAgent(): Promise<{
     })) as PositionDocLike[];
     await cleanupOrphanProtectionForAccounts(activePositions, result);
 
+    // Read DB settings for vision image support in position monitor
+    const signalCfg = await getSignalConfig();
+    const visionImagesEnabled = signalCfg.monitorVisionImages;
+
     for (const position of activePositions) {
       try {
-        const agentResult = await runPositionAgentForDoc(position);
+        const agentResult = await runPositionAgentForDoc(
+          position,
+          visionImagesEnabled,
+        );
         const mutatingActions = agentResult.toolTraces.filter(
           (trace) => trace.mode === "mutating" && trace.status === "executed",
         ).length;

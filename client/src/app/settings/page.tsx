@@ -308,6 +308,7 @@ export default function SettingsPage() {
     batchSize: 5,
     includeImageUrls: false,
     visionAIEnabled: false,
+    monitorVisionImages: false,
   });
   const [signalSaving, setSignalSaving] = useState(false);
   const [signalError, setSignalError] = useState<string | null>(null);
@@ -486,6 +487,7 @@ export default function SettingsPage() {
             batchSize: json.signal.batchSize || 5,
             includeImageUrls: json.signal.includeImageUrls || false,
             visionAIEnabled: json.signal.visionAIEnabled || false,
+            monitorVisionImages: json.signal.monitorVisionImages || false,
           });
       }
     } catch {
@@ -629,9 +631,10 @@ export default function SettingsPage() {
     const accountRiskPerTradePercent = parseOptionalPositiveNumber(
       form.accountRiskPerTradePercent,
     );
-    const accountAutoRaiseMinOrderMaxMarginUsdt = parseOptionalNonNegativeNumber(
-      form.accountAutoRaiseMinOrderMaxMarginUsdt,
-    );
+    const accountAutoRaiseMinOrderMaxMarginUsdt =
+      parseOptionalNonNegativeNumber(
+        form.accountAutoRaiseMinOrderMaxMarginUsdt,
+      );
     if (accountRiskPerTradePercent !== null) {
       accountRiskOverrides.riskPerTradePercent = accountRiskPerTradePercent;
     }
@@ -694,8 +697,7 @@ export default function SettingsPage() {
       }
 
       return (
-        channel.autoRaiseMinOrderMode === "enabled" &&
-        (!parsed || parsed <= 0)
+        channel.autoRaiseMinOrderMode === "enabled" && (!parsed || parsed <= 0)
       );
     });
     if (invalidChannelAutoRaise) {
@@ -849,7 +851,8 @@ export default function SettingsPage() {
           account.channelConfigs?.[cid]?.riskOverrides?.riskPerTradePercent,
         ),
         autoRaiseMinOrderMode: toAutoRaiseOverrideMode(
-          account.channelConfigs?.[cid]?.riskOverrides?.autoRaiseMinOrderEnabled,
+          account.channelConfigs?.[cid]?.riskOverrides
+            ?.autoRaiseMinOrderEnabled,
         ),
         autoRaiseMinOrderMaxMarginUsdt: formatOptionalNumber(
           account.channelConfigs?.[cid]?.riskOverrides
@@ -895,7 +898,8 @@ export default function SettingsPage() {
           account.channelConfigs?.[cid]?.riskOverrides?.riskPerTradePercent,
         ),
         autoRaiseMinOrderMode: toAutoRaiseOverrideMode(
-          account.channelConfigs?.[cid]?.riskOverrides?.autoRaiseMinOrderEnabled,
+          account.channelConfigs?.[cid]?.riskOverrides
+            ?.autoRaiseMinOrderEnabled,
         ),
         autoRaiseMinOrderMaxMarginUsdt: formatOptionalNumber(
           account.channelConfigs?.[cid]?.riskOverrides
@@ -1639,8 +1643,8 @@ export default function SettingsPage() {
                             onChange={(e) =>
                               setForm({
                                 ...form,
-                                accountAutoRaiseMinOrderMode:
-                                  e.target.value as AutoRaiseOverrideMode,
+                                accountAutoRaiseMinOrderMode: e.target
+                                  .value as AutoRaiseOverrideMode,
                               })
                             }
                             className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
@@ -1672,9 +1676,9 @@ export default function SettingsPage() {
                         </div>
                       </div>
                       <p className="text-xs text-slate-500 mt-2">
-                        Override account berlaku di atas global. Channel tertentu
-                        tetap bisa override lagi, termasuk saat account di-set
-                        disabled dan channel di-set enabled.
+                        Override account berlaku di atas global. Channel
+                        tertentu tetap bisa override lagi, termasuk saat account
+                        di-set disabled dan channel di-set enabled.
                       </p>
                     </div>
                     <div className="space-y-2">
@@ -1737,16 +1741,20 @@ export default function SettingsPage() {
                               const updated = [...form.channels];
                               updated[idx] = {
                                 ...updated[idx],
-                                autoRaiseMinOrderMode:
-                                  e.target.value as AutoRaiseOverrideMode,
+                                autoRaiseMinOrderMode: e.target
+                                  .value as AutoRaiseOverrideMode,
                               };
                               setForm({ ...form, channels: updated });
                             }}
                             className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
                           >
-                            <option value="inherit">Min auto-raise: inherit</option>
+                            <option value="inherit">
+                              Min auto-raise: inherit
+                            </option>
                             <option value="enabled">Min auto-raise: on</option>
-                            <option value="disabled">Min auto-raise: off</option>
+                            <option value="disabled">
+                              Min auto-raise: off
+                            </option>
                           </select>
                           <input
                             type="number"
@@ -2530,6 +2538,54 @@ export default function SettingsPage() {
                 className="mt-3 bg-primary-600 hover:bg-primary-700 disabled:opacity-50 px-4 py-2 rounded-lg text-sm font-medium transition"
               >
                 {signalSaving ? "Saving..." : "💾 Save Signal Config"}
+              </button>
+            </div>
+
+            {/* ─── Position Monitor Vision ──────────── */}
+            <div className="card">
+              <h2 className="text-lg font-semibold mb-4">
+                🤖 Position Monitor Vision
+              </h2>
+              <p className="text-xs text-slate-400 mb-4">
+                When enabled, Discord chart images from signal threads will be
+                injected into the position monitor agent for visual analysis.
+                This allows the AI to assess chart patterns, support/resistance
+                levels, and trend reversals when monitoring open positions.
+              </p>
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="monitorVisionImages"
+                  checked={signalCfg.monitorVisionImages}
+                  onChange={(e) =>
+                    setSignalCfg({
+                      ...signalCfg,
+                      monitorVisionImages: e.target.checked,
+                    })
+                  }
+                  className="rounded border-slate-600 bg-slate-800 text-primary-600 focus:ring-primary-500"
+                />
+                <label
+                  htmlFor="monitorVisionImages"
+                  className="text-sm text-slate-400"
+                >
+                  Enable Discord chart images in position monitor
+                </label>
+              </div>
+              {signalError && (
+                <p className="text-red-400 text-xs mt-2">⚠️ {signalError}</p>
+              )}
+              {signalSuccess && (
+                <p className="text-emerald-400 text-xs mt-2">
+                  ✅ Signal config saved
+                </p>
+              )}
+              <button
+                onClick={handleSignalSave}
+                disabled={signalSaving}
+                className="mt-3 bg-primary-600 hover:bg-primary-700 disabled:opacity-50 px-4 py-2 rounded-lg text-sm font-medium transition"
+              >
+                {signalSaving ? "Saving..." : "💾 Save Vision Setting"}
               </button>
             </div>
 

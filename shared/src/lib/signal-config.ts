@@ -8,6 +8,7 @@ export interface SignalConfigType {
   batchSize: number; // how many messages to send to AI per bulk request (default 5)
   includeImageUrls: boolean; // whether to include images in AI prompts (default false)
   visionAIEnabled: boolean; // enable Gemini Vision pre-layer for image-to-text (default false)
+  monitorVisionImages: boolean; // inject Discord chart images into position monitor agent vision (default false)
 }
 
 // ─── Defaults ─────────────────────────────────────────────────────────────────
@@ -18,6 +19,7 @@ const DEFAULT_SIGNAL_CONFIG: SignalConfigType = {
   batchSize: 5,
   includeImageUrls: false,
   visionAIEnabled: false,
+  monitorVisionImages: false,
 };
 
 // ─── DB Helpers ───────────────────────────────────────────────────────────────
@@ -35,6 +37,7 @@ export async function getSignalConfig(): Promise<SignalConfigType> {
         batchSize: settings.batchSize,
         includeImageUrls: settings.includeImageUrls ?? false,
         visionAIEnabled: settings.visionAIEnabled ?? false,
+        monitorVisionImages: settings.monitorVisionImages ?? false,
       };
     }
   } catch (err) {
@@ -66,6 +69,9 @@ export async function setSignalConfig(
   if (config.visionAIEnabled !== undefined) {
     update.visionAIEnabled = config.visionAIEnabled;
   }
+  if (config.monitorVisionImages !== undefined) {
+    update.monitorVisionImages = config.monitorVisionImages;
+  }
   const doc = await SignalConfigModel.findOneAndUpdate({}, update, {
     upsert: true,
     new: true,
@@ -76,5 +82,6 @@ export async function setSignalConfig(
     batchSize: doc.batchSize,
     includeImageUrls: doc.includeImageUrls ?? false,
     visionAIEnabled: doc.visionAIEnabled ?? false,
+    monitorVisionImages: doc.monitorVisionImages ?? false,
   };
 }
