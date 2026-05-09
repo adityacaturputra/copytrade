@@ -616,6 +616,7 @@ test("executeSignal prefers signal defaultRR over risk config when auto-calculat
 
 test("executeSignal closes positions or noops when none exist", async () => {
   const exchange = {
+    getTickerPrice: vi.fn().mockResolvedValue(101),
     closePosition: vi.fn().mockResolvedValue(undefined),
   };
   executorMocks.getClientForAccount.mockReturnValue(exchange);
@@ -657,11 +658,14 @@ test("executeSignal closes positions or noops when none exist", async () => {
     closedCount: 1,
   });
   assert.equal(closedDoc.status, "closed");
+  assert.equal(closedDoc.currentPrice, 101);
+  assert.equal(closedDoc.pnlUsd, 2);
   assert.equal(exchange.closePosition.mock.calls.length, 1);
 });
 
 test("executeSignal CLOSE falls back to paper exchange when account credentials are unavailable", async () => {
   const paperExchange = {
+    getTickerPrice: vi.fn().mockResolvedValue(99),
     closePosition: vi.fn().mockResolvedValue(undefined),
   };
   const closeDoc = createDoc({
@@ -690,6 +694,8 @@ test("executeSignal CLOSE falls back to paper exchange when account credentials 
   });
   assert.equal(paperExchange.closePosition.mock.calls.length, 1);
   assert.equal(closeDoc.status, "closed");
+  assert.equal(closeDoc.currentPrice, 99);
+  assert.equal(closeDoc.pnlUsd, -1.5);
 });
 
 test("executeSignal updates or noops position updates and handles add-tp flows", async () => {
@@ -1509,6 +1515,7 @@ test("runSignalCheck handles provider errors and auto-mode cancel signals that r
     accountId: "acc-2",
   });
   const exchange = {
+    getTickerPrice: vi.fn().mockResolvedValue(101),
     closePosition: vi.fn().mockResolvedValue(undefined),
   };
   executorMocks.getTradingMode.mockResolvedValue("auto");
@@ -1588,6 +1595,8 @@ test("runSignalCheck handles provider errors and auto-mode cancel signals that r
   assert.ok(cancelledDraft.resolvedAt instanceof Date);
   assert.equal(openPosition.status, "closed");
   assert.match(String(openPosition.closeReason), /Cancel request by Trader/);
+  assert.equal(openPosition.currentPrice, 101);
+  assert.equal(openPosition.pnlUsd, 3);
   assert.equal(exchange.closePosition.mock.calls.length, 1);
 });
 

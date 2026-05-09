@@ -30,6 +30,31 @@ interface AccountExchangeInfo {
   exchangeError: string | null;
 }
 
+function calculatePositionPnlUsd(
+  position: {
+    entryPrice: number;
+    quantity: number;
+    side: string;
+  },
+  currentPrice: number,
+): number | null {
+  if (
+    !Number.isFinite(position.entryPrice) ||
+    !Number.isFinite(position.quantity) ||
+    !Number.isFinite(currentPrice) ||
+    position.entryPrice <= 0 ||
+    position.quantity <= 0
+  ) {
+    return null;
+  }
+
+  const gross =
+    position.side === "LONG"
+      ? (currentPrice - position.entryPrice) * position.quantity
+      : (position.entryPrice - currentPrice) * position.quantity;
+  return Number(gross.toFixed(4));
+}
+
 export async function GET() {
   try {
     await connectDB();
@@ -156,6 +181,13 @@ export async function GET() {
                     status: "closed",
                     closedAt: new Date(),
                     closeReason: "Closed on Exchange (external)",
+                    pnlUsd:
+                      calculatePositionPnlUsd(
+                        pos,
+                        pos.currentPrice ?? Number.NaN,
+                      ) ??
+                      pos.pnlUsd ??
+                      null,
                   },
                 );
                 await createTradeLog({
@@ -189,7 +221,8 @@ export async function GET() {
               enrichedPositions.push({
                 ...pos,
                 currentPrice: exPos?.markPrice ?? pos.currentPrice ?? null,
-                pnl: exPos?.unrealizedPnl ?? pos.pnl ?? 0,
+                pnl: pos.pnl ?? 0,
+                pnlUsd: exPos?.unrealizedPnl ?? pos.pnlUsd ?? null,
                 entryPrice: exPos?.entryPrice ?? pos.entryPrice,
                 leverage: exPos?.leverage ?? pos.leverage,
                 quantity: exPos?.quantity ?? pos.quantity,

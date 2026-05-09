@@ -139,6 +139,47 @@ function formatUsd(value: number): string {
   return value.toFixed(2);
 }
 
+function calculatePositionPnlUsd(
+  position: Pick<IPosition, "entryPrice" | "quantity" | "side">,
+  exitPrice: number,
+): number | null {
+  if (
+    !Number.isFinite(position.entryPrice) ||
+    !Number.isFinite(position.quantity) ||
+    !Number.isFinite(exitPrice) ||
+    position.entryPrice <= 0 ||
+    position.quantity <= 0
+  ) {
+    return null;
+  }
+
+  const gross =
+    position.side === "LONG"
+      ? (exitPrice - position.entryPrice) * position.quantity
+      : (position.entryPrice - exitPrice) * position.quantity;
+  return Number(gross.toFixed(4));
+}
+
+async function resolveExitPrice(
+  exchange: { getTickerPrice(symbol: string): Promise<number> },
+  position: Pick<IPosition, "symbol" | "currentPrice">,
+): Promise<number | null> {
+  const rawCurrentPrice = position.currentPrice;
+  const currentPrice =
+    typeof rawCurrentPrice === "number" ? rawCurrentPrice : null;
+
+  if (currentPrice !== null && Number.isFinite(currentPrice) && currentPrice > 0) {
+    return currentPrice;
+  }
+
+  try {
+    const price = await exchange.getTickerPrice(position.symbol);
+    return Number.isFinite(price) && price > 0 ? price : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function runSignalCheck(): Promise<{
   checked: number;
   newSignals: number;
@@ -576,9 +617,10 @@ export async function runSignalCheck(): Promise<{
                               return ExchangeFactory.getClientForAccount(creds);
                             }
                           }
-                        }
+                      }
                         return ExchangeFactory.getPaperClient();
                       })();
+                      const exitPrice = await resolveExitPrice(posExchange, pos);
                       await posExchange.closePosition(
                         pos.symbol,
                         pos.orderId,
@@ -587,6 +629,13 @@ export async function runSignalCheck(): Promise<{
                       pos.status = "closed";
                       pos.closedAt = new Date();
                       pos.closeReason = `Cancel request by ${msg.author}: ${signal.reasoning || "signal author requested cancellation"}`;
+                      if (exitPrice !== null) {
+                        pos.currentPrice = exitPrice;
+                        pos.pnlUsd =
+                          calculatePositionPnlUsd(pos, exitPrice) ??
+                          pos.pnlUsd ??
+                          null;
+                      }
                       await pos.save();
                       await logExecutorInfo(
                         `🚫 Auto-cancelled position: ${pos.symbol} ${pos.side}`,
@@ -1642,11 +1691,16 @@ export async function executeSignal(
           }
           return ExchangeFactory.getPaperClient();
         })();
+        const exitPrice = await resolveExitPrice(posExchange, pos);
         await posExchange.closePosition(pos.symbol, pos.orderId, pos.quantity);
 
         pos.status = "closed";
         pos.closedAt = new Date();
         pos.closeReason = "AI Signal Close";
+        if (exitPrice !== null) {
+          pos.currentPrice = exitPrice;
+          pos.pnlUsd = calculatePositionPnlUsd(pos, exitPrice) ?? pos.pnlUsd ?? null;
+        }
         await pos.save();
 
         await logExecutorInfo(`✅ Closed position: ${pos.symbol} ${pos.side}`, {

@@ -121,6 +121,7 @@ export interface IPosition extends Document {
   stopLossPrice?: number;
   orderId?: string;
   pnl: number;
+  pnlUsd?: number | null;
   status: "pending" | "open" | "closed";
   tpSlPlaced?: boolean;
   channelId?: string;
@@ -415,6 +416,7 @@ const PositionSchema = new Schema<IPosition>(
     stopLossPrice: { type: Number, default: null },
     orderId: { type: String, default: null },
     pnl: { type: Number, default: 0 },
+    pnlUsd: { type: Number, default: null },
     status: {
       type: String,
       enum: ["pending", "open", "closed"],

@@ -43,6 +43,31 @@ function getAccountPositionKey(
   return `${accountId || "__global__"}::${symbol}`;
 }
 
+function calculatePositionPnlUsd(
+  position: {
+    entryPrice: number;
+    quantity: number;
+    side: string;
+  },
+  currentPrice: number,
+): number | null {
+  if (
+    !Number.isFinite(position.entryPrice) ||
+    !Number.isFinite(position.quantity) ||
+    !Number.isFinite(currentPrice) ||
+    position.entryPrice <= 0 ||
+    position.quantity <= 0
+  ) {
+    return null;
+  }
+
+  const gross =
+    position.side === "LONG"
+      ? (currentPrice - position.entryPrice) * position.quantity
+      : (position.entryPrice - currentPrice) * position.quantity;
+  return Number(gross.toFixed(4));
+}
+
 export async function runPositionMonitor(): Promise<{
   checked: number;
   actions: number;
@@ -383,6 +408,8 @@ export async function runPositionMonitor(): Promise<{
           ? (priceDiff / position.entryPrice) * 100 * position.leverage
           : 0;
         position.pnl = pnlPercent;
+        position.pnlUsd =
+          exPos?.unrealizedPnl ?? calculatePositionPnlUsd(position, currentPrice);
         await position.save();
 
         // ─── Rule-based TP/SL checks ──────────────────────────────────
@@ -667,8 +694,9 @@ async function closePosition(
   reason: string,
   processId?: string,
 ): Promise<void> {
+  let exchange: ExchangeClient | null = null;
   try {
-    const exchange = await getExchangeForPosition(position);
+    exchange = await getExchangeForPosition(position);
     await exchange.closePosition(
       position.symbol,
       position.orderId,
@@ -691,6 +719,8 @@ async function closePosition(
   position.closedAt = new Date();
   position.closeReason = reason;
   position.currentPrice = currentPrice;
+  position.pnlUsd =
+    calculatePositionPnlUsd(position, currentPrice) ?? position.pnlUsd ?? null;
   await position.save();
 
   await logProcessStep({

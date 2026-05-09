@@ -42,6 +42,7 @@ interface Position {
   takeProfitTargets?: any[];
   stopLossPrice?: number;
   pnl: number;
+  pnlUsd?: number | null;
   status: string;
   openedAt: string;
   closedAt?: string;
@@ -125,6 +126,64 @@ function estimatePositionMargin(position: Position): number | null {
   }
 
   return (position.entryPrice * position.quantity) / position.leverage;
+}
+
+function calculatePositionPnlUsd(
+  position: Pick<Position, "entryPrice" | "quantity" | "side">,
+  currentPrice: number,
+): number | null {
+  if (
+    !Number.isFinite(position.entryPrice) ||
+    !Number.isFinite(position.quantity) ||
+    !Number.isFinite(currentPrice) ||
+    position.entryPrice <= 0 ||
+    position.quantity <= 0
+  ) {
+    return null;
+  }
+
+  const gross =
+    position.side === "LONG"
+      ? (currentPrice - position.entryPrice) * position.quantity
+      : (position.entryPrice - currentPrice) * position.quantity;
+  return Number(gross.toFixed(4));
+}
+
+function resolvePositionPnlUsd(position: Position): {
+  value: number | null;
+  estimated: boolean;
+} {
+  if (Number.isFinite(position.pnlUsd)) {
+    return { value: position.pnlUsd ?? null, estimated: false };
+  }
+
+  if (Number.isFinite(position.currentPrice)) {
+    return {
+      value: calculatePositionPnlUsd(position, position.currentPrice as number),
+      estimated: true,
+    };
+  }
+
+  return { value: null, estimated: false };
+}
+
+function resolvePositionPnlPercent(position: Position): number | null {
+  if (Number.isFinite(position.pnl)) return position.pnl;
+
+  if (
+    !Number.isFinite(position.currentPrice) ||
+    !Number.isFinite(position.entryPrice) ||
+    !Number.isFinite(position.leverage) ||
+    position.entryPrice <= 0
+  ) {
+    return null;
+  }
+
+  const priceDiff =
+    position.side === "LONG"
+      ? position.currentPrice - position.entryPrice
+      : position.entryPrice - position.currentPrice;
+  return (priceDiff / position.entryPrice) * 100 * position.leverage;
 }
 
 function formatCompactDateTime(value?: string | Date | null) {
@@ -1197,48 +1256,74 @@ export default function Dashboard() {
                 <tbody>
                   {openPositions.map((pos) => (
                     <tr key={pos._id || pos.id}>
-                      <td className="font-medium">{pos.symbol}</td>
-                      <td>
-                        <span
-                          className={`badge ${pos.side === "LONG" ? "badge-success" : "badge-danger"}`}
-                        >
-                          {pos.side}
-                        </span>
-                      </td>
-                      <td className="text-slate-300">
-                        {getPositionSourceLabel(pos, data?.channelNames || {})}
-                      </td>
-                      <td className="whitespace-nowrap">{pos.entryPrice?.toFixed(2)}</td>
-                      <td className="whitespace-nowrap">{pos.currentPrice?.toFixed(2) || "-"}</td>
-                      <td>
-                        <span className="badge badge-neutral">
-                          {formatMarginMode(pos.marginType)}
-                        </span>
-                      </td>
-                      <td className="font-mono whitespace-nowrap">
-                        {formatUsd(pos.margin)}
-                      </td>
-                      <td className="text-success min-w-0">
-                        {pos.takeProfitTargets
-                          ?.filter((t: any) => t.status === "pending")
-                          .map(
-                            (t: any, i: number, arr: any[]) =>
-                              `TP${i + 1}: ${t.price.toFixed(2)} (${t.percentage?.toFixed(t.percentage % 1 === 0 ? 0 : 2) ?? (100 / arr.length).toFixed(0)}%)`,
-                          )
-                          .join(", ") || "-"}
-                      </td>
-                      <td className="text-danger whitespace-nowrap">
-                        {pos.stopLossPrice?.toFixed(2) || "-"}
-                      </td>
-                      <td
-                        className={`font-mono ${(pos.pnl || 0) >= 0 ? "text-success" : "text-danger"}`}
-                      >
-                        {(pos.pnl || 0) >= 0 ? "+" : ""}
-                        {pos.pnl?.toFixed(2) || "0.00"}
-                      </td>
-                      <td className="text-slate-400 text-[10px] whitespace-nowrap">
-                        {formatCompactDateTime(pos.openedAt)}
-                      </td>
+                      {(() => {
+                        const pnlDisplay = resolvePositionPnlUsd(pos);
+                        const pnlPercent = resolvePositionPnlPercent(pos);
+                        const pnlClass =
+                          pnlDisplay.value !== null
+                            ? pnlDisplay.value >= 0
+                              ? "text-success"
+                              : "text-danger"
+                            : pnlPercent !== null
+                              ? pnlPercent >= 0
+                                ? "text-success"
+                                : "text-danger"
+                              : "text-slate-400";
+                        return (
+                          <>
+                            <td className="font-medium">{pos.symbol}</td>
+                            <td>
+                              <span
+                                className={`badge ${pos.side === "LONG" ? "badge-success" : "badge-danger"}`}
+                              >
+                                {pos.side}
+                              </span>
+                            </td>
+                            <td className="text-slate-300">
+                              {getPositionSourceLabel(pos, data?.channelNames || {})}
+                            </td>
+                            <td className="whitespace-nowrap">{pos.entryPrice?.toFixed(2)}</td>
+                            <td className="whitespace-nowrap">{pos.currentPrice?.toFixed(2) || "-"}</td>
+                            <td>
+                              <span className="badge badge-neutral">
+                                {formatMarginMode(pos.marginType)}
+                              </span>
+                            </td>
+                            <td className="font-mono whitespace-nowrap">
+                              {formatUsd(pos.margin)}
+                            </td>
+                            <td className="text-success min-w-0">
+                              {pos.takeProfitTargets
+                                ?.filter((t: any) => t.status === "pending")
+                                .map(
+                                  (t: any, i: number, arr: any[]) =>
+                                    `TP${i + 1}: ${t.price.toFixed(2)} (${t.percentage?.toFixed(t.percentage % 1 === 0 ? 0 : 2) ?? (100 / arr.length).toFixed(0)}%)`,
+                                )
+                                .join(", ") || "-"}
+                            </td>
+                            <td className="text-danger whitespace-nowrap">
+                              {pos.stopLossPrice?.toFixed(2) || "-"}
+                            </td>
+                            <td
+                              className={`font-mono ${pnlClass}`}
+                            >
+                              <span className="inline-flex items-center gap-1">
+                                {pnlDisplay.value !== null && pnlDisplay.value >= 0 ? "+" : ""}
+                                {formatUsd(pnlDisplay.value, { estimated: pnlDisplay.estimated })}
+                              </span>
+                              {pnlPercent !== null && (
+                                <span className="text-[10px] opacity-80 whitespace-nowrap ml-1">
+                                  ({pnlPercent >= 0 ? "+" : ""}
+                                  {pnlPercent.toFixed(2)}%)
+                                </span>
+                              )}
+                            </td>
+                            <td className="text-slate-400 text-[10px] whitespace-nowrap">
+                              {formatCompactDateTime(pos.openedAt)}
+                            </td>
+                          </>
+                        );
+                      })()}
                     </tr>
                   ))}
                 </tbody>
@@ -3336,37 +3421,19 @@ function PositionsTab({
           {/* Mobile Card View */}
           <div className="sm:hidden flex flex-col gap-3 pb-4">
             {positions.map((pos) => {
-              let displayPnl = pos.pnl || 0;
-              let displayCurrentPrice = pos.currentPrice || pos.entryPrice;
-              let displayLeverage = pos.leverage;
-              let displayMarginType = pos.marginType;
-              let displayMargin = pos.margin;
-
-              if (pos.status === "open" && livePositions.length > 0) {
-                const livePos = livePositions.find(
-                  (lp) => (lp._id || lp.id) === (pos._id || pos.id),
-                );
-                if (livePos) {
-                  displayPnl = livePos.pnl || 0;
-                  displayCurrentPrice =
-                    livePos.currentPrice || livePos.entryPrice;
-                  displayLeverage = livePos.leverage || pos.leverage;
-                  displayMarginType = livePos.marginType || pos.marginType;
-                  displayMargin = livePos.margin ?? pos.margin;
-                }
-              }
-
+              const livePos =
+                pos.status === "open" && livePositions.length > 0
+                  ? livePositions.find(
+                      (lp) => (lp._id || lp.id) === (pos._id || pos.id),
+                    )
+                  : null;
+              const displayPosition = livePos ? { ...pos, ...livePos } : pos;
+              const pnlUsdDisplay = resolvePositionPnlUsd(displayPosition);
+              const pnlPercent = resolvePositionPnlPercent(displayPosition);
+              const displayMarginType = displayPosition.marginType;
               const estimatedMargin =
-                displayMargin ?? estimatePositionMargin(pos);
+                displayPosition.margin ?? estimatePositionMargin(displayPosition);
               const sourceLabel = getPositionSourceLabel(pos, channelNames);
-
-              const pnlPercent =
-                displayCurrentPrice && pos.entryPrice && pos.entryPrice > 0
-                  ? ((displayCurrentPrice - pos.entryPrice) / pos.entryPrice) *
-                    100 *
-                    displayLeverage *
-                    (pos.side === "LONG" ? 1 : -1)
-                  : 0;
 
               const isExpanded = expandedPosId === (pos._id || String(pos.id));
 
@@ -3420,19 +3487,28 @@ function PositionsTab({
                       </span>
                       <div
                         className={`text-xs font-mono font-bold ${
-                          displayPnl > 0
-                            ? "text-emerald-400"
-                            : displayPnl < 0
-                              ? "text-red-400"
-                              : "text-slate-400"
+                          positionFilter === "pending"
+                            ? "text-slate-400"
+                            : pnlUsdDisplay.value !== null
+                              ? pnlUsdDisplay.value >= 0
+                                ? "text-emerald-400"
+                                : "text-red-400"
+                              : pnlPercent !== null
+                                ? pnlPercent >= 0
+                                  ? "text-emerald-400"
+                                  : "text-red-400"
+                                : "text-slate-400"
                         }`}
                       >
-                        {displayPnl > 0 ? "+" : ""}
-                        {displayPnl.toFixed(2)}
-                        <span className="text-[9px] ml-1 opacity-80 font-normal">
-                          ({displayPnl > 0 ? "+" : ""}
-                          {pnlPercent.toFixed(2)}%)
-                        </span>
+                        {positionFilter === "pending" || pnlUsdDisplay.value === null
+                          ? "-"
+                          : `${pnlUsdDisplay.value > 0 ? "+" : ""}${formatUsd(pnlUsdDisplay.value, { estimated: pnlUsdDisplay.estimated })}`}
+                        {positionFilter === "open" && pnlPercent !== null && (
+                          <span className="text-[9px] ml-1 opacity-80 font-normal">
+                            ({pnlPercent >= 0 ? "+" : ""}
+                            {pnlPercent.toFixed(2)}%)
+                          </span>
+                        )}
                       </div>
                     </div>
                     <div className="bg-slate-900/50 rounded p-1.5 flex flex-col">
@@ -3441,7 +3517,7 @@ function PositionsTab({
                       </span>
                       <span className="text-xs font-mono text-slate-300">
                         {formatUsd(estimatedMargin, {
-                          estimated: displayMargin == null,
+                          estimated: displayPosition.margin == null,
                         })}
                       </span>
                     </div>
@@ -3538,40 +3614,36 @@ function PositionsTab({
               </thead>
               <tbody>
                 {positions.map((pos) => {
-                  let displayPnl = pos.pnl || 0;
-                  let displayCurrentPrice = pos.currentPrice || pos.entryPrice;
-                  let displayLeverage = pos.leverage;
-                  let displayMarginType = pos.marginType;
-                  let displayMargin = pos.margin;
-
-                  if (pos.status === "open" && livePositions.length > 0) {
-                    const livePos = livePositions.find(
-                      (lp) => (lp._id || lp.id) === (pos._id || pos.id),
-                    );
-                    if (livePos) {
-                      displayPnl = livePos.pnl || 0;
-                      displayCurrentPrice =
-                        livePos.currentPrice || livePos.entryPrice;
-                      displayLeverage = livePos.leverage || pos.leverage;
-                      displayMarginType = livePos.marginType || pos.marginType;
-                      displayMargin = livePos.margin ?? pos.margin;
-                    }
-                  }
-
+                  const livePos =
+                    pos.status === "open" && livePositions.length > 0
+                      ? livePositions.find(
+                          (lp) => (lp._id || lp.id) === (pos._id || pos.id),
+                        )
+                      : null;
+                  const displayPosition = livePos ? { ...pos, ...livePos } : pos;
+                  const displayCurrentPrice =
+                    displayPosition.currentPrice || displayPosition.entryPrice;
+                  const displayMarginType = displayPosition.marginType;
                   const estimatedMargin =
-                    displayMargin ?? estimatePositionMargin(pos);
+                    displayPosition.margin ??
+                    estimatePositionMargin(displayPosition);
+                  const pnlUsdDisplay = resolvePositionPnlUsd(displayPosition);
+                  const pnlPercent = resolvePositionPnlPercent(displayPosition);
+                  const pnlClass =
+                    positionFilter === "pending"
+                      ? "text-slate-400"
+                      : pnlUsdDisplay.value !== null
+                        ? pnlUsdDisplay.value >= 0
+                          ? "text-success"
+                          : "text-danger"
+                        : pnlPercent !== null
+                          ? pnlPercent >= 0
+                            ? "text-success"
+                            : "text-danger"
+                          : "text-slate-400";
                   const sourceLabel = getPositionSourceLabel(pos, channelNames);
                   const openedAtParts = getCompactDateTimeParts(pos.openedAt);
                   const closedAtParts = getCompactDateTimeParts(pos.closedAt);
-
-                  const pnlPercent =
-                    displayCurrentPrice && pos.entryPrice && pos.entryPrice > 0
-                      ? ((displayCurrentPrice - pos.entryPrice) /
-                          pos.entryPrice) *
-                        100 *
-                        displayLeverage *
-                        (pos.side === "LONG" ? 1 : -1)
-                      : 0;
 
                   return (
                     <Fragment key={`desktop-${pos._id || pos.id}`}>
@@ -3612,19 +3684,20 @@ function PositionsTab({
                           {formatUsd(estimatedMargin, {
                             estimated:
                               positionFilter === "pending" &&
-                              displayMargin == null,
+                              displayPosition.margin == null,
                           })}
                         </td>
                         <td
-                          className={`font-mono whitespace-nowrap ${displayPnl >= 0 ? "text-success" : "text-danger"}`}
+                          className={`font-mono whitespace-nowrap ${pnlClass}`}
                         >
                           <span className="inline-flex items-center gap-1">
-                            {displayPnl >= 0 ? "+" : ""}
-                            {displayPnl.toFixed(2)}
+                            {positionFilter === "pending" || pnlUsdDisplay.value === null
+                              ? "-"
+                              : `${pnlUsdDisplay.value >= 0 ? "+" : ""}${formatUsd(pnlUsdDisplay.value, { estimated: pnlUsdDisplay.estimated })}`}
                           </span>
-                          {positionFilter === "open" && (
+                          {positionFilter === "open" && pnlPercent !== null && (
                             <span className="text-[10px] opacity-80 whitespace-nowrap">
-                              ({displayPnl >= 0 ? "+" : ""}
+                              ({pnlPercent >= 0 ? "+" : ""}
                               {pnlPercent.toFixed(2)}%)
                             </span>
                           )}
