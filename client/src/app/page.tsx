@@ -2058,11 +2058,46 @@ function ProcessLogsAccordion({
     }
   };
 
+  const renderCompactLog = (log: Log) => {
+    const dateStr = new Date(log.createdAt || log.created_at || "").toLocaleString();
+    const levelText = (log.level || log.result || "").toUpperCase();
+
+    return (
+      <div
+        key={log._id || log.id}
+        className="hover:bg-slate-800/30 p-2 sm:px-1 sm:py-0 -mx-1 rounded transition-colors flex flex-col gap-1 border-b border-slate-800/50"
+      >
+        <div className="flex flex-wrap items-center gap-2 text-[11px]">
+          <span className="text-slate-500">{dateStr}</span>
+          <span className="text-slate-700">|</span>
+          <span className={`${getTerminalColor(levelText)} font-bold`}>
+            {levelText || "INFO"}
+          </span>
+          <span className="text-slate-700">|</span>
+          <span className="text-fuchsia-400 truncate">{log.type}</span>
+          <span className="text-slate-700">|</span>
+          <span className="text-slate-300 truncate">{log.action}</span>
+        </div>
+        <div className="min-w-0 text-slate-400 leading-relaxed whitespace-pre-wrap break-words text-[11px]">
+          <InlineLogDetails text={log.details} />
+          {log.error && (
+            <span className="text-red-400 ml-1 block mt-1">Error: {log.error}</span>
+          )}
+          {log.symbol && (
+            <span className="text-primary-400 ml-1 block mt-1">
+              [{log.symbol}]
+            </span>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div
       className={
         hideHeader
-          ? ""
+          ? "w-full min-w-0"
           : "mt-3 rounded-lg border border-slate-700/70 bg-slate-900/30"
       }
     >
@@ -2187,28 +2222,29 @@ function ProcessLogsAccordion({
                   </div>
                 ) : (
                   <>
-                    {logs.map((log) => {
-                      const dateStr = new Date(
-                        log.createdAt || log.created_at || "",
-                      ).toLocaleString();
-                      const levelText = (
-                        log.level ||
-                        log.result ||
-                        ""
-                      ).toUpperCase();
-                      return (
+                    {logs.map((log) =>
+                      hideHeader ? (
+                        renderCompactLog(log)
+                      ) : (
                         <div
                           key={log._id || log.id}
                           className="hover:bg-slate-800/30 p-2 sm:px-1 sm:py-0 -mx-1 rounded transition-colors flex flex-col gap-1 sm:grid sm:grid-cols-[140px_10px_60px_10px_140px_10px_180px_20px_1fr] sm:items-start border-b border-slate-800/50 sm:border-none"
                         >
                           {/* Mobile Header */}
                           <div className="flex items-center gap-2 sm:hidden text-xs">
-                            <span className="text-slate-500">{dateStr}</span>
+                            <span className="text-slate-500">
+                              {new Date(
+                                log.createdAt || log.created_at || "",
+                              ).toLocaleString()}
+                            </span>
                             <span className="text-slate-700">|</span>
                             <span
-                              className={`${getTerminalColor(levelText)} font-bold`}
+                              className={`${getTerminalColor(
+                                (log.level || log.result || "").toUpperCase(),
+                              )} font-bold`}
                             >
-                              {levelText || "INFO"}
+                              {(log.level || log.result || "").toUpperCase() ||
+                                "INFO"}
                             </span>
                           </div>
                           <div className="flex items-center gap-2 sm:hidden text-[11px]">
@@ -2223,15 +2259,18 @@ function ProcessLogsAccordion({
 
                           {/* Desktop Columns */}
                           <span className="hidden sm:inline text-slate-500 truncate">
-                            {dateStr}
+                            {new Date(
+                              log.createdAt || log.created_at || "",
+                            ).toLocaleString()}
                           </span>
                           <span className="hidden sm:inline text-slate-700 text-center">
                             |
                           </span>
                           <span
-                            className={`hidden sm:inline ${getTerminalColor(levelText)} font-bold truncate`}
+                            className={`hidden sm:inline ${getTerminalColor((log.level || log.result || "").toUpperCase())} font-bold truncate`}
                           >
-                            {levelText || "INFO"}
+                            {(log.level || log.result || "").toUpperCase() ||
+                              "INFO"}
                           </span>
                           <span className="hidden sm:inline text-slate-700 text-center">
                             |
@@ -2270,8 +2309,8 @@ function ProcessLogsAccordion({
                             )}
                           </span>
                         </div>
-                      );
-                    })}
+                      ),
+                    )}
 
                     {/* Infinite Scroll Sentinel */}
                     {page < totalPages && (
@@ -3578,7 +3617,7 @@ function PositionsTab({
                   </button>
 
                   {isExpanded && (
-                    <div className="mt-3 bg-slate-900/80 rounded-lg p-2 border border-slate-700/50 w-full overflow-hidden">
+                    <div className="mt-3 bg-slate-900/80 rounded-lg p-2 border border-slate-700/50 w-full min-w-0 overflow-hidden">
                       <ProcessLogsAccordion
                         processId={pos.processId}
                         refreshKey={refreshKey}
@@ -3772,7 +3811,7 @@ function PositionsTab({
                             colSpan={100}
                             className="p-0 border-none bg-slate-900/10 whitespace-normal"
                           >
-                            <div className="px-4 py-2">
+                            <div className="px-4 py-2 w-full min-w-0 overflow-hidden">
                               <ProcessLogsAccordion
                                 processId={pos.processId}
                                 refreshKey={refreshKey}
