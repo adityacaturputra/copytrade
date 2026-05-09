@@ -178,15 +178,19 @@ async function runPositionMonitorWork() {
 
     updateProgress(
       POSITION_MONITOR_NAME,
-      `Done — checked: ${result.checked}, actions: ${result.actions}`,
-      "success",
+      `Done — checked: ${result.checked}, syncedClosed: ${result.syncedClosed}, actions: ${result.actions}, errors: ${result.errors.length}`,
+      result.errors.length > 0 ? "warning" : "success",
+    );
+
+    console.log(
+      `[Cron] Position monitor finished: checked=${result.checked}, syncedClosed=${result.syncedClosed}, actions=${result.actions}, errors=${result.errors.length}${result.errors.length > 0 ? ` [${result.errors.join(", ")}]` : ""}`,
     );
 
     await connectDB();
     await createTradeLog({
       type: "cron",
       action: "position_monitor_end",
-      details: `Checked: ${result.checked}, Actions: ${result.actions}, Errors: ${result.errors.length}`,
+      details: `Checked: ${result.checked}, SyncedClosed: ${result.syncedClosed}, Actions: ${result.actions}, Errors: ${result.errors.length}${result.errors.length > 0 ? ` — ${result.errors.join("; ")}` : ""}`,
       level: "debug",
       result: result.errors.length > 0 ? "partial" : "success",
     });

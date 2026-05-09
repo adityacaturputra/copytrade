@@ -20,6 +20,7 @@ import {
   logProcessStep,
 } from "@copytrade/shared/lib/process-log";
 import { ensurePersistedProcessId } from "@copytrade/shared/lib/process-id";
+import { createTradeLog } from "@copytrade/shared/lib/trade-log-store";
 import { agentTools, toolImplementations } from "./tools";
 import { getAgentToolPolicy } from "./policies";
 
@@ -40,6 +41,38 @@ const MONITOR_TOOL_NAMES = new Set([
 ]);
 
 const MAX_AGENT_ITERATIONS = 10;
+const MAX_VISION_IMAGES_PER_TOOL = 3;
+
+const VISION_CAPABLE_PROVIDERS = new Set([
+  "openai",
+  "kimi",
+  "codex",
+  "patungin",
+]);
+
+function extractImageUrlsFromToolResult(
+  toolName: string,
+  result: string,
+): string[] {
+  if (toolName !== "review_signal_thread") return [];
+  try {
+    const parsed = JSON.parse(result) as {
+      sourceContextMessages?: Array<{ imageUrls?: string[] }>;
+    };
+    const urls: string[] = [];
+    for (const msg of parsed.sourceContextMessages || []) {
+      for (const url of msg.imageUrls || []) {
+        if (typeof url === "string" && url.startsWith("http")) {
+          urls.push(url);
+          if (urls.length >= MAX_VISION_IMAGES_PER_TOOL) return urls;
+        }
+      }
+    }
+    return urls;
+  } catch {
+    return [];
+  }
+}
 
 type PositionDocLike = IPosition;
 
@@ -147,7 +180,9 @@ async function createChatCompletion(
 ) {
   const config = resolveProviderConfig(provider);
   if (config.apiKeys.length === 0) {
-    throw new Error("No valid API keys configured for the selected AI provider.");
+    throw new Error(
+      "No valid API keys configured for the selected AI provider.",
+    );
   }
 
   let currentKeyIndex = 0;
@@ -339,11 +374,41 @@ async function runInternalPositionAgent(input: {
           status: "executed",
           result,
         });
+        console.log(
+          `[PositionMonitor]   🔧 ${policy.mode === "mutating" ? "✏️" : "👁️"} ${toolCall.name}(${JSON.stringify(toolArgs).slice(0, 120)}) → ${policy.mode} OK`,
+        );
         messages.push({
           role: "tool",
           tool_call_id: toolCall.id,
           content: result,
         });
+
+        // Inject Discord images as vision content if provider supports it
+        const imageUrls = extractImageUrlsFromToolResult(toolCall.name, result);
+        if (
+          imageUrls.length > 0 &&
+          VISION_CAPABLE_PROVIDERS.has(usedProvider)
+        ) {
+          console.log(
+            `[PositionMonitor]   🖼️ Injecting ${imageUrls.length} image(s) from Discord for vision analysis`,
+          );
+          const imageContent: OpenAI.ChatCompletionContentPart[] = [
+            {
+              type: "text",
+              text: `[System] Here are the chart images from the Discord signal thread for your visual analysis. Use them to assess the trade setup quality and current market context:`,
+            },
+            ...imageUrls.map(
+              (url): OpenAI.ChatCompletionContentPartImage => ({
+                type: "image_url",
+                image_url: { url, detail: "low" },
+              }),
+            ),
+          ];
+          messages.push({
+            role: "user",
+            content: imageContent,
+          });
+        }
       } catch (error) {
         const errorResult = JSON.stringify({
           error: getErrorMessage(error),
@@ -355,6 +420,9 @@ async function runInternalPositionAgent(input: {
           status: "failed",
           error: errorResult,
         });
+        console.log(
+          `[PositionMonitor]   ❌ ${toolCall.name}(${JSON.stringify(toolArgs).slice(0, 120)}) → ${getErrorMessage(error)}`,
+        );
         messages.push({
           role: "tool",
           tool_call_id: toolCall.id,
@@ -390,11 +458,22 @@ Hard rules:
 - Start with sync_position_with_exchange for the tracked position.
 - Then inspect get_position_protection.
 - Use analyze_position_context and review_signal_thread before discretionary close / TP / SL changes unless the exchange already shows the position is gone or clearly unprotected.
-- Never close only because price is near stop loss or because a wick briefly touched the area.
+- NEVER close a position merely because price is near the stop loss or because a wick briefly touched the SL area. Price approaching or wicking near SL is NORMAL market behavior and NOT a reason to close.
+- ONLY close a position when you have CONCRETE EVIDENCE such as:
+  * The exchange no longer shows the position (it was already liquidated or closed externally).
+  * The Discord signal author explicitly posted an exit/cancel update for this trade.
+  * The position's stop loss or take profit was hit on the exchange (confirmed via exchange data).
+  * The signal's original thesis is invalidated by clear, confirmed exchange data (not just price proximity to SL).
 - If TP/SL protection is missing, stale, mismatched, or obviously leftover from an old setup, prefer repairing it with adjust_position_protection before discretionary closing.
 - If stale orphan protection may exist on the same account, call cleanup_orphan_protection_orders with dryRun=true first; if orphan candidates are confirmed, you may call it again with dryRun=false.
-- Use manage_position only when there is a clear live-state or Discord-context reason.
+- When calling manage_position with action "close" or "partial_close", you MUST provide a "reason" parameter with a specific, factual explanation referencing concrete evidence.
 - Keep behavior consistent with the account's other open positions.
+
+When review_signal_thread returns Discord messages with chart images, those images will be attached for your visual analysis. Use them to:
+- Assess whether the chart pattern still supports the original trade thesis
+- Identify key support/resistance levels visible in the charts
+- Spot any obvious trend reversals or pattern breaks visible in the images
+Do NOT base close decisions solely on image content — always cross-reference with live exchange data.
 
 Your final answer must be a compact raw JSON object with this shape:
 {
@@ -405,7 +484,10 @@ Your final answer must be a compact raw JSON object with this shape:
 }`;
 }
 
-function buildPositionMonitorUserPrompt(position: PositionDocLike, processId: string): string {
+function buildPositionMonitorUserPrompt(
+  position: PositionDocLike,
+  processId: string,
+): string {
   return `CURRENT TIME: ${new Date().toISOString()}
 PROCESS ID: ${processId}
 TRACKED POSITION:
@@ -421,7 +503,10 @@ TRACKED POSITION:
 - trackedTakeProfits: ${
     position.takeProfitTargets.length > 0
       ? position.takeProfitTargets
-          .map((target) => `${target.price} qty=${target.quantity} status=${target.status}`)
+          .map(
+            (target) =>
+              `${target.price} qty=${target.quantity} status=${target.status}`,
+          )
           .join("; ")
       : "none"
   }
@@ -593,15 +678,33 @@ async function syncClosedPositions(
   >,
   result: { syncedClosed: number },
 ) {
+  if (openPositions.length === 0) {
+    console.log("[PositionMonitor] No open positions to sync");
+    return;
+  }
+
+  const syncSummary: string[] = [];
+
   for (const position of openPositions) {
     const exactKey = getAccountPositionKey(
       position.accountId,
       position.symbol,
       position.side,
     );
-    const fallbackKey = getAccountPositionKey(position.accountId, position.symbol);
+    const fallbackKey = getAccountPositionKey(
+      position.accountId,
+      position.symbol,
+    );
 
     if (exchangePositions.has(exactKey) || exchangePositions.has(fallbackKey)) {
+      const matchedKey = exchangePositions.has(exactKey)
+        ? exactKey
+        : fallbackKey;
+      const liveData = exchangePositions.get(matchedKey)!;
+      console.log(
+        `[PositionMonitor] ✅ ${position.symbol} ${position.side} — still on exchange (markPrice=${liveData.markPrice}, unrealizedPnl=${liveData.unrealizedPnl})`,
+      );
+      syncSummary.push(`${position.symbol} ${position.side}: open`);
       continue;
     }
 
@@ -610,6 +713,10 @@ async function syncClosedPositions(
     position.closedAt = new Date();
     position.closeReason = "Closed on Exchange (external)";
     await position.save();
+
+    console.log(
+      `[PositionMonitor] 🔒 ${position.symbol} ${position.side} — NOT on exchange, marking closed in DB`,
+    );
 
     await logProcessStep({
       accountId: position.accountId,
@@ -621,8 +728,24 @@ async function syncClosedPositions(
       result: "success",
     });
 
+    await createTradeLog({
+      accountId: position.accountId,
+      processId,
+      type: "position_monitor",
+      action: "sync_closed",
+      symbol: position.symbol,
+      details: `${position.side} ${position.symbol} no longer on exchange — marked closed in DB (externally closed)`,
+      level: "info",
+      result: "closed",
+    }).catch(() => {});
+
     result.syncedClosed++;
+    syncSummary.push(`${position.symbol} ${position.side}: synced-closed`);
   }
+
+  console.log(
+    `[PositionMonitor] Sync summary: ${syncSummary.length} positions checked, ${result.syncedClosed} closed externally`,
+  );
 }
 
 async function cleanupOrphanProtectionForAccounts(
@@ -653,15 +776,17 @@ async function cleanupOrphanProtectionForAccounts(
         ) || 0;
       result.actions += cancelledCount;
     } catch (error) {
-      result.errors.push(
-        `Cleanup ${accountId}: ${getErrorMessage(error)}`,
-      );
+      result.errors.push(`Cleanup ${accountId}: ${getErrorMessage(error)}`);
     }
   }
 }
 
 async function runPositionAgentForDoc(position: PositionDocLike) {
   const processId = await ensurePersistedProcessId(position, "posagent");
+
+  console.log(
+    `[PositionMonitor] 🤖 Running agent for ${position.symbol} ${position.side} (entry=${position.entryPrice}, qty=${position.quantity}, SL=${position.stopLossPrice || "none"}, accountId=${position.accountId || "none"})`,
+  );
 
   await logProcessStep({
     accountId: position.accountId,
@@ -771,10 +896,59 @@ export async function runPositionMonitorAgent(): Promise<{
         const mutatingActions = agentResult.toolTraces.filter(
           (trace) => trace.mode === "mutating" && trace.status === "executed",
         ).length;
+        const readActions = agentResult.toolTraces.filter(
+          (trace) => trace.mode === "read" && trace.status === "executed",
+        ).length;
+        const failedActions = agentResult.toolTraces.filter(
+          (trace) => trace.status === "failed",
+        ).length;
+
+        // Parse the agent's final decision for logging
+        let decisionSummary = "unknown";
+        let agentStatus = "unknown";
+        try {
+          const parsed = JSON.parse(agentResult.response);
+          decisionSummary = parsed.decisionSummary || decisionSummary;
+          agentStatus = parsed.status || agentStatus;
+        } catch {
+          // use defaults
+        }
+
+        console.log(
+          `[PositionMonitor] 📋 ${position.symbol} ${position.side} agent done: status=${agentStatus}, tools=[${readActions} read, ${mutatingActions} mutate${failedActions > 0 ? `, ${failedActions} failed` : ""}], iterations=${agentResult.iterations}, decision="${decisionSummary}"`,
+        );
+
+        const toolSummary = agentResult.toolTraces
+          .map((t) => `${t.toolName}:${t.status}`)
+          .join(", ");
+
+        await createTradeLog({
+          accountId: position.accountId,
+          processId: `posagent-${position.symbol}`,
+          type: "position_monitor",
+          action: "agent_decision",
+          symbol: position.symbol,
+          details: `${position.side} ${position.symbol} agent: status=${agentStatus}, iterations=${agentResult.iterations}, tools=[${toolSummary}], decision="${decisionSummary}"`,
+          level: "info",
+          result: agentStatus,
+        }).catch(() => {});
+
         result.actions += mutatingActions;
       } catch (error) {
         const errMsg = getErrorMessage(error);
         result.errors.push(`${position.symbol}: ${errMsg}`);
+
+        await createTradeLog({
+          accountId: position.accountId,
+          type: "position_monitor",
+          action: "agent_error",
+          symbol: position.symbol,
+          details: `${position.side} ${position.symbol} agent failed: ${errMsg}`,
+          level: "error",
+          result: "error",
+          error: errMsg,
+        }).catch(() => {});
+
         await logExecutorError(
           `Position monitor agent failed for ${position.symbol}: ${errMsg}`,
           {
@@ -794,6 +968,18 @@ export async function runPositionMonitorAgent(): Promise<{
       action: "monitor_error",
     });
   }
+
+  console.log(
+    `[PositionMonitor] ✅ Summary: checked=${result.checked}, syncedClosed=${result.syncedClosed}, actions=${result.actions}, errors=${result.errors.length}${result.errors.length > 0 ? ` [${result.errors.join(", ")}]` : ""}`,
+  );
+
+  await createTradeLog({
+    type: "position_monitor",
+    action: "monitor_summary",
+    details: `checked=${result.checked}, syncedClosed=${result.syncedClosed}, actions=${result.actions}, errors=${result.errors.length}${result.errors.length > 0 ? ` [${result.errors.join(", ")}]` : ""}`,
+    level: "info",
+    result: result.errors.length > 0 ? "partial" : "success",
+  }).catch(() => {});
 
   return result;
 }

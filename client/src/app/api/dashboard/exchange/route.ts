@@ -86,7 +86,7 @@ export async function GET() {
         }
 
         accountExchangeInfos.push(info);
-      })
+      }),
     );
 
     // Group positions by accountId
@@ -102,96 +102,107 @@ export async function GET() {
 
     // Process positions per account in parallel
     await Promise.all(
-      Array.from(positionsByAccount.entries()).map(async ([accountId, positions]) => {
-        const exchangeEntry = accountExchangeMap.get(accountId);
-        const exchangeSymbols = new Set<string>();
-        let exchangePositions: Array<{
-          symbol: string;
-          side: string;
-          markPrice: number;
-          unrealizedPnl: number;
-          entryPrice: number;
-          leverage: number;
-          quantity: number;
-          marginType: string;
-          margin: number;
-        }> = [];
+      Array.from(positionsByAccount.entries()).map(
+        async ([accountId, positions]) => {
+          const exchangeEntry = accountExchangeMap.get(accountId);
+          const exchangeSymbols = new Set<string>();
+          let exchangePositions: Array<{
+            symbol: string;
+            side: string;
+            markPrice: number;
+            unrealizedPnl: number;
+            entryPrice: number;
+            leverage: number;
+            quantity: number;
+            marginType: string;
+            margin: number;
+          }> = [];
 
-        if (exchangeEntry) {
-          try {
-            const exPositions = await exchangeEntry.client.getOpenPositions();
-            exchangePositions = exPositions.map((p: any) => {
-              exchangeSymbols.add(p.symbol);
-              return {
-                symbol: p.symbol,
-                side: p.side,
-                markPrice: p.markPrice,
-                unrealizedPnl: p.unrealizedPnl,
-                entryPrice: p.entryPrice,
-                leverage: p.leverage,
-                quantity: p.quantity,
-                marginType: p.marginType,
-                margin: p.margin,
-              };
-            });
-          } catch (err) {
-            console.warn(
-              `Failed to fetch exchange positions for account ${accountId}:`,
-              err instanceof Error ? err.message : String(err),
-            );
-          }
-        }
-
-        // Sync: mark DB positions as closed if they're no longer on the exchange
-        for (const pos of positions) {
-          if (exchangeSymbols.size > 0 && !exchangeSymbols.has(pos.symbol)) {
-            console.log(
-              `[Dashboard] 🔄 Sync: ${pos.symbol} ${pos.side} not on exchange (account ${accountId}) — closing in DB`,
-            );
+          if (exchangeEntry) {
             try {
-              await Position.updateOne(
-                { _id: pos._id },
-                {
-                  status: "closed",
-                  closedAt: new Date(),
-                  closeReason: "Closed on Exchange (external)",
-                },
-              );
-              await createTradeLog({
-                type: "monitor",
-                action: "sync_close",
-                symbol: pos.symbol,
-                details: `Position ${pos.side} ${pos.symbol} closed externally on exchange. Synced from dashboard.`,
-                result: "success",
+              const exPositions = await exchangeEntry.client.getOpenPositions();
+              exchangePositions = exPositions.map((p: any) => {
+                exchangeSymbols.add(p.symbol);
+                return {
+                  symbol: p.symbol,
+                  side: p.side,
+                  markPrice: p.markPrice,
+                  unrealizedPnl: p.unrealizedPnl,
+                  entryPrice: p.entryPrice,
+                  leverage: p.leverage,
+                  quantity: p.quantity,
+                  marginType: p.marginType,
+                  margin: p.margin,
+                };
               });
-              syncedClosed++;
-            } catch (syncErr) {
+            } catch (err) {
               console.warn(
-                `[Dashboard] Failed to sync close ${pos.symbol}:`,
-                syncErr instanceof Error ? syncErr.message : String(syncErr),
+                `Failed to fetch exchange positions for account ${accountId}:`,
+                err instanceof Error ? err.message : String(err),
               );
             }
-          } else if (exchangeSymbols.size > 0 || exchangeEntry) {
-            // Position is still on exchange — enrich with real-time data
-            const exPos = exchangePositions.find(
-              (ep) => ep.symbol === pos.symbol && ep.side === pos.side,
-            );
-            enrichedPositions.push({
-              ...pos,
-              currentPrice: exPos?.markPrice ?? pos.currentPrice ?? null,
-              pnl: exPos?.unrealizedPnl ?? pos.pnl ?? 0,
-              entryPrice: exPos?.entryPrice ?? pos.entryPrice,
-              leverage: exPos?.leverage ?? pos.leverage,
-              quantity: exPos?.quantity ?? pos.quantity,
-              marginType: exPos?.marginType ?? pos.marginType ?? "isolated",
-              margin: exPos?.margin ?? pos.margin ?? null,
-            });
-          } else {
-            // No exchange connection — keep position as-is
-            enrichedPositions.push(pos);
           }
-        }
-      })
+
+          // Sync: mark DB positions as closed if they're no longer on the exchange
+          for (const pos of positions) {
+            if (exchangeSymbols.size > 0 && !exchangeSymbols.has(pos.symbol)) {
+              console.log(
+                `[Dashboard] 🔄 Sync: ${pos.symbol} ${pos.side} not on exchange (account ${accountId}) — closing in DB`,
+              );
+              try {
+                await Position.updateOne(
+                  { _id: pos._id },
+                  {
+                    status: "closed",
+                    closedAt: new Date(),
+                    closeReason: "Closed on Exchange (external)",
+                  },
+                );
+                await createTradeLog({
+                  type: "monitor",
+                  action: "sync_close",
+                  symbol: pos.symbol,
+                  details: `Position ${pos.side} ${pos.symbol} closed externally on exchange. Synced from dashboard.`,
+                  result: "success",
+                });
+                syncedClosed++;
+              } catch (syncErr) {
+                console.warn(
+                  `[Dashboard] Failed to sync close ${pos.symbol}:`,
+                  syncErr instanceof Error ? syncErr.message : String(syncErr),
+                );
+              }
+            } else if (exchangeSymbols.size > 0 || exchangeEntry) {
+              // Position is still on exchange — enrich with real-time data
+              // Normalize side comparison: exchange may return "Buy"/"Sell"/"BUY"/"SELL"
+              // while DB stores "LONG"/"SHORT"
+              const normalizeSide = (s: string | undefined) =>
+                (s || "")
+                  .toUpperCase()
+                  .replace("BUY", "LONG")
+                  .replace("SELL", "SHORT");
+              const exPos = exchangePositions.find(
+                (ep) =>
+                  ep.symbol === pos.symbol &&
+                  normalizeSide(ep.side) === normalizeSide(pos.side),
+              );
+              enrichedPositions.push({
+                ...pos,
+                currentPrice: exPos?.markPrice ?? pos.currentPrice ?? null,
+                pnl: exPos?.unrealizedPnl ?? pos.pnl ?? 0,
+                entryPrice: exPos?.entryPrice ?? pos.entryPrice,
+                leverage: exPos?.leverage ?? pos.leverage,
+                quantity: exPos?.quantity ?? pos.quantity,
+                marginType: exPos?.marginType ?? pos.marginType ?? "isolated",
+                margin: exPos?.margin ?? pos.margin ?? null,
+              });
+            } else {
+              // No exchange connection — keep position as-is
+              enrichedPositions.push(pos);
+            }
+          }
+        },
+      ),
     );
 
     // Also add positions that have no accountId (legacy)

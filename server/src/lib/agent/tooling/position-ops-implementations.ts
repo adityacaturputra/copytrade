@@ -13,7 +13,10 @@ import {
 } from "@copytrade/shared/lib/process-id";
 import { DiscordSourceProvider } from "@copytrade/shared/lib/source/DiscordSourceProvider";
 import { SourceType } from "@copytrade/shared/lib/enums";
-import type { AlgoOrderInfo, ExchangeClient } from "@copytrade/shared/lib/exchange/types";
+import type {
+  AlgoOrderInfo,
+  ExchangeClient,
+} from "@copytrade/shared/lib/exchange/types";
 import { getProcessTradeLogs } from "@copytrade/shared/lib/trade-log-store";
 import type { ToolExecutor } from "./shared";
 import {
@@ -117,8 +120,12 @@ async function buildProtectionSnapshot(
 ): Promise<ProtectionSnapshot> {
   const algoOrders = await exchange.getAlgoOrders(position.symbol);
   const normalizedOrders = normalizeAlgoOrdersForPosition(position, algoOrders);
-  const liveStopLossOrders = normalizedOrders.filter((order) => order.type === "sl");
-  const liveTakeProfitOrders = normalizedOrders.filter((order) => order.type === "tp");
+  const liveStopLossOrders = normalizedOrders.filter(
+    (order) => order.type === "sl",
+  );
+  const liveTakeProfitOrders = normalizedOrders.filter(
+    (order) => order.type === "tp",
+  );
   const dbStopLossPrice = position.stopLossPrice ?? null;
   const dbTakeProfitTargets = getDbTakeProfitTargets(position);
   const pendingDbTakeProfits = dbTakeProfitTargets.filter(
@@ -127,7 +134,9 @@ async function buildProtectionSnapshot(
 
   const missingLiveStopLoss = Boolean(
     dbStopLossPrice &&
-      !liveStopLossOrders.some((order) => pricesRoughlyEqual(order.price, dbStopLossPrice)),
+    !liveStopLossOrders.some((order) =>
+      pricesRoughlyEqual(order.price, dbStopLossPrice),
+    ),
   );
   const extraLiveStopLossOrders = liveStopLossOrders.filter(
     (order) =>
@@ -230,7 +239,10 @@ function normalizeProtectionTargets(
     };
   });
 
-  const totalQuantity = normalized.reduce((sum, target) => sum + target.quantity, 0);
+  const totalQuantity = normalized.reduce(
+    (sum, target) => sum + target.quantity,
+    0,
+  );
   if (totalQuantity > liveQuantity * 1.001) {
     throw new Error(
       `takeProfits total quantity ${totalQuantity} exceeds live position quantity ${liveQuantity}`,
@@ -304,7 +316,10 @@ export const positionOpsToolImplementations: Record<string, ToolExecutor> = {
     const processId = await ensurePersistedProcessId(positionDoc, "agentprot");
     const { exchange, currentPrice, pnlPercent, exchangePosition } =
       await getLivePositionSnapshot(position);
-    const protection = await buildProtectionSnapshot(positionDoc.toObject(), exchange);
+    const protection = await buildProtectionSnapshot(
+      positionDoc.toObject(),
+      exchange,
+    );
 
     const response = {
       success: true,
@@ -337,7 +352,8 @@ export const positionOpsToolImplementations: Record<string, ToolExecutor> = {
   adjust_position_protection: async (args) => {
     const { position, positionDoc } = await loadTrackedPositionDoc(args);
     const processId = await ensurePersistedProcessId(positionDoc, "agentprot");
-    const { exchange, exchangePosition } = await getLivePositionSnapshot(position);
+    const { exchange, exchangePosition } =
+      await getLivePositionSnapshot(position);
     const liveQuantity = exchangePosition?.quantity || positionDoc.quantity;
     if (!(liveQuantity > 0)) {
       throw new Error(
@@ -362,7 +378,11 @@ export const positionOpsToolImplementations: Record<string, ToolExecutor> = {
     };
 
     if (hasStopLossUpdate || clearStopLoss) {
-      const cancelled = await cancelAlgoOrdersByTypes(exchange, position.symbol, ["sl"]);
+      const cancelled = await cancelAlgoOrdersByTypes(
+        exchange,
+        position.symbol,
+        ["sl"],
+      );
       mutationSummary.cancelledStopLossOrders = cancelled;
 
       if (hasStopLossUpdate) {
@@ -385,10 +405,17 @@ export const positionOpsToolImplementations: Record<string, ToolExecutor> = {
     }
 
     if (hasTakeProfitUpdate) {
-      const normalizedTargets = normalizeProtectionTargets(args.takeProfits, liveQuantity);
+      const normalizedTargets = normalizeProtectionTargets(
+        args.takeProfits,
+        liveQuantity,
+      );
 
       if (replaceTakeProfits) {
-        const cancelled = await cancelAlgoOrdersByTypes(exchange, position.symbol, ["tp"]);
+        const cancelled = await cancelAlgoOrdersByTypes(
+          exchange,
+          position.symbol,
+          ["tp"],
+        );
         mutationSummary.cancelledTakeProfitOrders = cancelled;
       }
 
@@ -432,10 +459,14 @@ export const positionOpsToolImplementations: Record<string, ToolExecutor> = {
     }
 
     positionDoc.tpSlPlaced =
-      Boolean(positionDoc.stopLossPrice) || positionDoc.takeProfitTargets.length > 0;
+      Boolean(positionDoc.stopLossPrice) ||
+      positionDoc.takeProfitTargets.length > 0;
     await positionDoc.save();
 
-    const protection = await buildProtectionSnapshot(positionDoc.toObject(), exchange);
+    const protection = await buildProtectionSnapshot(
+      positionDoc.toObject(),
+      exchange,
+    );
     const response = {
       success: true,
       processId,
@@ -471,6 +502,13 @@ export const positionOpsToolImplementations: Record<string, ToolExecutor> = {
     const action = parseOptionalString(args.action);
     if (!action) {
       throw new Error("manage_position requires an action");
+    }
+
+    const reason = parseOptionalString(args.reason);
+    if ((action === "close" || action === "partial_close") && !reason) {
+      throw new Error(
+        `manage_position ${action} requires a 'reason' parameter explaining WHY this action is being taken. Reference concrete evidence (e.g., exchange state, Discord context). Do NOT close merely because price is near SL.`,
+      );
     }
 
     const processId = await ensurePersistedProcessId(positionDoc, "agentmgr");
@@ -533,9 +571,25 @@ export const positionOpsToolImplementations: Record<string, ToolExecutor> = {
         );
         positionDoc.status = "closed";
         positionDoc.closedAt = new Date();
-        positionDoc.closeReason = "Closed by agent manage_position tool";
+        positionDoc.closeReason =
+          reason || "Closed by agent manage_position tool";
         positionDoc.currentPrice = currentPrice;
         await positionDoc.save();
+
+        await logProcessStep({
+          accountId: position.accountId,
+          processId,
+          type: "agent_tool",
+          action: "position_closed",
+          symbol: position.symbol,
+          details: {
+            positionId: String(position._id),
+            closeReason: positionDoc.closeReason,
+            currentPrice,
+            agentReason: reason,
+          },
+          result: "success",
+        });
 
         response = {
           success: true,
@@ -545,6 +599,7 @@ export const positionOpsToolImplementations: Record<string, ToolExecutor> = {
           symbol: position.symbol,
           currentPrice,
           status: "closed",
+          closeReason: positionDoc.closeReason,
         };
         break;
       }
@@ -562,13 +617,17 @@ export const positionOpsToolImplementations: Record<string, ToolExecutor> = {
           closeQuantity,
         );
 
-        const remainingQuantity = Math.max(position.quantity - closeQuantity, 0);
+        const remainingQuantity = Math.max(
+          position.quantity - closeQuantity,
+          0,
+        );
         positionDoc.quantity = remainingQuantity;
         positionDoc.currentPrice = currentPrice;
         if (remainingQuantity === 0) {
           positionDoc.status = "closed";
           positionDoc.closedAt = new Date();
-          positionDoc.closeReason = "Fully closed by partial_close agent action";
+          positionDoc.closeReason =
+            "Fully closed by partial_close agent action";
         }
         await positionDoc.save();
 
@@ -657,7 +716,10 @@ export const positionOpsToolImplementations: Record<string, ToolExecutor> = {
 
         for (const order of openOrders) {
           try {
-            const success = await exchange.cancelOrder(order.orderId, order.symbol);
+            const success = await exchange.cancelOrder(
+              order.orderId,
+              order.symbol,
+            );
             results.push({
               orderId: order.orderId,
               symbol: order.symbol,
@@ -703,7 +765,9 @@ export const positionOpsToolImplementations: Record<string, ToolExecutor> = {
     });
 
     if (!response) {
-      throw new Error(`manage_position produced no response for action ${action}`);
+      throw new Error(
+        `manage_position produced no response for action ${action}`,
+      );
     }
 
     return JSON.stringify(response);
@@ -716,20 +780,26 @@ export const positionOpsToolImplementations: Record<string, ToolExecutor> = {
     const symbol = parseOptionalString(args.symbol);
     const dryRun = args.dryRun !== false;
 
-    const [algoOrders, exchangePositions, trackedPositions] = await Promise.all([
-      exchange.getAlgoOrders(symbol),
-      exchange.getOpenPositions(),
-      Position.find({
-        accountId,
-        status: { $in: ["open", "pending"] },
-        ...(symbol ? { symbol } : {}),
-      })
-        .lean()
-        .exec(),
-    ]);
+    const [algoOrders, exchangePositions, trackedPositions] = await Promise.all(
+      [
+        exchange.getAlgoOrders(symbol),
+        exchange.getOpenPositions(),
+        Position.find({
+          accountId,
+          status: { $in: ["open", "pending"] },
+          ...(symbol ? { symbol } : {}),
+        })
+          .lean()
+          .exec(),
+      ],
+    );
 
-    const trackedSymbols = new Set(trackedPositions.map((position) => position.symbol));
-    const livePositionSymbols = new Set(exchangePositions.map((position) => position.symbol));
+    const trackedSymbols = new Set(
+      trackedPositions.map((position) => position.symbol),
+    );
+    const livePositionSymbols = new Set(
+      exchangePositions.map((position) => position.symbol),
+    );
 
     const orphanCandidates = algoOrders.filter((order) => {
       if (symbol && order.symbol !== symbol) return false;
@@ -739,7 +809,9 @@ export const positionOpsToolImplementations: Record<string, ToolExecutor> = {
       );
     });
 
-    const symbolsToCleanup = [...new Set(orphanCandidates.map((order) => order.symbol))];
+    const symbolsToCleanup = [
+      ...new Set(orphanCandidates.map((order) => order.symbol)),
+    ];
     const cleanupResults: Array<{
       symbol: string;
       cancelled: string[];
@@ -801,9 +873,9 @@ export const positionOpsToolImplementations: Record<string, ToolExecutor> = {
     const positionIdArg = parseOptionalString(args.positionId);
 
     const position = positionIdArg
-      ? ((await Position.findById(positionIdArg).lean().exec()) as
-          | PositionRecord
-          | null)
+      ? ((await Position.findById(positionIdArg)
+          .lean()
+          .exec()) as PositionRecord | null)
       : null;
 
     const accountId = position?.accountId || accountIdArg;
@@ -863,19 +935,23 @@ export const positionOpsToolImplementations: Record<string, ToolExecutor> = {
 
     let sourceContextMessages: Array<Record<string, unknown>> = [];
     if (accountId && messageId && channelId) {
-      const account = (await Account.findById(accountId).lean().exec()) as
-        | AccountRecord
-        | null;
+      const account = (await Account.findById(accountId)
+        .lean()
+        .exec()) as AccountRecord | null;
 
-      if (account && normalizeSourceType(account.sourceType) === SourceType.DISCORD) {
+      if (
+        account &&
+        normalizeSourceType(account.sourceType) === SourceType.DISCORD
+      ) {
         try {
           const sourceCtx = getSourceContextForAccount(account);
-          const messages = await new DiscordSourceProvider().fetchMessageContext(
-            sourceCtx.config,
-            channelId,
-            messageId,
-            limit,
-          );
+          const messages =
+            await new DiscordSourceProvider().fetchMessageContext(
+              sourceCtx.config,
+              channelId,
+              messageId,
+              limit,
+            );
           sourceContextMessages = serializeSourceMessages(messages);
         } catch (error) {
           sourceContextMessages = [

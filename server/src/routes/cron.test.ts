@@ -166,7 +166,12 @@ test("cron route returns conflict for signal-check and records error flows when 
       result: "started",
     },
   ]);
-  assert.equal(errorSpy.mock.calls.some((call) => call.includes("[Cron] Signal check error:")), true);
+  assert.equal(
+    errorSpy.mock.calls.some((call) =>
+      call.includes("[Cron] Signal check error:"),
+    ),
+    true,
+  );
   errorSpy.mockRestore();
 });
 
@@ -174,7 +179,9 @@ test("cron route persists signal-check error logs when catch-path logging succee
   const app = createApp();
   cronMocks.tryStart.mockReturnValueOnce(true);
   cronMocks.connectDB.mockResolvedValue(undefined);
-  cronMocks.runSignalCheck.mockRejectedValueOnce(new Error("signal catch path"));
+  cronMocks.runSignalCheck.mockRejectedValueOnce(
+    new Error("signal catch path"),
+  );
 
   const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   const res = await request(app).get("/signal-check");
@@ -335,6 +342,7 @@ test("cron route handles position-monitor success and tp/sl conflict responses",
   cronMocks.tryStart.mockReturnValueOnce(true);
   cronMocks.runPositionMonitor.mockResolvedValue({
     checked: 6,
+    syncedClosed: 0,
     actions: 2,
     errors: [],
   });
@@ -353,7 +361,7 @@ test("cron route handles position-monitor success and tp/sl conflict responses",
   ]);
   assert.deepEqual(cronMocks.updateProgress.mock.calls[2], [
     "position-monitor",
-    "Done — checked: 6, actions: 2",
+    "Done — checked: 6, syncedClosed: 0, actions: 2, errors: 0",
     "success",
   ]);
   assert.deepEqual(cronMocks.finishCron.mock.calls[0], [
@@ -364,14 +372,17 @@ test("cron route handles position-monitor success and tp/sl conflict responses",
     {
       type: "cron",
       action: "position_monitor_end",
-      details: "Checked: 6, Actions: 2, Errors: 0",
+      details: "Checked: 6, SyncedClosed: 0, Actions: 2, Errors: 0",
       level: "debug",
       result: "success",
     },
   ]);
 
   cronMocks.tryStart.mockReturnValueOnce(false);
-  cronMocks.getCronStatus.mockReturnValue({ running: true, progress: "busy tpsl" });
+  cronMocks.getCronStatus.mockReturnValue({
+    running: true,
+    progress: "busy tpsl",
+  });
 
   const conflict = await request(app).get("/tp-sl-monitor");
   assert.equal(conflict.status, 409);

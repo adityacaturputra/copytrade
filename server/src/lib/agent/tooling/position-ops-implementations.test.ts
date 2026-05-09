@@ -116,7 +116,9 @@ function createPositionDoc(overrides: Record<string, unknown> = {}): any {
     currentPrice: 100,
     pnl: 0,
     stopLossPrice: 95,
-    takeProfitTargets: [{ price: 120, quantity: 2, percentage: 100, status: "pending" }],
+    takeProfitTargets: [
+      { price: 120, quantity: 2, percentage: 100, status: "pending" },
+    ],
     save: vi.fn(),
     toObject() {
       return this;
@@ -156,7 +158,9 @@ beforeEach(() => {
   positionOpsMocks.logProcessStep.mockResolvedValue(undefined);
   positionOpsMocks.ensurePersistedProcessId.mockResolvedValue("proc-persisted");
   positionOpsMocks.getResolvedProcessId.mockReturnValue("proc-resolved");
-  positionOpsMocks.getAccountIdFromArgs.mockImplementation((args) => args.accountId);
+  positionOpsMocks.getAccountIdFromArgs.mockImplementation(
+    (args) => args.accountId,
+  );
   positionOpsMocks.normalizePositiveNumber.mockImplementation(
     (value, fallback, max) => {
       if (typeof value !== "number" || value <= 0) return fallback;
@@ -172,11 +176,13 @@ beforeEach(() => {
   positionOpsMocks.parseOptionalString.mockImplementation((value) =>
     typeof value === "string" && value.trim() ? value.trim() : undefined,
   );
-  positionOpsMocks.roundPrice.mockImplementation((value: number) =>
-    Math.round(value * 100) / 100,
+  positionOpsMocks.roundPrice.mockImplementation(
+    (value: number) => Math.round(value * 100) / 100,
   );
   positionOpsMocks.resolveExchangeContext.mockReset();
-  positionOpsMocks.serializeSourceMessages.mockImplementation((messages) => messages);
+  positionOpsMocks.serializeSourceMessages.mockImplementation(
+    (messages) => messages,
+  );
   positionOpsMocks.toClosingSide.mockImplementation((side) =>
     side === "LONG" ? "SELL" : "BUY",
   );
@@ -217,7 +223,10 @@ test("position ops analyzes position context and returns AI input plus live snap
   assert.equal(result.success, true);
   assert.equal(result.processId, "proc-persisted");
   assert.equal(result.analysis.decision, "MOVE_SL");
-  assert.equal(positionOpsMocks.logProcessStep.mock.calls[0][0].action, "analyze_position_context");
+  assert.equal(
+    positionOpsMocks.logProcessStep.mock.calls[0][0].action,
+    "analyze_position_context",
+  );
 });
 
 test("position ops exposes live protection state and mismatch details", async () => {
@@ -250,7 +259,9 @@ test("position ops exposes live protection state and mismatch details", async ()
     symbol: "BTCUSDT",
     side: "LONG",
     quantity: 2,
-    takeProfitTargets: [{ price: 120, quantity: 2, percentage: 100, status: "pending" }],
+    takeProfitTargets: [
+      { price: 120, quantity: 2, percentage: 100, status: "pending" },
+    ],
     stopLossPrice: 95,
   });
   positionOpsMocks.positionFindById.mockReturnValue(
@@ -259,7 +270,9 @@ test("position ops exposes live protection state and mismatch details", async ()
         _id: "pos-prot",
         quantity: 2,
         stopLossPrice: 95,
-        takeProfitTargets: [{ price: 120, quantity: 2, percentage: 100, status: "pending" }],
+        takeProfitTargets: [
+          { price: 120, quantity: 2, percentage: 100, status: "pending" },
+        ],
       }),
     ),
   );
@@ -280,7 +293,10 @@ test("position ops exposes live protection state and mismatch details", async ()
   assert.equal(result.protection.missingLiveStopLoss, false);
   assert.equal(result.protection.missingLiveTakeProfits.length, 1);
   assert.equal(result.protection.extraLiveTakeProfitOrders.length, 1);
-  assert.equal(positionOpsMocks.logProcessStep.mock.calls.at(-1)?.[0]?.action, "get_position_protection");
+  assert.equal(
+    positionOpsMocks.logProcessStep.mock.calls.at(-1)?.[0]?.action,
+    "get_position_protection",
+  );
 });
 
 test("position ops adjusts stop loss and replaces the take-profit ladder", async () => {
@@ -297,7 +313,9 @@ test("position ops adjusts stop loss and replaces the take-profit ladder", async
     quantity: 2,
     side: "LONG",
     stopLossPrice: 95,
-    takeProfitTargets: [{ price: 120, quantity: 2, percentage: 100, status: "pending" }],
+    takeProfitTargets: [
+      { price: 120, quantity: 2, percentage: 100, status: "pending" },
+    ],
   });
 
   positionOpsMocks.findPositionRecord.mockResolvedValue({
@@ -307,7 +325,9 @@ test("position ops adjusts stop loss and replaces the take-profit ladder", async
     side: "LONG",
     quantity: 2,
     stopLossPrice: 95,
-    takeProfitTargets: [{ price: 120, quantity: 2, percentage: 100, status: "pending" }],
+    takeProfitTargets: [
+      { price: 120, quantity: 2, percentage: 100, status: "pending" },
+    ],
   });
   positionOpsMocks.positionFindById.mockReturnValue(createQuery(positionDoc));
   positionOpsMocks.getLivePositionSnapshot.mockResolvedValue({
@@ -355,7 +375,10 @@ test("position ops adjusts stop loss and replaces the take-profit ladder", async
     "SELL",
     1,
   ]);
-  assert.equal(positionOpsMocks.logProcessStep.mock.calls.at(-1)?.[0]?.action, "adjust_position_protection");
+  assert.equal(
+    positionOpsMocks.logProcessStep.mock.calls.at(-1)?.[0]?.action,
+    "adjust_position_protection",
+  );
 });
 
 test("position ops manage_position supports close and stop-loss updates", async () => {
@@ -407,6 +430,7 @@ test("position ops manage_position supports close and stop-loss updates", async 
     await positionOpsToolImplementations.manage_position({
       positionId: "pos-close",
       action: "close",
+      reason: "Test close — position no longer on exchange",
     }),
   );
   const moved = JSON.parse(
@@ -453,9 +477,7 @@ test("position ops reviews signal threads, fetches discord context, and exposes 
   positionOpsMocks.draftTradeFind.mockReturnValue(
     createQuery([{ processId: "proc-1", messageId: "msg-1" }]),
   );
-  positionOpsMocks.positionFind.mockReturnValue(
-    createQuery([position]),
-  );
+  positionOpsMocks.positionFind.mockReturnValue(createQuery([position]));
   positionOpsMocks.getProcessTradeLogs.mockResolvedValue([{ action: "x" }]);
   positionOpsMocks.accountFindById.mockReturnValue(
     createQuery({ _id: "acc-1", name: "VIP", sourceType: "discord" }),
@@ -463,7 +485,9 @@ test("position ops reviews signal threads, fetches discord context, and exposes 
   positionOpsMocks.getSourceContextForAccount.mockReturnValue({
     config: { _id: "acc-1" },
   });
-  positionOpsMocks.fetchMessageContext.mockResolvedValue([{ messageId: "ctx-1" }]);
+  positionOpsMocks.fetchMessageContext.mockResolvedValue([
+    { messageId: "ctx-1" },
+  ]);
 
   const result = JSON.parse(
     await positionOpsToolImplementations.review_signal_thread({
@@ -487,7 +511,9 @@ test("position ops get_process_logs validates process id and syncs positions wit
   const openDoc = createPositionDoc({
     _id: "pos-1",
     quantity: 1,
-    takeProfitTargets: [{ price: 120, quantity: 1, percentage: 100, status: "pending" }],
+    takeProfitTargets: [
+      { price: 120, quantity: 1, percentage: 100, status: "pending" },
+    ],
   });
   const closedDoc = createPositionDoc({
     _id: "pos-2",
@@ -560,7 +586,10 @@ test("position ops get_process_logs validates process id and syncs positions wit
   assert.equal(openDoc.quantity, 1.5);
   assert.equal(syncedClosed.syncedStatus, "closed");
   assert.equal(closedDoc.status, "closed");
-  assert.equal(positionOpsMocks.logProcessStep.mock.calls.at(-1)?.[0]?.action, "sync_position_with_exchange");
+  assert.equal(
+    positionOpsMocks.logProcessStep.mock.calls.at(-1)?.[0]?.action,
+    "sync_position_with_exchange",
+  );
 });
 
 test("position ops cleans orphan protection orders only for symbols without tracked or live activity", async () => {
@@ -620,7 +649,10 @@ test("position ops cleans orphan protection orders only for symbols without trac
   assert.equal(applied.cleanupResults.length, 1);
   assert.equal(applied.cleanupResults[0].symbol, "DOGEUSDT");
   assert.equal(exchange.cancelAlgoOrders.mock.calls.length, 1);
-  assert.equal(positionOpsMocks.logProcessStep.mock.calls.at(-1)?.[0]?.action, "cleanup_orphan_protection_orders");
+  assert.equal(
+    positionOpsMocks.logProcessStep.mock.calls.at(-1)?.[0]?.action,
+    "cleanup_orphan_protection_orders",
+  );
 });
 
 test("position ops orphan cleanup ignores standard open orders and still cleans stale TP/SL without positions", async () => {
@@ -829,10 +861,16 @@ test("position ops manage_position covers partial close, breakeven, trailing sto
     .mockReturnValueOnce(createQuery(cancelOrdersDoc))
     .mockReturnValueOnce(createQuery(unsupportedDoc))
     .mockReturnValueOnce(createQuery(null))
-    .mockReturnValueOnce(createQuery(createPositionDoc({ _id: "pos-no-action" })))
-    .mockReturnValueOnce(createQuery(createPositionDoc({ _id: "pos-no-price" })))
+    .mockReturnValueOnce(
+      createQuery(createPositionDoc({ _id: "pos-no-action" })),
+    )
+    .mockReturnValueOnce(
+      createQuery(createPositionDoc({ _id: "pos-no-price" })),
+    )
     .mockReturnValueOnce(createQuery(createPositionDoc({ _id: "pos-no-tp" })))
-    .mockReturnValueOnce(createQuery(createPositionDoc({ _id: "pos-no-trail" })));
+    .mockReturnValueOnce(
+      createQuery(createPositionDoc({ _id: "pos-no-trail" })),
+    );
 
   positionOpsMocks.getLivePositionSnapshot
     .mockResolvedValueOnce({
@@ -901,6 +939,7 @@ test("position ops manage_position covers partial close, breakeven, trailing sto
     await positionOpsToolImplementations.manage_position({
       positionId: "pos-partial",
       action: "partial_close",
+      reason: "Test partial close — TP1 hit",
       quantity: 1.5,
     }),
   );
@@ -965,6 +1004,7 @@ test("position ops manage_position covers partial close, breakeven, trailing sto
       positionOpsToolImplementations.manage_position({
         positionId: "pos-missing-doc",
         action: "close",
+        reason: "Test validation close",
       }),
     /Position document not found/,
   );
@@ -1018,10 +1058,14 @@ test("position ops review_signal_thread falls back across anchors and handles po
       }),
     );
   positionOpsMocks.processedMessageFind
-    .mockReturnValueOnce(createQuery([{ processId: "proc-from-processed", messageId: "msg-2" }]))
+    .mockReturnValueOnce(
+      createQuery([{ processId: "proc-from-processed", messageId: "msg-2" }]),
+    )
     .mockReturnValueOnce(createQuery([]));
   positionOpsMocks.draftTradeFind
-    .mockReturnValueOnce(createQuery([{ processId: "proc-from-draft", messageId: "msg-2" }]))
+    .mockReturnValueOnce(
+      createQuery([{ processId: "proc-from-draft", messageId: "msg-2" }]),
+    )
     .mockReturnValueOnce(createQuery([]));
   positionOpsMocks.positionFind
     .mockReturnValueOnce(createQuery([]))

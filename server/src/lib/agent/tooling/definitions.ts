@@ -704,8 +704,7 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
         properties: {
           accountId: {
             type: "string",
-            description:
-              "Optional source account ID from get_signal_sources.",
+            description: "Optional source account ID from get_signal_sources.",
           },
           sourceType: {
             type: "string",
@@ -812,8 +811,7 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
         properties: {
           positionId: {
             type: "string",
-            description:
-              "Preferred tracked position ID from the database.",
+            description: "Preferred tracked position ID from the database.",
           },
           accountId: {
             type: "string",
@@ -841,8 +839,7 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
         properties: {
           positionId: {
             type: "string",
-            description:
-              "Preferred tracked position ID from the database.",
+            description: "Preferred tracked position ID from the database.",
           },
           accountId: {
             type: "string",
@@ -870,8 +867,7 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
         properties: {
           positionId: {
             type: "string",
-            description:
-              "Preferred tracked position ID from the database.",
+            description: "Preferred tracked position ID from the database.",
           },
           accountId: {
             type: "string",
@@ -894,8 +890,12 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
               "move_take_profit",
               "cancel_all_orders",
             ],
+            description: "The management action to execute.",
+          },
+          reason: {
+            type: "string",
             description:
-              "The management action to execute.",
+              "REQUIRED for close and partial_close actions. A clear, specific reason explaining WHY this action is being taken (e.g., 'Exchange position no longer exists after sync', 'TP1 hit on exchange'). Must reference concrete evidence — do NOT close merely because price is near SL.",
           },
           quantity: {
             type: "number",
@@ -923,8 +923,7 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
         properties: {
           positionId: {
             type: "string",
-            description:
-              "Preferred tracked position ID from the database.",
+            description: "Preferred tracked position ID from the database.",
           },
           accountId: {
             type: "string",
@@ -1025,8 +1024,7 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
         properties: {
           processId: {
             type: "string",
-            description:
-              "Required process ID to inspect.",
+            description: "Required process ID to inspect.",
           },
           limit: {
             type: "number",
@@ -1036,8 +1034,7 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
           order: {
             type: "string",
             enum: ["asc", "desc"],
-            description:
-              "Sort order by createdAt. Default desc.",
+            description: "Sort order by createdAt. Default desc.",
           },
         },
         required: ["processId"],
@@ -1055,8 +1052,7 @@ export const agentTools: OpenAI.ChatCompletionTool[] = [
         properties: {
           positionId: {
             type: "string",
-            description:
-              "Preferred tracked position ID from the database.",
+            description: "Preferred tracked position ID from the database.",
           },
           accountId: {
             type: "string",
