@@ -12,8 +12,26 @@ const imageMocks = vi.hoisted(() => ({
     isEnabled: vi.fn(),
     analyzeImage: vi.fn(),
   },
+  glmAnalyzer: {
+    provider: "glm",
+    isEnabled: vi.fn(),
+    analyzeImage: vi.fn(),
+  },
+  kimiAnalyzer: {
+    provider: "kimi",
+    isEnabled: vi.fn(),
+    analyzeImage: vi.fn(),
+  },
+  konektikaAnalyzer: {
+    provider: "konektika",
+    isEnabled: vi.fn(),
+    analyzeImage: vi.fn(),
+  },
   getGeminiVisionAnalyzer: vi.fn(),
   getCodexPatunginVisionAnalyzer: vi.fn(),
+  getGLMVisionAnalyzer: vi.fn(),
+  getKimiVisionAnalyzer: vi.fn(),
+  getKonektikaVisionAnalyzer: vi.fn(),
   getCodexPatunginConfig: vi.fn(),
 }));
 
@@ -22,18 +40,26 @@ vi.mock("./GeminiVisionAnalyzer", () => ({
 }));
 
 vi.mock("./CodexPatunginVisionAnalyzer", () => ({
-  getCodexPatunginVisionAnalyzer:
-    imageMocks.getCodexPatunginVisionAnalyzer,
+  getCodexPatunginVisionAnalyzer: imageMocks.getCodexPatunginVisionAnalyzer,
+}));
+
+vi.mock("./GLMVisionAnalyzer", () => ({
+  getGLMVisionAnalyzer: imageMocks.getGLMVisionAnalyzer,
+}));
+
+vi.mock("./KimiVisionAnalyzer", () => ({
+  getKimiVisionAnalyzer: imageMocks.getKimiVisionAnalyzer,
+}));
+
+vi.mock("./KonektikaVisionAnalyzer", () => ({
+  getKonektikaVisionAnalyzer: imageMocks.getKonektikaVisionAnalyzer,
 }));
 
 vi.mock("./CodexPatunginConfig", () => ({
   getCodexPatunginConfig: imageMocks.getCodexPatunginConfig,
 }));
 
-import {
-  ImageAIFactory,
-  preprocessImagesWithVision,
-} from "./ImageAIFactory";
+import { ImageAIFactory, preprocessImagesWithVision } from "./ImageAIFactory";
 
 const originalEnv = { ...process.env };
 
@@ -42,18 +68,34 @@ beforeEach(() => {
   delete process.env.VISION_AI_PROVIDER;
   delete process.env.IMAGE_AI_PROVIDER;
   delete process.env.AI_PROVIDER;
+  delete process.env.VISION_AI_PROVIDER_FALLBACK;
+  delete process.env.IMAGE_AI_PROVIDER_FALLBACK;
 
   imageMocks.geminiAnalyzer.isEnabled.mockReset();
   imageMocks.geminiAnalyzer.analyzeImage.mockReset();
   imageMocks.patunginAnalyzer.isEnabled.mockReset();
   imageMocks.patunginAnalyzer.analyzeImage.mockReset();
+  imageMocks.glmAnalyzer.isEnabled.mockReset();
+  imageMocks.glmAnalyzer.analyzeImage.mockReset();
+  imageMocks.kimiAnalyzer.isEnabled.mockReset();
+  imageMocks.kimiAnalyzer.analyzeImage.mockReset();
+  imageMocks.konektikaAnalyzer.isEnabled.mockReset();
+  imageMocks.konektikaAnalyzer.analyzeImage.mockReset();
   imageMocks.getGeminiVisionAnalyzer.mockReset();
   imageMocks.getCodexPatunginVisionAnalyzer.mockReset();
+  imageMocks.getGLMVisionAnalyzer.mockReset();
+  imageMocks.getKimiVisionAnalyzer.mockReset();
+  imageMocks.getKonektikaVisionAnalyzer.mockReset();
   imageMocks.getCodexPatunginConfig.mockReset();
 
   imageMocks.getGeminiVisionAnalyzer.mockReturnValue(imageMocks.geminiAnalyzer);
   imageMocks.getCodexPatunginVisionAnalyzer.mockReturnValue(
     imageMocks.patunginAnalyzer,
+  );
+  imageMocks.getGLMVisionAnalyzer.mockReturnValue(imageMocks.glmAnalyzer);
+  imageMocks.getKimiVisionAnalyzer.mockReturnValue(imageMocks.kimiAnalyzer);
+  imageMocks.getKonektikaVisionAnalyzer.mockReturnValue(
+    imageMocks.konektikaAnalyzer,
   );
   imageMocks.getCodexPatunginConfig.mockReturnValue({ apiKey: "" });
 });
@@ -65,6 +107,15 @@ test("ImageAIFactory selects the correct analyzer from explicit and implicit pro
   process.env.VISION_AI_PROVIDER = "gemini";
   const explicitGemini = ImageAIFactory.getAnalyzer();
 
+  process.env.VISION_AI_PROVIDER = "glm";
+  const explicitGLM = ImageAIFactory.getAnalyzer();
+
+  process.env.VISION_AI_PROVIDER = "kimi";
+  const explicitKimi = ImageAIFactory.getAnalyzer();
+
+  process.env.VISION_AI_PROVIDER = "konektika";
+  const explicitKonektika = ImageAIFactory.getAnalyzer();
+
   delete process.env.VISION_AI_PROVIDER;
   process.env.AI_PROVIDER = "patungin";
   const inheritedPatungin = ImageAIFactory.getAnalyzer();
@@ -75,8 +126,49 @@ test("ImageAIFactory selects the correct analyzer from explicit and implicit pro
 
   assert.equal(explicitPatungin, imageMocks.patunginAnalyzer);
   assert.equal(explicitGemini, imageMocks.geminiAnalyzer);
+  assert.equal(explicitGLM, imageMocks.glmAnalyzer);
+  assert.equal(explicitKimi, imageMocks.kimiAnalyzer);
+  assert.equal(explicitKonektika, imageMocks.konektikaAnalyzer);
   assert.equal(inheritedPatungin, imageMocks.patunginAnalyzer);
   assert.equal(configPatungin, imageMocks.patunginAnalyzer);
+});
+
+test("ImageAIFactory getAnalyzers returns providers in fallback order", () => {
+  process.env.VISION_AI_PROVIDER = "patungin";
+  process.env.VISION_AI_PROVIDER_FALLBACK = "glm,kimi,gemini";
+
+  const analyzers = ImageAIFactory.getAnalyzers();
+
+  assert.equal(analyzers.length, 4);
+  assert.equal(analyzers[0].provider, "patungin");
+  assert.equal(analyzers[1].provider, "glm");
+  assert.equal(analyzers[2].provider, "kimi");
+  assert.equal(analyzers[3].provider, "gemini");
+});
+
+test("ImageAIFactory getAnalyzers deduplicates providers", () => {
+  process.env.VISION_AI_PROVIDER = "gemini";
+  process.env.VISION_AI_PROVIDER_FALLBACK = "gemini,glm,gemini";
+
+  const analyzers = ImageAIFactory.getAnalyzers();
+
+  assert.equal(analyzers.length, 2);
+  assert.equal(analyzers[0].provider, "gemini");
+  assert.equal(analyzers[1].provider, "glm");
+});
+
+test("ImageAIFactory getAnalyzers skips providers without credentials", () => {
+  process.env.VISION_AI_PROVIDER = "glm";
+  process.env.VISION_AI_PROVIDER_FALLBACK = "kimi,gemini";
+
+  // Simulate kimi not having credentials
+  imageMocks.getKimiVisionAnalyzer.mockReturnValue(null);
+
+  const analyzers = ImageAIFactory.getAnalyzers();
+
+  assert.equal(analyzers.length, 2);
+  assert.equal(analyzers[0].provider, "glm");
+  assert.equal(analyzers[1].provider, "gemini");
 });
 
 test("preprocessImagesWithVision returns the original content when disabled or no images are present", async () => {
@@ -147,7 +239,9 @@ test("preprocessImagesWithVision preserves content when vision is enabled but fi
     rawResponse: "raw-none",
   });
 
-  const result = await preprocessImagesWithVision("plain", ["https://img/none"]);
+  const result = await preprocessImagesWithVision("plain", [
+    "https://img/none",
+  ]);
 
   assert.deepEqual(result, {
     enhancedContent: "plain",
@@ -159,4 +253,52 @@ test("preprocessImagesWithVision preserves content when vision is enabled but fi
       },
     ],
   });
+});
+
+test("preprocessImagesWithVision falls back to next provider when primary fails", async () => {
+  // Primary: gemini fails, fallback: glm succeeds
+  imageMocks.geminiAnalyzer.isEnabled.mockResolvedValue(true);
+  imageMocks.geminiAnalyzer.analyzeImage.mockRejectedValueOnce(
+    new Error("gemini failed"),
+  );
+  imageMocks.glmAnalyzer.analyzeImage.mockResolvedValueOnce({
+    isSignal: true,
+    extractedText: "BUY ETHUSDT 5x",
+    rawResponse: "glm-raw",
+  });
+
+  process.env.VISION_AI_PROVIDER = "gemini";
+  process.env.VISION_AI_PROVIDER_FALLBACK = "glm";
+
+  const result = await preprocessImagesWithVision("base", ["https://img/1"]);
+
+  assert.equal(
+    result.enhancedContent,
+    "base\n\n[Chart Image Analysis]:\nBUY ETHUSDT 5x",
+  );
+  assert.deepEqual(result.visionResults, [
+    {
+      isSignal: true,
+      extractedText: "BUY ETHUSDT 5x",
+      rawResponse: "glm-raw",
+    },
+  ]);
+});
+
+test("preprocessImagesWithVision returns empty result when all providers fail", async () => {
+  imageMocks.geminiAnalyzer.isEnabled.mockResolvedValue(true);
+  imageMocks.geminiAnalyzer.analyzeImage.mockRejectedValue(
+    new Error("gemini down"),
+  );
+  imageMocks.glmAnalyzer.analyzeImage.mockRejectedValue(new Error("glm down"));
+
+  process.env.VISION_AI_PROVIDER = "gemini";
+  process.env.VISION_AI_PROVIDER_FALLBACK = "glm";
+
+  const result = await preprocessImagesWithVision("base", ["https://img/1"]);
+
+  assert.equal(result.enhancedContent, "base");
+  assert.deepEqual(result.visionResults, [
+    { isSignal: false, extractedText: "", rawResponse: "" },
+  ]);
 });
