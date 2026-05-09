@@ -18,10 +18,7 @@ import {
   ExchangeCredentials,
   buildExchangeCredentials,
 } from "./exchange/ExchangeFactory";
-import {
-  calculateRiskBasedPosition,
-  resolveEffectiveRiskConfig,
-} from "./risk";
+import { calculateRiskBasedPosition, resolveEffectiveRiskConfig } from "./risk";
 import { getSignalConfig } from "./signal-config";
 import {
   createTradeProcessId,
@@ -121,11 +118,7 @@ export async function splitQuantityForTPs(
   return quantities;
 }
 
-function roundUpToStep(
-  value: number,
-  step: number,
-  decimals: number,
-): number {
+function roundUpToStep(value: number, step: number, decimals: number): number {
   if (!Number.isFinite(value) || value <= 0) return 0;
   if (!Number.isFinite(step) || step <= 0) {
     return Number(value.toFixed(Math.max(0, decimals)));
@@ -168,7 +161,11 @@ async function resolveExitPrice(
   const currentPrice =
     typeof rawCurrentPrice === "number" ? rawCurrentPrice : null;
 
-  if (currentPrice !== null && Number.isFinite(currentPrice) && currentPrice > 0) {
+  if (
+    currentPrice !== null &&
+    Number.isFinite(currentPrice) &&
+    currentPrice > 0
+  ) {
     return currentPrice;
   }
 
@@ -334,9 +331,12 @@ export async function runSignalCheck(): Promise<{
             lastError: errMsg,
           });
 
-          await logExecutorError(`❌ Account "${account.name}" error: ${errMsg}`, {
-            accountId: account._id.toString(),
-          });
+          await logExecutorError(
+            `❌ Account "${account.name}" error: ${errMsg}`,
+            {
+              accountId: account._id.toString(),
+            },
+          );
         }
       }
     }
@@ -373,7 +373,9 @@ export async function runSignalCheck(): Promise<{
       ),
     );
     const newMessages: ProcessTrackedMessage[] = allMessages
-      .filter((m) => !existingKeys.has(`${m.messageId}::${m.sourceId || "null"}`))
+      .filter(
+        (m) => !existingKeys.has(`${m.messageId}::${m.sourceId || "null"}`),
+      )
       .map((msg) => ({
         ...msg,
         processId: createTradeProcessId("draftproc"),
@@ -451,7 +453,11 @@ export async function runSignalCheck(): Promise<{
         }
 
         // Process each result in the batch — map by messageId
-        for (const { messageId: resultMsgId, signal, parseError } of batchResults) {
+        for (const {
+          messageId: resultMsgId,
+          signal,
+          parseError,
+        } of batchResults) {
           const msg = msgLookup.get(resultMsgId);
           if (!msg) continue;
 
@@ -591,8 +597,99 @@ export async function runSignalCheck(): Promise<{
                     : "no_pending_drafts",
               });
 
-              // In auto mode, also close open positions if requested
+              // In auto mode, also close open positions and cancel pending limit orders
               if (mode === "auto") {
+                // --- Cancel pending (limit) positions ---
+                const pendingPositions = await Position.find({
+                  symbol: signal.symbol,
+                  status: "pending",
+                });
+
+                for (const pos of pendingPositions) {
+                  try {
+                    const posExchange = await (async () => {
+                      if (pos.accountId) {
+                        const acct = await Account.findById(
+                          pos.accountId,
+                        ).lean();
+                        if (acct?.exchangeData) {
+                          const creds = buildExchangeCredentials(
+                            acct.tradingPlatform,
+                            (acct.exchangeData as Record<string, unknown>) ||
+                              {},
+                          );
+                          if (creds) {
+                            return ExchangeFactory.getClientForAccount(creds);
+                          }
+                        }
+                      }
+                      return ExchangeFactory.getPaperClient();
+                    })();
+
+                    // Cancel the open limit order on the exchange
+                    if (pos.orderId) {
+                      try {
+                        await posExchange.cancelOrder(pos.orderId, pos.symbol);
+                        await logExecutorInfo(
+                          `🚫 Cancelled limit order ${pos.orderId} on exchange for ${pos.symbol}`,
+                          {
+                            accountId: pos.accountId || msg.sourceId,
+                            processId: msg.processId,
+                            symbol: pos.symbol,
+                          },
+                        );
+                      } catch (cancelErr) {
+                        await logExecutorWarn(
+                          `⚠️ Failed to cancel limit order ${pos.orderId} on exchange for ${pos.symbol}: ${cancelErr instanceof Error ? cancelErr.message : String(cancelErr)}`,
+                          {
+                            accountId: pos.accountId || msg.sourceId,
+                            processId: msg.processId,
+                            symbol: pos.symbol,
+                          },
+                        );
+                      }
+                    }
+
+                    pos.status = "closed";
+                    pos.closedAt = new Date();
+                    pos.closeReason = `Cancel request by ${msg.author}: ${signal.reasoning || "signal author requested cancellation"}`;
+                    await pos.save();
+
+                    await logProcessStep({
+                      accountId: pos.accountId || msg.sourceId,
+                      processId: msg.processId,
+                      type: "draft_process",
+                      action: "pending_limit_order_cancelled",
+                      symbol: pos.symbol,
+                      details: {
+                        positionId: pos._id.toString(),
+                        orderId: pos.orderId,
+                        cancelMessageId: msg.messageId,
+                      },
+                      result: "cancelled",
+                    });
+
+                    await logExecutorInfo(
+                      `🚫 Cancelled pending limit order position: ${pos.symbol} ${pos.side}`,
+                      {
+                        accountId: pos.accountId || msg.sourceId,
+                        processId: msg.processId,
+                        symbol: pos.symbol,
+                      },
+                    );
+                  } catch (cancelErr) {
+                    await logExecutorWarn(
+                      `⚠️ Failed to cancel pending position ${pos.symbol}: ${cancelErr instanceof Error ? cancelErr.message : String(cancelErr)}`,
+                      {
+                        accountId: pos.accountId || msg.sourceId,
+                        processId: msg.processId,
+                        symbol: pos.symbol,
+                      },
+                    );
+                  }
+                }
+
+                // --- Close open positions ---
                 const openPositions = await Position.find({
                   symbol: signal.symbol,
                   status: "open",
@@ -617,10 +714,13 @@ export async function runSignalCheck(): Promise<{
                               return ExchangeFactory.getClientForAccount(creds);
                             }
                           }
-                      }
+                        }
                         return ExchangeFactory.getPaperClient();
                       })();
-                      const exitPrice = await resolveExitPrice(posExchange, pos);
+                      const exitPrice = await resolveExitPrice(
+                        posExchange,
+                        pos,
+                      );
                       await posExchange.closePosition(
                         pos.symbol,
                         pos.orderId,
@@ -799,11 +899,14 @@ export async function runSignalCheck(): Promise<{
               error: errMsg,
             });
 
-            await logExecutorError(`Error processing message ${msg.messageId}: ${errMsg}`, {
-              accountId: msg.sourceId,
-              processId: msg.processId,
-              action: "console_process_error",
-            });
+            await logExecutorError(
+              `Error processing message ${msg.messageId}: ${errMsg}`,
+              {
+                accountId: msg.sourceId,
+                processId: msg.processId,
+                action: "console_process_error",
+              },
+            );
           }
         } // end for batchResults
       } // end for batch
@@ -822,7 +925,6 @@ export async function runSignalCheck(): Promise<{
   );
   return result;
 }
-
 
 /**
  * Check for duplicate open positions (same symbol + side + channel).
@@ -959,11 +1061,14 @@ export async function executeTrade(
       exchange = ExchangeFactory.getPaperClient();
     }
   } else {
-    await logExecutorWarn(`${lp}⚠️ No accountId provided, using paper exchange`, {
-      processId,
-      symbol,
-      action: "console_exchange_fallback",
-    });
+    await logExecutorWarn(
+      `${lp}⚠️ No accountId provided, using paper exchange`,
+      {
+        processId,
+        symbol,
+        action: "console_exchange_fallback",
+      },
+    );
     exchange = ExchangeFactory.getPaperClient();
   }
 
@@ -1111,7 +1216,9 @@ export async function executeTrade(
           );
           const requiredNotional = requiredQty * referencePrice;
           const requiredMargin =
-            orderLeverage > 0 ? requiredNotional / orderLeverage : Number.POSITIVE_INFINITY;
+            orderLeverage > 0
+              ? requiredNotional / orderLeverage
+              : Number.POSITIVE_INFINITY;
           const autoRaiseCap = effectiveRiskConfig.autoRaiseMinOrderEnabled
             ? effectiveRiskConfig.autoRaiseMinOrderMaxMarginUsdt
             : 0;
@@ -1588,13 +1695,15 @@ export async function executeSignal(
             type: "draft_process",
             action: "execution_skipped_no_sl",
             symbol: signal.symbol,
-            details: "Trade skipped: no stop loss provided and skipNoSL is enabled",
+            details:
+              "Trade skipped: no stop loss provided and skipNoSL is enabled",
             result: "skipped",
           });
           return {
             type: "skipped",
             code: "no_stop_loss",
-            reason: "Trade skipped: no stop loss provided and skipNoSL is enabled",
+            reason:
+              "Trade skipped: no stop loss provided and skipNoSL is enabled",
           };
         }
       }
@@ -1669,6 +1778,187 @@ export async function executeSignal(
       return { type: "opened", position };
     }
 
+    case "CANCEL": {
+      let cancelledCount = 0;
+      let closedCount = 0;
+
+      // --- Cancel pending (limit) positions ---
+      const pendingPositions = await Position.find({
+        symbol: signal.symbol,
+        channelId: channelId || null,
+        status: "pending",
+      });
+
+      for (const pos of pendingPositions) {
+        try {
+          const posExchange = await (async () => {
+            if (pos.accountId) {
+              const acct = await Account.findById(pos.accountId).lean();
+              if (acct?.exchangeData) {
+                const creds = buildExchangeCredentials(
+                  acct.tradingPlatform,
+                  (acct.exchangeData as Record<string, unknown>) || {},
+                );
+                if (creds) return ExchangeFactory.getClientForAccount(creds);
+              }
+            }
+            return ExchangeFactory.getPaperClient();
+          })();
+
+          // Cancel the open limit order on the exchange
+          if (pos.orderId) {
+            try {
+              await posExchange.cancelOrder(pos.orderId, pos.symbol);
+              await logExecutorInfo(
+                `🚫 Cancelled limit order ${pos.orderId} on exchange for ${pos.symbol}`,
+                {
+                  accountId: pos.accountId || accountId,
+                  processId,
+                  symbol: pos.symbol,
+                  action: "console_cancel_limit_order",
+                },
+              );
+            } catch (cancelErr) {
+              await logExecutorWarn(
+                `⚠️ Failed to cancel limit order ${pos.orderId} on exchange: ${cancelErr instanceof Error ? cancelErr.message : String(cancelErr)}`,
+                {
+                  accountId: pos.accountId || accountId,
+                  processId,
+                  symbol: pos.symbol,
+                  action: "console_cancel_limit_order_failed",
+                },
+              );
+            }
+          }
+
+          pos.status = "closed";
+          pos.closedAt = new Date();
+          pos.closeReason = `Cancel signal: ${signal.reasoning || "signal author requested cancellation"}`;
+          await pos.save();
+          cancelledCount++;
+
+          await logExecutorInfo(
+            `🚫 Cancelled pending position: ${pos.symbol} ${pos.side}`,
+            {
+              accountId: pos.accountId || accountId,
+              processId,
+              symbol: pos.symbol,
+              action: "console_cancel_pending_position",
+            },
+          );
+        } catch (cancelErr) {
+          await logExecutorWarn(
+            `⚠️ Failed to cancel pending position ${pos.symbol}: ${cancelErr instanceof Error ? cancelErr.message : String(cancelErr)}`,
+            {
+              accountId: pos.accountId || accountId,
+              processId,
+              symbol: pos.symbol,
+              action: "console_cancel_pending_failed",
+            },
+          );
+        }
+      }
+
+      // --- Close open positions ---
+      const openPositions = await Position.find({
+        symbol: signal.symbol,
+        channelId: channelId || null,
+        status: "open",
+      });
+
+      for (const pos of openPositions) {
+        try {
+          const posExchange = await (async () => {
+            if (pos.accountId) {
+              const acct = await Account.findById(pos.accountId).lean();
+              if (acct?.exchangeData) {
+                const creds = buildExchangeCredentials(
+                  acct.tradingPlatform,
+                  (acct.exchangeData as Record<string, unknown>) || {},
+                );
+                if (creds) return ExchangeFactory.getClientForAccount(creds);
+              }
+            }
+            return ExchangeFactory.getPaperClient();
+          })();
+          const exitPrice = await resolveExitPrice(posExchange, pos);
+          await posExchange.closePosition(
+            pos.symbol,
+            pos.orderId,
+            pos.quantity,
+          );
+
+          pos.status = "closed";
+          pos.closedAt = new Date();
+          pos.closeReason = `Cancel signal: ${signal.reasoning || "signal author requested cancellation"}`;
+          if (exitPrice !== null) {
+            pos.currentPrice = exitPrice;
+            pos.pnlUsd =
+              calculatePositionPnlUsd(pos, exitPrice) ?? pos.pnlUsd ?? null;
+          }
+          await pos.save();
+          closedCount++;
+
+          await logExecutorInfo(
+            `🚫 Cancel-closed open position: ${pos.symbol} ${pos.side}`,
+            {
+              accountId: pos.accountId || accountId,
+              processId,
+              symbol: pos.symbol,
+              action: "console_cancel_close_position",
+            },
+          );
+        } catch (closeErr) {
+          await logExecutorWarn(
+            `⚠️ Failed to cancel-close ${pos.symbol}: ${closeErr instanceof Error ? closeErr.message : String(closeErr)}`,
+            {
+              accountId: pos.accountId || accountId,
+              processId,
+              symbol: pos.symbol,
+              action: "console_cancel_close_failed",
+            },
+          );
+        }
+      }
+
+      const totalAffected = cancelledCount + closedCount;
+
+      if (totalAffected === 0) {
+        await logProcessStep({
+          accountId,
+          processId,
+          type: "draft_process",
+          action: "cancel_no_positions",
+          symbol: signal.symbol,
+          details: `No open or pending positions found for ${signal.symbol} to cancel`,
+          result: "noop",
+        });
+        return {
+          type: "noop",
+          code: "no_positions_to_cancel",
+          details: `No open or pending positions found for ${signal.symbol} to cancel`,
+        };
+      }
+
+      await logProcessStep({
+        accountId,
+        processId,
+        type: "draft_process",
+        action: "cancel_completed",
+        symbol: signal.symbol,
+        details: {
+          cancelledPending: cancelledCount,
+          closedOpen: closedCount,
+        },
+        result: "cancelled",
+      });
+
+      return {
+        type: "closed",
+        closedCount: totalAffected,
+      };
+    }
+
     case "CLOSE": {
       const positions = await Position.find({
         symbol: signal.symbol,
@@ -1699,7 +1989,8 @@ export async function executeSignal(
         pos.closeReason = "AI Signal Close";
         if (exitPrice !== null) {
           pos.currentPrice = exitPrice;
-          pos.pnlUsd = calculatePositionPnlUsd(pos, exitPrice) ?? pos.pnlUsd ?? null;
+          pos.pnlUsd =
+            calculatePositionPnlUsd(pos, exitPrice) ?? pos.pnlUsd ?? null;
         }
         await pos.save();
 
