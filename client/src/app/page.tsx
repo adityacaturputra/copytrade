@@ -181,8 +181,8 @@ function resolvePositionPnlPercent(position: Position): number | null {
 
   const priceDiff =
     position.side === "LONG"
-      ? position.currentPrice - position.entryPrice
-      : position.entryPrice - position.currentPrice;
+      ? (position.currentPrice as number) - position.entryPrice
+      : position.entryPrice - (position.currentPrice as number);
   return (priceDiff / position.entryPrice) * 100 * position.leverage;
 }
 
@@ -229,6 +229,40 @@ function getPositionSourceLabel(
       : position.channelId;
   }
   return "-";
+}
+
+function getPositionKey(position: Position) {
+  return (
+    position._id ||
+    String(position.id) ||
+    `${position.symbol}-${position.status}-${position.openedAt}`
+  );
+}
+
+function formatPositionTakeProfitTargets(
+  position: Position,
+  { includePercent = false, separator = ", " } = {},
+) {
+  const pendingTargets =
+    position.takeProfitTargets?.filter(
+      (target: any) => target.status === "pending",
+    ) || [];
+
+  if (pendingTargets.length === 0) return "-";
+
+  return pendingTargets
+    .map((target: any, index: number, allTargets: any[]) => {
+      const priceLabel = `TP${index + 1}: ${target.price.toFixed(2)}`;
+      if (!includePercent) return priceLabel;
+
+      const rawPercentage =
+        typeof target.percentage === "number"
+          ? target.percentage
+          : 100 / allTargets.length;
+      const decimals = rawPercentage % 1 === 0 ? 0 : 2;
+      return `${priceLabel} (${rawPercentage.toFixed(decimals)}%)`;
+    })
+    .join(separator);
 }
 
 interface DraftTrade {
@@ -1224,308 +1258,41 @@ export default function Dashboard() {
         </div>
 
         {/* Open Positions Summary */}
-        {openPositions.length > 0 && (
-          <div className="card">
-            <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-              <span className="w-2 h-2 bg-success rounded-full pulse-dot" />
-              Active Positions ({openPositions.length})
-              {loadingExchange && (
-                <div
-                  className="spinner w-3 h-3 border-2 ml-2"
-                  title="Syncing PnL..."
-                />
-              )}
-            </h2>
-            <div className="overflow-visible">
-              <table className="data-table data-table-compact">
-                <thead>
-                  <tr>
-                    <th>Symbol</th>
-                    <th>Side</th>
-                    <th>Source</th>
-                    <th>Entry</th>
-                    <th>Current</th>
-                    <th>Mode</th>
-                    <th>Margin</th>
-                    <th>TP</th>
-                    <th>SL</th>
-                    <th>PnL</th>
-                    <th>Opened</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {openPositions.map((pos) => (
-                    <tr key={pos._id || pos.id}>
-                      {(() => {
-                        const pnlDisplay = resolvePositionPnlUsd(pos);
-                        const pnlPercent = resolvePositionPnlPercent(pos);
-                        const pnlClass =
-                          pnlDisplay.value !== null
-                            ? pnlDisplay.value >= 0
-                              ? "text-success"
-                              : "text-danger"
-                            : pnlPercent !== null
-                              ? pnlPercent >= 0
-                                ? "text-success"
-                                : "text-danger"
-                              : "text-slate-400";
-                        return (
-                          <>
-                            <td className="font-medium">{pos.symbol}</td>
-                            <td>
-                              <span
-                                className={`badge ${pos.side === "LONG" ? "badge-success" : "badge-danger"}`}
-                              >
-                                {pos.side}
-                              </span>
-                            </td>
-                            <td className="text-slate-300">
-                              {getPositionSourceLabel(pos, data?.channelNames || {})}
-                            </td>
-                            <td className="whitespace-nowrap">{pos.entryPrice?.toFixed(2)}</td>
-                            <td className="whitespace-nowrap">{pos.currentPrice?.toFixed(2) || "-"}</td>
-                            <td>
-                              <span className="badge badge-neutral">
-                                {formatMarginMode(pos.marginType)}
-                              </span>
-                            </td>
-                            <td className="font-mono whitespace-nowrap">
-                              {formatUsd(pos.margin)}
-                            </td>
-                            <td className="text-success min-w-0">
-                              {pos.takeProfitTargets
-                                ?.filter((t: any) => t.status === "pending")
-                                .map(
-                                  (t: any, i: number, arr: any[]) =>
-                                    `TP${i + 1}: ${t.price.toFixed(2)} (${t.percentage?.toFixed(t.percentage % 1 === 0 ? 0 : 2) ?? (100 / arr.length).toFixed(0)}%)`,
-                                )
-                                .join(", ") || "-"}
-                            </td>
-                            <td className="text-danger whitespace-nowrap">
-                              {pos.stopLossPrice?.toFixed(2) || "-"}
-                            </td>
-                            <td
-                              className={`font-mono ${pnlClass}`}
-                            >
-                              <span className="inline-flex items-center gap-1">
-                                {pnlDisplay.value !== null && pnlDisplay.value >= 0 ? "+" : ""}
-                                {formatUsd(pnlDisplay.value, { estimated: pnlDisplay.estimated })}
-                              </span>
-                              {pnlPercent !== null && (
-                                <span className="text-[10px] opacity-80 whitespace-nowrap ml-1">
-                                  ({pnlPercent >= 0 ? "+" : ""}
-                                  {pnlPercent.toFixed(2)}%)
-                                </span>
-                              )}
-                            </td>
-                            <td className="text-slate-400 text-[10px] whitespace-nowrap">
-                              {formatCompactDateTime(pos.openedAt)}
-                            </td>
-                          </>
-                        );
-                      })()}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
+        <PositionSummaryPanel
+          positions={openPositions}
+          title={<>Active Positions ({openPositions.length})</>}
+          dotColor="bg-success"
+          type="open"
+          channelNames={data?.channelNames || {}}
+          loadingExchange={loadingExchange}
+        />
 
         {/* Pending Limit Orders */}
-        {pendingPositions.length > 0 && (
-          <div className="card border-amber-700/30">
-            <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-              <span className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" />
+        <PositionSummaryPanel
+          positions={pendingPositions}
+          title={
+            <>
               <span className="text-amber-400">Pending Limit Orders</span>
               <span className="text-sm font-normal text-slate-400">
                 ({pendingPositions.length} waiting to fill)
               </span>
-            </h2>
-            <div className="sm:hidden flex flex-col gap-3">
-              {pendingPositions.map((pos) => {
-                const estimatedMargin =
-                  pos.margin ?? estimatePositionMargin(pos);
-                const sourceLabel = getPositionSourceLabel(
-                  pos,
-                  data?.channelNames || {},
-                );
-
-                return (
-                  <div
-                    key={`pending-mobile-${pos._id || pos.id}`}
-                    className="rounded-xl border border-amber-700/20 bg-slate-900/30 p-3"
-                  >
-                    <div className="flex items-start justify-between gap-3 mb-3">
-                      <div>
-                        <div className="font-semibold text-slate-100">
-                          {pos.symbol}
-                        </div>
-                        <div className="text-xs text-slate-400 mt-0.5">
-                          {sourceLabel}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={`badge ${pos.side === "LONG" ? "badge-success" : "badge-danger"}`}
-                        >
-                          {pos.side}
-                        </span>
-                        <span className="inline-flex items-center gap-1 badge badge-warning">
-                          <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" />
-                          Pending
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2 text-xs mb-3">
-                      <div className="rounded-lg bg-slate-950/40 p-2">
-                        <div className="text-slate-500 uppercase tracking-wide text-[10px]">
-                          Limit
-                        </div>
-                        <div className="font-mono text-slate-200 mt-1">
-                          {pos.entryPrice?.toFixed(2) || "-"}
-                        </div>
-                      </div>
-                      <div className="rounded-lg bg-slate-950/40 p-2">
-                        <div className="text-slate-500 uppercase tracking-wide text-[10px]">
-                          Mode
-                        </div>
-                        <div className="text-slate-200 mt-1">
-                          {formatMarginMode(pos.marginType)}
-                        </div>
-                      </div>
-                      <div className="rounded-lg bg-slate-950/40 p-2">
-                        <div className="text-slate-500 uppercase tracking-wide text-[10px]">
-                          Margin
-                        </div>
-                        <div className="font-mono text-slate-200 mt-1">
-                          {formatUsd(estimatedMargin, {
-                            estimated: pos.margin == null,
-                          })}
-                        </div>
-                      </div>
-                      <div className="rounded-lg bg-slate-950/40 p-2">
-                        <div className="text-slate-500 uppercase tracking-wide text-[10px]">
-                          Created
-                        </div>
-                        <div className="text-slate-200 mt-1">
-                          {formatCompactDateTime(pos.openedAt)}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="space-y-2 text-xs">
-                      <div>
-                        <span className="text-slate-500 uppercase tracking-wide text-[10px] block mb-1">
-                          Take Profit
-                        </span>
-                        <div className="text-success break-words">
-                          {pos.takeProfitTargets
-                            ?.filter((t: any) => t.status === "pending")
-                            .map(
-                              (t: any, i: number) =>
-                                `TP${i + 1}: ${t.price.toFixed(2)}`,
-                            )
-                            .join(" • ") || "-"}
-                        </div>
-                      </div>
-                      <div>
-                        <span className="text-slate-500 uppercase tracking-wide text-[10px] block mb-1">
-                          Stop Loss
-                        </span>
-                        <div className="text-danger">
-                          {pos.stopLossPrice?.toFixed(2) || "-"}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            <div className="hidden sm:block overflow-visible">
-              <table className="data-table data-table-compact">
-                <thead>
-                  <tr>
-                    <th>Symbol</th>
-                    <th>Side</th>
-                    <th>Source</th>
-                    <th>Limit Price</th>
-                    <th>Mode</th>
-                    <th>Margin</th>
-                    <th>TP</th>
-                    <th>SL</th>
-                    <th>Status</th>
-                    <th>Created</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pendingPositions.map((pos) => {
-                    const estimatedMargin =
-                      pos.margin ?? estimatePositionMargin(pos);
-
-                    return (
-                      <tr key={pos._id || pos.id} className="opacity-80">
-                        <td className="font-medium">{pos.symbol}</td>
-                        <td>
-                          <span
-                            className={`badge ${pos.side === "LONG" ? "badge-success" : "badge-danger"}`}
-                          >
-                            {pos.side}
-                          </span>
-                        </td>
-                        <td className="text-slate-300">
-                          {getPositionSourceLabel(pos, data?.channelNames || {})}
-                        </td>
-                        <td className="font-mono whitespace-nowrap">
-                          {pos.entryPrice?.toFixed(2)}
-                        </td>
-                        <td>
-                          <span className="badge badge-neutral">
-                            {formatMarginMode(pos.marginType)}
-                          </span>
-                        </td>
-                        <td className="font-mono whitespace-nowrap">
-                          {formatUsd(estimatedMargin, {
-                            estimated: pos.margin == null,
-                          })}
-                        </td>
-                        <td className="text-success min-w-0">
-                          {pos.takeProfitTargets
-                            ?.filter((t: any) => t.status === "pending")
-                            .map(
-                              (t: any, i: number) =>
-                                `TP${i + 1}: ${t.price.toFixed(2)}`,
-                            )
-                            .join(", ") || "-"}
-                        </td>
-                        <td className="text-danger whitespace-nowrap">
-                          {pos.stopLossPrice?.toFixed(2) || "-"}
-                        </td>
-                        <td>
-                          <span className="inline-flex items-center gap-1.5 badge badge-warning">
-                            <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" />
-                            Pending
-                          </span>
-                        </td>
-                        <td className="text-slate-400 text-[10px] whitespace-nowrap">
-                          {formatCompactDateTime(pos.openedAt)}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            <p className="text-xs text-slate-500 mt-3">
+            </>
+          }
+          borderColor="border-amber-700/30"
+          dotColor="bg-amber-400"
+          dotAnimate
+          type="pending"
+          channelNames={data?.channelNames || {}}
+          footerNote={
+            <p className="text-xs text-slate-500">
               ⏳ These limit orders are placed on the exchange and waiting for
               the price to reach the entry level. Margin is shown from the
               planned trade sizing when available, otherwise estimated from
               entry value divided by leverage. SL and TP are already set on the
               exchange.
             </p>
-          </div>
-        )}
+          }
+        />
 
         {/* Tabs */}
         <div className="card">
@@ -2059,7 +1826,9 @@ function ProcessLogsAccordion({
   };
 
   const renderCompactLog = (log: Log) => {
-    const dateStr = new Date(log.createdAt || log.created_at || "").toLocaleString();
+    const dateStr = new Date(
+      log.createdAt || log.created_at || "",
+    ).toLocaleString();
     const levelText = (log.level || log.result || "").toUpperCase();
 
     return (
@@ -2081,7 +1850,9 @@ function ProcessLogsAccordion({
         <div className="min-w-0 text-slate-400 leading-relaxed whitespace-pre-wrap break-words text-[11px]">
           <InlineLogDetails text={log.details} />
           {log.error && (
-            <span className="text-red-400 ml-1 block mt-1">Error: {log.error}</span>
+            <span className="text-red-400 ml-1 block mt-1">
+              Error: {log.error}
+            </span>
           )}
           {log.symbol && (
             <span className="text-primary-400 ml-1 block mt-1">
@@ -3242,6 +3013,350 @@ function ImageModal({
   );
 }
 
+/**
+ * Reusable position summary panel — used for both Active Positions and
+ * Pending Limit Orders on the dashboard.  Follows the same mobile-card +
+ * desktop-table pattern as PositionsTab so the UI is consistent everywhere.
+ */
+function PositionSummaryPanel({
+  positions,
+  title,
+  borderColor,
+  dotColor,
+  dotAnimate = false,
+  type,
+  channelNames,
+  loadingExchange = false,
+  footerNote,
+}: {
+  positions: Position[];
+  title: ReactNode;
+  borderColor?: string;
+  dotColor: string;
+  dotAnimate?: boolean;
+  type: "open" | "pending";
+  channelNames: Record<string, string>;
+  loadingExchange?: boolean;
+  footerNote?: ReactNode;
+}) {
+  if (positions.length === 0) return null;
+
+  return (
+    <div className={`card ${borderColor || ""}`}>
+      <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+        <span
+          className={`w-2 h-2 ${dotColor} rounded-full ${dotAnimate ? "animate-pulse" : "pulse-dot"}`}
+        />
+        {title}
+        {type === "open" && loadingExchange && (
+          <div
+            className="spinner w-3 h-3 border-2 ml-2"
+            title="Syncing PnL..."
+          />
+        )}
+      </h2>
+
+      {/* Mobile Card View */}
+      <div className="sm:hidden flex flex-col gap-3">
+        {positions.map((pos) => {
+          const estimatedMargin = pos.margin ?? estimatePositionMargin(pos);
+          const pnlUsdDisplay = resolvePositionPnlUsd(pos);
+          const pnlPercent = resolvePositionPnlPercent(pos);
+          const sourceLabel = getPositionSourceLabel(pos, channelNames);
+          const displayMarginType = pos.marginType;
+
+          return (
+            <div
+              key={`summary-mobile-${pos._id || pos.id}`}
+              className="bg-slate-800/40 rounded-lg border border-slate-700/50 p-3"
+            >
+              <div className="flex justify-between items-center mb-3">
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-slate-200">{pos.symbol}</span>
+                  <span
+                    className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
+                      pos.side === "LONG"
+                        ? "bg-emerald-950 text-emerald-400"
+                        : "bg-red-950 text-red-400"
+                    }`}
+                  >
+                    {pos.side}
+                  </span>
+                </div>
+                {type === "pending" ? (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-600/30 text-amber-300 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" />
+                    PENDING
+                  </span>
+                ) : (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-primary-600/30 text-primary-300">
+                    OPEN
+                  </span>
+                )}
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 mb-3">
+                <div className="bg-slate-900/50 rounded p-1.5 flex flex-col">
+                  <span className="text-[9px] text-slate-500 uppercase">
+                    {type === "pending" ? "Limit" : "Entry"}
+                  </span>
+                  <span className="text-xs font-mono text-slate-300">
+                    {pos.entryPrice?.toFixed(4) || "-"}
+                  </span>
+                </div>
+                {type === "open" && (
+                  <div className="bg-slate-900/50 rounded p-1.5 flex flex-col">
+                    <span className="text-[9px] text-slate-500 uppercase">
+                      Current
+                    </span>
+                    <span className="text-xs font-mono text-slate-300">
+                      {pos.currentPrice?.toFixed(4) || "-"}
+                    </span>
+                  </div>
+                )}
+                <div className="bg-slate-900/50 rounded p-1.5 flex flex-col">
+                  <span className="text-[9px] text-slate-500 uppercase">
+                    Mode
+                  </span>
+                  <span className="text-xs font-mono text-slate-300">
+                    {formatMarginMode(displayMarginType)}
+                  </span>
+                </div>
+                <div className="bg-slate-900/50 rounded p-1.5 flex flex-col">
+                  <span className="text-[9px] text-slate-500 uppercase">
+                    Margin
+                  </span>
+                  <span className="text-xs font-mono text-slate-300">
+                    {formatUsd(estimatedMargin, {
+                      estimated: pos.margin == null,
+                    })}
+                  </span>
+                </div>
+                <div className="bg-slate-900/50 rounded p-1.5 flex flex-col">
+                  <span className="text-[9px] text-slate-500 uppercase">
+                    Source
+                  </span>
+                  <span className="text-xs text-slate-300 truncate">
+                    {sourceLabel}
+                  </span>
+                </div>
+                {type === "open" && (
+                  <div className="bg-slate-900/50 rounded p-1.5 flex flex-col">
+                    <span className="text-[9px] text-slate-500 uppercase">
+                      PNL
+                    </span>
+                    <div
+                      className={`text-xs font-mono font-bold ${
+                        pnlUsdDisplay.value !== null
+                          ? pnlUsdDisplay.value >= 0
+                            ? "text-emerald-400"
+                            : "text-red-400"
+                          : pnlPercent !== null
+                            ? pnlPercent >= 0
+                              ? "text-emerald-400"
+                              : "text-red-400"
+                            : "text-slate-400"
+                      }`}
+                    >
+                      {pnlUsdDisplay.value !== null
+                        ? `${pnlUsdDisplay.value >= 0 ? "+" : ""}${formatUsd(pnlUsdDisplay.value, { estimated: pnlUsdDisplay.estimated })}`
+                        : "-"}
+                      {pnlPercent !== null && (
+                        <span className="text-[9px] ml-1 opacity-80 font-normal">
+                          ({pnlPercent >= 0 ? "+" : ""}
+                          {pnlPercent.toFixed(2)}%)
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* TP / SL row */}
+              <div className="space-y-1 text-[10px] mb-2">
+                <div className="flex justify-between">
+                  <span className="text-slate-500 uppercase">TP</span>
+                  <span className="text-success break-words text-right max-w-[70%]">
+                    {formatPositionTakeProfitTargets(pos)}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500 uppercase">SL</span>
+                  <span className="text-danger">
+                    {pos.stopLossPrice?.toFixed(2) || "-"}
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex justify-between text-[10px] text-slate-500">
+                <span>Opened</span>
+                <span>{formatCompactDateTime(pos.openedAt)}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Desktop Table View */}
+      <div className="hidden sm:block overflow-visible">
+        <table className="data-table data-table-compact">
+          <thead>
+            <tr>
+              <th>Symbol</th>
+              <th>Side</th>
+              <th>Source</th>
+              <th>{type === "pending" ? "Limit Price" : "Entry"}</th>
+              {type === "open" && <th>Current</th>}
+              <th>Mode</th>
+              <th>Margin</th>
+              {type === "open" && (
+                <>
+                  <th>TP</th>
+                  <th>SL</th>
+                </>
+              )}
+              {type === "pending" && (
+                <>
+                  <th>TP</th>
+                  <th>SL</th>
+                </>
+              )}
+              {type === "open" && <th>PnL</th>}
+              {type === "pending" && <th>Status</th>}
+              <th>{type === "pending" ? "Created" : "Opened"}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {positions.map((pos) => {
+              const estimatedMargin = pos.margin ?? estimatePositionMargin(pos);
+              const pnlUsdDisplay = resolvePositionPnlUsd(pos);
+              const pnlPercent = resolvePositionPnlPercent(pos);
+              const pnlClass =
+                type === "pending"
+                  ? "text-slate-400"
+                  : pnlUsdDisplay.value !== null
+                    ? pnlUsdDisplay.value >= 0
+                      ? "text-success"
+                      : "text-danger"
+                    : pnlPercent !== null
+                      ? pnlPercent >= 0
+                        ? "text-success"
+                        : "text-danger"
+                      : "text-slate-400";
+              const sourceLabel = getPositionSourceLabel(pos, channelNames);
+              const openedAtParts = getCompactDateTimeParts(pos.openedAt);
+
+              return (
+                <tr
+                  key={pos._id || pos.id}
+                  className={
+                    type === "pending"
+                      ? "opacity-80 border-b border-slate-700/50"
+                      : "border-b border-slate-700/50"
+                  }
+                >
+                  <td className="font-medium">{pos.symbol}</td>
+                  <td>
+                    <span
+                      className={`badge ${pos.side === "LONG" ? "badge-success" : "badge-danger"}`}
+                    >
+                      {pos.side}
+                    </span>
+                  </td>
+                  <td className="text-slate-300">
+                    <HoverTapTooltip
+                      wrapperClassName="max-w-[120px]"
+                      triggerClassName="block truncate"
+                      tooltipClassName="left-0 min-w-[160px] max-w-[280px]"
+                      trigger={
+                        <span className="block truncate">{sourceLabel}</span>
+                      }
+                      content={sourceLabel}
+                    />
+                  </td>
+                  <td className="whitespace-nowrap">
+                    {pos.entryPrice?.toFixed(4)}
+                  </td>
+                  {type === "open" && (
+                    <td className="whitespace-nowrap">
+                      {pos.currentPrice?.toFixed(4) || "-"}
+                    </td>
+                  )}
+                  <td>
+                    <span className="badge badge-neutral">
+                      {formatMarginMode(pos.marginType)}
+                    </span>
+                  </td>
+                  <td className="font-mono whitespace-nowrap">
+                    {formatUsd(estimatedMargin, {
+                      estimated: type === "pending" && pos.margin == null,
+                    })}
+                  </td>
+                  {type === "open" && (
+                    <>
+                      <td className="text-success min-w-0">
+                        {formatPositionTakeProfitTargets(pos, {
+                          includePercent: true,
+                        })}
+                      </td>
+                      <td className="text-danger whitespace-nowrap">
+                        {pos.stopLossPrice?.toFixed(2) || "-"}
+                      </td>
+                    </>
+                  )}
+                  {type === "pending" && (
+                    <>
+                      <td className="text-success min-w-0">
+                        {formatPositionTakeProfitTargets(pos)}
+                      </td>
+                      <td className="text-danger whitespace-nowrap">
+                        {pos.stopLossPrice?.toFixed(2) || "-"}
+                      </td>
+                    </>
+                  )}
+                  {type === "open" && (
+                    <td className={`font-mono whitespace-nowrap ${pnlClass}`}>
+                      <span className="inline-flex items-center gap-1">
+                        {pnlUsdDisplay.value !== null &&
+                        pnlUsdDisplay.value >= 0
+                          ? "+"
+                          : ""}
+                        {formatUsd(pnlUsdDisplay.value, {
+                          estimated: pnlUsdDisplay.estimated,
+                        })}
+                      </span>
+                      {pnlPercent !== null && (
+                        <span className="text-[10px] opacity-80 whitespace-nowrap ml-1">
+                          ({pnlPercent >= 0 ? "+" : ""}
+                          {pnlPercent.toFixed(2)}%)
+                        </span>
+                      )}
+                    </td>
+                  )}
+                  {type === "pending" && (
+                    <td>
+                      <span className="inline-flex items-center gap-1 badge badge-warning">
+                        <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" />
+                        Pending
+                      </span>
+                    </td>
+                  )}
+                  <td className="text-[10px] text-slate-400 leading-tight whitespace-nowrap">
+                    <div>{openedAtParts.date}</div>
+                    <div className="text-slate-500">{openedAtParts.time}</div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {footerNote && <div className="mt-3">{footerNote}</div>}
+    </div>
+  );
+}
+
 function PositionsTab({
   channelIdFilter,
   accountIdFilter,
@@ -3471,7 +3586,8 @@ function PositionsTab({
               const pnlPercent = resolvePositionPnlPercent(displayPosition);
               const displayMarginType = displayPosition.marginType;
               const estimatedMargin =
-                displayPosition.margin ?? estimatePositionMargin(displayPosition);
+                displayPosition.margin ??
+                estimatePositionMargin(displayPosition);
               const sourceLabel = getPositionSourceLabel(pos, channelNames);
 
               const isExpanded = expandedPosId === (pos._id || String(pos.id));
@@ -3539,7 +3655,8 @@ function PositionsTab({
                                 : "text-slate-400"
                         }`}
                       >
-                        {positionFilter === "pending" || pnlUsdDisplay.value === null
+                        {positionFilter === "pending" ||
+                        pnlUsdDisplay.value === null
                           ? "-"
                           : `${pnlUsdDisplay.value > 0 ? "+" : ""}${formatUsd(pnlUsdDisplay.value, { estimated: pnlUsdDisplay.estimated })}`}
                         {positionFilter === "open" && pnlPercent !== null && (
@@ -3659,7 +3776,9 @@ function PositionsTab({
                           (lp) => (lp._id || lp.id) === (pos._id || pos.id),
                         )
                       : null;
-                  const displayPosition = livePos ? { ...pos, ...livePos } : pos;
+                  const displayPosition = livePos
+                    ? { ...pos, ...livePos }
+                    : pos;
                   const displayCurrentPrice =
                     displayPosition.currentPrice || displayPosition.entryPrice;
                   const displayMarginType = displayPosition.marginType;
@@ -3706,13 +3825,21 @@ function PositionsTab({
                             wrapperClassName="max-w-[120px]"
                             triggerClassName="block truncate"
                             tooltipClassName="left-0 min-w-[160px] max-w-[280px]"
-                            trigger={<span className="block truncate">{sourceLabel}</span>}
+                            trigger={
+                              <span className="block truncate">
+                                {sourceLabel}
+                              </span>
+                            }
                             content={sourceLabel}
                           />
                         </td>
-                        <td className="whitespace-nowrap">{pos.entryPrice?.toFixed(4)}</td>
+                        <td className="whitespace-nowrap">
+                          {pos.entryPrice?.toFixed(4)}
+                        </td>
                         {positionFilter === "open" && (
-                          <td className="whitespace-nowrap">{displayCurrentPrice?.toFixed(4) || "-"}</td>
+                          <td className="whitespace-nowrap">
+                            {displayCurrentPrice?.toFixed(4) || "-"}
+                          </td>
                         )}
                         <td>
                           <span className="badge badge-neutral">
@@ -3730,7 +3857,8 @@ function PositionsTab({
                           className={`font-mono whitespace-nowrap ${pnlClass}`}
                         >
                           <span className="inline-flex items-center gap-1">
-                            {positionFilter === "pending" || pnlUsdDisplay.value === null
+                            {positionFilter === "pending" ||
+                            pnlUsdDisplay.value === null
                               ? "-"
                               : `${pnlUsdDisplay.value >= 0 ? "+" : ""}${formatUsd(pnlUsdDisplay.value, { estimated: pnlUsdDisplay.estimated })}`}
                           </span>
@@ -3770,14 +3898,18 @@ function PositionsTab({
                         )}
                         <td className="text-[10px] text-slate-400 leading-tight whitespace-nowrap">
                           <div>{openedAtParts.date}</div>
-                          <div className="text-slate-500">{openedAtParts.time}</div>
+                          <div className="text-slate-500">
+                            {openedAtParts.time}
+                          </div>
                         </td>
                         {positionFilter === "closed" && (
                           <td className="text-[10px] text-slate-400 leading-tight whitespace-nowrap">
                             {pos.closedAt ? (
                               <>
                                 <div>{closedAtParts.date}</div>
-                                <div className="text-slate-500">{closedAtParts.time}</div>
+                                <div className="text-slate-500">
+                                  {closedAtParts.time}
+                                </div>
                               </>
                             ) : (
                               "-"
