@@ -1697,9 +1697,23 @@ export async function executeSignal(
           const exitPrice = await resolveExitPrice(posExchange, pos);
           await posExchange.closePosition(
             pos.symbol,
-            pos.orderId,
+            undefined, // Use undefined to close all positions for this symbol, pos.orderId is not a positionId
             pos.quantity,
           );
+
+          try {
+            await posExchange.cancelAlgoOrders(pos.symbol);
+          } catch (algoErr) {
+            await logExecutorWarn(
+              `⚠️ Failed to cancel algo orders (TP/SL) for ${pos.symbol}: ${algoErr instanceof Error ? algoErr.message : String(algoErr)}`,
+              {
+                accountId: pos.accountId || accountId,
+                processId,
+                symbol: pos.symbol,
+                action: "console_cancel_algo_orders_failed",
+              },
+            );
+          }
 
           pos.status = "closed";
           pos.closedAt = new Date();
@@ -1737,6 +1751,24 @@ export async function executeSignal(
       const totalAffected = cancelledCount + closedCount;
 
       if (totalAffected === 0) {
+        const hasPositions = pendingPositions.length > 0 || openPositions.length > 0;
+        if (hasPositions) {
+          await logProcessStep({
+            accountId,
+            processId,
+            type: "draft_process",
+            action: "cancel_failed",
+            symbol: signal.symbol,
+            details: `Found ${pendingPositions.length} pending and ${openPositions.length} open positions, but failed to close any of them`,
+            result: "rejected",
+          });
+          return {
+            type: "skipped",
+            code: "cancel_failed",
+            reason: `Failed to cancel/close the positions for ${signal.symbol}. Check process logs for details.`,
+          };
+        }
+
         await logProcessStep({
           accountId,
           processId,
@@ -1795,7 +1827,21 @@ export async function executeSignal(
           return ExchangeFactory.getPaperClient();
         })();
         const exitPrice = await resolveExitPrice(posExchange, pos);
-        await posExchange.closePosition(pos.symbol, pos.orderId, pos.quantity);
+        await posExchange.closePosition(pos.symbol, undefined, pos.quantity);
+
+        try {
+          await posExchange.cancelAlgoOrders(pos.symbol);
+        } catch (algoErr) {
+          await logExecutorWarn(
+            `⚠️ Failed to cancel algo orders (TP/SL) for ${pos.symbol}: ${algoErr instanceof Error ? algoErr.message : String(algoErr)}`,
+            {
+              accountId: pos.accountId || accountId,
+              processId,
+              symbol: pos.symbol,
+              action: "console_cancel_algo_orders_failed",
+            },
+          );
+        }
 
         pos.status = "closed";
         pos.closedAt = new Date();
