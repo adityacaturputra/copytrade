@@ -81,7 +81,6 @@ describe("analyzeMessagesWithAI integration", () => {
       timeWindowHours: 24,
       batchSize: 5,
       includeImageUrls: true,
-      visionAIEnabled: true,
     });
 
     parseBulkSignalsMock.mockImplementation(async (messages) =>

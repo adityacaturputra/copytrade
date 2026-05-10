@@ -58,7 +58,6 @@ beforeEach(() => {
   aiMocks.getSignalConfig.mockReset();
 
   aiMocks.getSignalConfig.mockResolvedValue({
-    visionAIEnabled: false,
     includeImageUrls: true,
   });
   aiMocks.buildMessageAnalysisContext.mockResolvedValue("LIVE_CONTEXT");
@@ -77,7 +76,6 @@ test("analyzeMessagesWithAI returns early for empty inputs", async () => {
 
 test("analyzeMessagesWithAI reuses account context, handles unchanged vision content, and omits imageUrls when disabled", async () => {
   aiMocks.getSignalConfig.mockResolvedValue({
-    visionAIEnabled: true,
     includeImageUrls: false,
   });
   aiMocks.preprocessImagesWithVision.mockImplementation(async (content: string) => ({
@@ -172,7 +170,6 @@ test("analyzeMessagesWithAI appends nearby source messages when available", asyn
 
 test("analyzeMessagesWithAI falls back to per-message parsing and records vision and parse failures", async () => {
   aiMocks.getSignalConfig.mockResolvedValue({
-    visionAIEnabled: true,
     includeImageUrls: true,
   });
   aiMocks.preprocessImagesWithVision

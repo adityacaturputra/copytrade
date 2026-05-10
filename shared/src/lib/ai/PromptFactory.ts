@@ -12,18 +12,11 @@ function buildFreshnessRules(): string {
 - NEVER return a fresh BUY/SELL new entry from an old chart snapshot if the trade has already progressed.
 - If the chart or message shows the setup is already running, already moved, already pumped/dumped, already late, already invalid, or already hit TP/SL, do NOT create a new entry.
 - If the current price marker or recent candles are already far beyond the entry zone, treat the setup as stale unless there is an explicit fresh re-entry instruction.
-- If any TP has clearly already been hit/traded through on the screenshot, do NOT create a fresh limit order from that old setup. If all TPs are already hit, classify it as "${MessageType.RESULT_STATUS}".
-- Prefer surrounding message text over the chart image when judging freshness/timing. Messages like "udah jalan", "sudah running", "ngacir", "already running", "already pumped", "already dumped", "missed", "telat", "TP hit", "TP1 kena", "target reached", "udah kena SL", "invalid", "expired", "jangan entry", "skip" mean it is NOT a fresh entry.
-- Only return "${MessageType.NEW_ENTRY}" when the setup is still actionable at the screenshot time and the message is clearly presenting a fresh setup.`;
-}
-
-function buildVisionFreshnessRules(): string {
-  return `Freshness rules for chart images:
-- Do NOT treat a chart as a fresh setup if the live/current price marker or latest candles already moved through the entry path and toward/through TP levels.
 - For LONG charts: if the current price is already above one or more TP levels, or especially above the final TP, classify it as "${MessageType.RESULT_STATUS}" or "${MessageType.IGNORE}", not "${MessageType.NEW_ENTRY}".
 - For SHORT charts: if the current price is already below one or more TP levels, or especially below the final TP, classify it as "${MessageType.RESULT_STATUS}" or "${MessageType.IGNORE}", not "${MessageType.NEW_ENTRY}".
-- If the chart looks like a historical result screenshot, a trade that already ran, or a setup that is no longer actionable, do NOT output a fresh signal summary.
-- Only classify as "${MessageType.NEW_ENTRY}" when the chart still looks pending/fresh and the shown entry/TP/SL levels are still valid.`;
+- If any TP has clearly already been hit/traded through on the screenshot, do NOT create a fresh limit order from that old setup. If all TPs are already hit, classify it as "${MessageType.RESULT_STATUS}".
+- Prefer surrounding message text over the chart image when judging freshness/timing. Messages like "udah jalan", "sudah running", "ngacir", "already running", "already pumped", "already dumped", "missed", "telat", "TP hit", "TP1 kena", "target reached", "udah kena SL", "invalid", "expired", "jangan entry", "skip" mean it is NOT a fresh entry.
+- Only return "${MessageType.NEW_ENTRY}" when the setup is still actionable at the screenshot time and the message/chart is clearly presenting a fresh setup.`;
 }
 
 function enumValues<T extends Record<string, string>>(e: T): string {
@@ -120,17 +113,20 @@ The user message will contain messages in this format:
 [content]
 ---END MESSAGE [messageId]---
 
-Some messages may also include chart image URLs labeled as [Attached Images]. These are TRADING CHART screenshots that contain critical signal data — you MUST read/analyze these chart images to extract:
-- ENTRY price (look for horizontal lines, zones, or marked entry points)
-- STOP LOSS level (usually marked below entry for LONG, above for SHORT)
-- TAKE PROFIT targets (TP1, TP2, TP3, etc. — usually marked as horizontal lines above/below entry)
-- Support/Resistance levels drawn on the chart
-- Trendlines, orderblocks, or other technical patterns visible
+Some messages may also include chart image URLs labeled as [Attached Images]. These are TRADING CHART screenshots that contain critical signal data.
+You MUST read the PRICE AXIS carefully. Look at the numbers on the right or left side of the chart to determine exact price values. Match horizontal lines to their corresponding price levels.
+You MUST read/analyze these chart images to extract:
+- ENTRY price(s) (often marked with a horizontal line, arrow, or text label, or a shaded zone)
+- STOP LOSS / SL level (usually a single price marked below entry for LONG, above for SHORT)
+- TAKE PROFIT / TP levels (target prices, TP1, TP2, TP3, etc., often marked as horizontal lines above entry for longs, below for shorts)
+- Direction bias (LONG or SHORT) — look at the overall trade direction indicated
+- Symbol / Pair (e.g., BTCUSDT, ETHUSDT) if visible on the chart
+- Any leverage or position size mentioned on the chart
+- Support/Resistance levels, order blocks, supply/demand zones, or other technical patterns drawn on the chart
 
 When a message has attached chart images, the ENTRY/SL/TP values may ONLY be visible in the chart (not in the text). In this case, you MUST extract those values from the image and include them in your response.
 
 IMPORTANT: attached chart images may be OLD snapshots. Use BOTH the text and the image to judge whether the setup is still fresh/actionable. If the text says the trade already ran, already hit TP, already pumped/dumped, is late, missed, invalid, or should be skipped, then do NOT convert the old chart into a new entry.
-If a message effectively contains a generated "[Chart Image Analysis]" summary, treat that as supporting context only. It must not override freshness cues from the original message text.
 
 Each message has a unique messageId. You MUST include the messageId in each parsed result so results can be mapped back.
 
@@ -218,6 +214,7 @@ RULES:
 - If PNL is positive >10%, recommend ${PositionDecision.MOVE_SL} to breakeven
 - Be conservative - prefer protecting capital over maximizing gains
 - You will also receive CURRENT TIME, account open positions, and Discord message context.
+- The Discord message context MAY include attached chart images. You MUST analyze these images (if present) to identify current support/resistance levels, trendlines, or whether price has hit a key rejection zone. Use the chart context to inform whether a position should be held or closed.
 - Use the Discord context timestamps relative to CURRENT TIME to understand whether the latest instruction is fresh.
 - If Discord context clearly says cancel/close/exit the trade, prefer ${PositionDecision.CLOSE}.
 - If Discord context clearly says move SL to breakeven / trailing / lock profit, prefer ${PositionDecision.MOVE_SL}.
@@ -275,48 +272,3 @@ DISCORD CONTEXT MESSAGES:
 ${discordContext}`;
 }
 
-export function buildVisionExtractionPrompt(): string {
-  return `You are a trading chart analyst. Analyze this image carefully.
-
-Your task:
-1. Determine if this image is a trading chart that contains signal information (entry, TP, SL price levels).
-2. If it IS a trading signal chart, extract ALL visible price levels and trading details.
-
-Look for:
-- Entry price(s) (often marked with a horizontal line, arrow, or text label)
-- Take Profit / TP levels (target prices, often above entry for longs, below for shorts)
-- Stop Loss / SL level (usually a single price below entry for longs, above for shorts)
-- Direction bias (LONG or SHORT) — look at the overall trade direction indicated
-- Symbol / Pair (e.g., BTCUSDT, ETHUSDT)
-- Any leverage or position size mentioned
-- Any order block, supply/demand zones marked on the chart
-
-IMPORTANT: Read the PRICE AXIS carefully. Look at the numbers on the right or left side of the chart to determine exact price values. Match horizontal lines to their corresponding price levels.
-
-${buildVisionFreshnessRules()}
-
-Respond in this EXACT JSON format:
-{
-  "isSignal": true/false,
-  "messageType": "new_entry" | "position_update" | "close_cancel" | "result_status" | "ignore",
-  "extractedText": "If isSignal is true, write a clear text summary of ALL extracted trading details including exact prices. Format it like a signal message. If isSignal is false, write an empty string."
-}
-
-Examples of good extractedText:
-- "LONG BTCUSDT | Entry: 67,500 | TP1: 68,500 | TP2: 69,500 | TP3: 70,500 | SL: 66,800 | Leverage: 20x"
-- "SHORT ETHUSDT | Entry: 3,450 - 3,460 | TP1: 3,400 | TP2: 3,350 | SL: 3,520"
-- "LONG SOLUSDT | Entry: 145.50 | TP: 155, 160, 165 | SL: 140 | Leverage: 10x"
-
-Rules:
-- Use messageType "new_entry" for a fresh setup chart
-- Use messageType "position_update" for TP/SL adjustment charts
-- Use messageType "close_cancel" for close/cancel/invalidation charts
-- Use messageType "result_status" for screenshots that only show results/status like TP hit, SL hit, running 1R, pnl update
-- Use messageType "ignore" for non-chart/noise images
-- If the chart shows price already beyond entry/TP in a way that makes the setup stale, use "result_status" or "ignore", not "new_entry"
-- If messageType is "result_status" or "ignore", set isSignal to false and extractedText to empty string
-
-If the image is NOT a trading chart (e.g., meme, screenshot of text, random photo), set isSignal to false, messageType to "ignore", and extractedText to empty string.
-
-Respond ONLY with the JSON, no additional text.`;
-}

@@ -1,4 +1,5 @@
 import { Account, Position } from "../database";
+import { getSignalConfig } from "../signal-config";
 import { SourceType } from "../enums";
 import {
   ExchangeFactory,
@@ -163,13 +164,15 @@ async function fetchDiscordContextMessages(
     10,
   );
 
+  const config = await getSignalConfig();
+
   const normalized = messages.map((message) => ({
     messageId: message.messageId,
     author: message.author,
     content: message.originalContent || message.content,
     timestamp: message.timestamp.toISOString(),
     messageUrl: message.messageUrl,
-    imageUrls: message.imageUrls,
+    imageUrls: config.monitorVisionImages ? message.imageUrls : [],
     isSourceMessage: message.messageId === position.messageId,
   }));
 

@@ -7,7 +7,6 @@ export interface SignalConfigType {
   timeWindowHours: number; // only process messages within this window (default 24)
   batchSize: number; // how many messages to send to AI per bulk request (default 5)
   includeImageUrls: boolean; // whether to include images in AI prompts (default false)
-  visionAIEnabled: boolean; // enable Gemini Vision pre-layer for image-to-text (default false)
   monitorVisionImages: boolean; // inject Discord chart images into position monitor agent vision (default false)
 }
 
@@ -18,7 +17,6 @@ const DEFAULT_SIGNAL_CONFIG: SignalConfigType = {
   timeWindowHours: 24,
   batchSize: 5,
   includeImageUrls: false,
-  visionAIEnabled: false,
   monitorVisionImages: false,
 };
 
@@ -36,7 +34,6 @@ export async function getSignalConfig(): Promise<SignalConfigType> {
         timeWindowHours: settings.timeWindowHours,
         batchSize: settings.batchSize,
         includeImageUrls: settings.includeImageUrls ?? false,
-        visionAIEnabled: settings.visionAIEnabled ?? false,
         monitorVisionImages: settings.monitorVisionImages ?? false,
       };
     }
@@ -66,9 +63,6 @@ export async function setSignalConfig(
   if (config.includeImageUrls !== undefined) {
     update.includeImageUrls = config.includeImageUrls;
   }
-  if (config.visionAIEnabled !== undefined) {
-    update.visionAIEnabled = config.visionAIEnabled;
-  }
   if (config.monitorVisionImages !== undefined) {
     update.monitorVisionImages = config.monitorVisionImages;
   }
@@ -81,7 +75,6 @@ export async function setSignalConfig(
     timeWindowHours: doc.timeWindowHours,
     batchSize: doc.batchSize,
     includeImageUrls: doc.includeImageUrls ?? false,
-    visionAIEnabled: doc.visionAIEnabled ?? false,
     monitorVisionImages: doc.monitorVisionImages ?? false,
   };
 }

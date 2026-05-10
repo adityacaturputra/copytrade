@@ -1,5 +1,5 @@
 import { AIFactory } from "./ai/AIFactory";
-import { preprocessImagesWithVision } from "./ai/ImageAIFactory";
+
 import type { BulkMessageInput } from "./ai/types";
 import { buildMessageAnalysisContext } from "./executor-analysis-context";
 import { buildNearbySourceContext } from "./executor-source-context";
@@ -18,96 +18,7 @@ async function buildBulkInputForMessage(
   let content = msg.originalContent || msg.content;
   const imageUrls = msg.imageUrls || [];
 
-  if (signalConfig.visionAIEnabled && imageUrls.length > 0) {
-    if (msg.processId) {
-      await logProcessStep({
-        accountId: msg.sourceId,
-        processId: msg.processId,
-        type: "draft_process",
-        action: "vision_analysis_started",
-        details: {
-          messageId: msg.messageId,
-          imageCount: imageUrls.length,
-        },
-        result: "processing",
-      });
-    }
 
-    try {
-      const { enhancedContent } = await preprocessImagesWithVision(
-        content,
-        imageUrls,
-      );
-
-      if (enhancedContent !== content) {
-        await logExecutorInfo(
-          `👁️ Vision AI enhanced message ${msg.messageId} with chart data`,
-          {
-            accountId: msg.sourceId,
-            processId: msg.processId,
-            action: "console_vision_enhanced",
-          },
-        );
-
-        if (msg.processId) {
-          await logProcessStep({
-            accountId: msg.sourceId,
-            processId: msg.processId,
-            type: "draft_process",
-            action: "vision_analysis_completed",
-            details: {
-              messageId: msg.messageId,
-              imageCount: imageUrls.length,
-              enhanced: true,
-            },
-            result: "enhanced",
-          });
-        }
-      } else if (msg.processId) {
-        await logProcessStep({
-          accountId: msg.sourceId,
-          processId: msg.processId,
-          type: "draft_process",
-          action: "vision_analysis_completed",
-          details: {
-            messageId: msg.messageId,
-            imageCount: imageUrls.length,
-            enhanced: false,
-          },
-          result: "unchanged",
-        });
-      }
-
-      content = enhancedContent;
-    } catch (visionErr) {
-      const errorMessage =
-        visionErr instanceof Error ? visionErr.message : String(visionErr);
-
-      await logExecutorWarn(
-        `⚠️ Vision AI failed for ${msg.messageId}, using original content: ${errorMessage}`,
-        {
-          accountId: msg.sourceId,
-          processId: msg.processId,
-          action: "console_vision_failed",
-        },
-      );
-
-      if (msg.processId) {
-        await logProcessStep({
-          accountId: msg.sourceId,
-          processId: msg.processId,
-          type: "draft_process",
-          action: "vision_analysis_failed",
-          details: {
-            messageId: msg.messageId,
-            imageCount: imageUrls.length,
-          },
-          result: "failed",
-          error: errorMessage,
-        });
-      }
-    }
-  }
 
   const contextKey = msg.sourceId || "__no_source__";
   let contextPromise = accountContextCache.get(contextKey);

@@ -139,7 +139,32 @@ export class GLMAnalyzer implements AISignalAnalyzer {
     const systemPrompt = buildPositionAnalysisPrompt();
     const userMessage = buildPositionAnalysisUserMessage(input);
 
-    const response = await this.callAPI(systemPrompt, userMessage);
+    const imageUrls = new Set<string>();
+    if (input.discordContextMessages) {
+      for (const msg of input.discordContextMessages) {
+        if (msg.imageUrls) {
+          for (const url of msg.imageUrls) {
+            imageUrls.add(url);
+          }
+        }
+      }
+    }
+
+    let response: string;
+    if (imageUrls.size > 0) {
+      const userContent: Array<
+        | { type: "text"; text: string }
+        | { type: "image_url"; image_url: { url: string } }
+      > = [{ type: "text", text: userMessage }];
+
+      for (const url of imageUrls) {
+        userContent.push({ type: "image_url", image_url: { url } });
+      }
+
+      response = await this.callAPIWithContent(systemPrompt, userContent);
+    } else {
+      response = await this.callAPI(systemPrompt, userMessage);
+    }
 
     const analysis = parseJsonResponse<PositionAnalysis>(response);
     if (analysis) {

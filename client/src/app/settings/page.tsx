@@ -307,7 +307,6 @@ export default function SettingsPage() {
     timeWindowHours: 24,
     batchSize: 5,
     includeImageUrls: false,
-    visionAIEnabled: false,
     monitorVisionImages: false,
   });
   const [signalSaving, setSignalSaving] = useState(false);
@@ -486,7 +485,6 @@ export default function SettingsPage() {
             timeWindowHours: json.signal.timeWindowHours,
             batchSize: json.signal.batchSize || 5,
             includeImageUrls: json.signal.includeImageUrls || false,
-            visionAIEnabled: json.signal.visionAIEnabled || false,
             monitorVisionImages: json.signal.monitorVisionImages || false,
           });
       }
@@ -2502,26 +2500,7 @@ export default function SettingsPage() {
                       Include image URLs in AI analysis
                     </label>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      id="visionAIEnabled"
-                      checked={signalCfg.visionAIEnabled}
-                      onChange={(e) =>
-                        setSignalCfg({
-                          ...signalCfg,
-                          visionAIEnabled: e.target.checked,
-                        })
-                      }
-                      className="rounded border-slate-600 bg-slate-800 text-primary-600 focus:ring-primary-500"
-                    />
-                    <label
-                      htmlFor="visionAIEnabled"
-                      className="text-sm text-slate-400"
-                    >
-                      Enable Vision AI (Gemini chart reading)
-                    </label>
-                  </div>
+
                 </div>
               </div>
               {signalError && (
@@ -2588,6 +2567,7 @@ export default function SettingsPage() {
                 {signalSaving ? "Saving..." : "💾 Save Vision Setting"}
               </button>
             </div>
+
 
             {/* ─── Cron Jobs ────────────────────────── */}
             <div className="card">

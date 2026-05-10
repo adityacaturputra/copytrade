@@ -230,14 +230,12 @@ export async function POST(request: NextRequest) {
       }
 
       const includeImageUrls = body.signal.includeImageUrls;
-      const visionAIEnabled = body.signal.visionAIEnabled;
       const monitorVisionImages = body.signal.monitorVisionImages;
       await setSignalConfig({
         ...(fetchLimit !== undefined && { fetchLimit }),
         ...(timeWindowHours !== undefined && { timeWindowHours }),
         ...(batchSize !== undefined && { batchSize }),
         ...(includeImageUrls !== undefined && { includeImageUrls }),
-        ...(visionAIEnabled !== undefined && { visionAIEnabled }),
         ...(monitorVisionImages !== undefined && { monitorVisionImages }),
       });
     }

@@ -94,7 +94,32 @@ export class OpenAIAnalyzer implements AISignalAnalyzer {
     const systemPrompt = buildPositionAnalysisPrompt();
     const userMessage = buildPositionAnalysisUserMessage(input);
 
-    const response = await this.callAPI(systemPrompt, userMessage);
+    const imageUrls = new Set<string>();
+    if (input.discordContextMessages) {
+      for (const msg of input.discordContextMessages) {
+        if (msg.imageUrls) {
+          for (const url of msg.imageUrls) {
+            imageUrls.add(url);
+          }
+        }
+      }
+    }
+
+    let response: string;
+    if (imageUrls.size > 0) {
+      const userContent: Array<
+        | { type: "text"; text: string }
+        | { type: "image_url"; image_url: { url: string } }
+      > = [{ type: "text", text: userMessage }];
+
+      for (const url of imageUrls) {
+        userContent.push({ type: "image_url", image_url: { url } });
+      }
+
+      response = await this.callAPIWithContent(systemPrompt, userContent);
+    } else {
+      response = await this.callAPI(systemPrompt, userMessage);
+    }
 
     const analysis = parseJsonResponse<PositionAnalysis>(response);
     if (analysis) {
@@ -163,6 +188,74 @@ export class OpenAIAnalyzer implements AISignalAnalyzer {
         }
 
         console.error("OpenAI Analyzer Error:", error);
+        throw error;
+      }
+    }
+
+    throw new Error(
+      `All OpenAI API keys failed. Last error: ${lastError?.message || "Unknown error"}`,
+    );
+  }
+
+  private async callAPIWithContent(
+    systemPrompt: string,
+    userContent: Array<
+      | { type: "text"; text: string }
+      | { type: "image_url"; image_url: { url: string } }
+    >,
+    maxTokens?: number,
+  ): Promise<string> {
+    if (this.apiKeys.length === 0) {
+      throw new Error("OPENAI_API_KEY is missing in environment variables.");
+    }
+
+    let lastError: Error | null = null;
+
+    for (const key of this.apiKeys) {
+      try {
+        const client = new OpenAI({
+          apiKey: key,
+          baseURL: this.baseURL,
+        });
+
+        const completion = await client.chat.completions.create({
+          model: this.model,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userContent as any },
+          ],
+          max_tokens: maxTokens || 2048,
+          // GPT-4V / vision models usually don't support JSON mode when using images on all versions, 
+          // but newer versions do. We'll disable it for safety or rely on the prompt.
+          // Since this is for position analysis, let's keep JSON format if supported.
+          // Wait, OpenAI SDK supports json_object even with images for newer models.
+          // However, to be safe and match CodexPatungin which had `enforceJsonObject=true` as an option,
+          // we will try without response_format or just trust the system prompt.
+        });
+
+        const content = completion.choices?.[0]?.message?.content;
+        return content || "";
+      } catch (error: unknown) {
+        lastError = error as Error;
+        const err = error as { status?: number; message?: string };
+        const errorMessage = err?.message?.toLowerCase() || "";
+        const status = err?.status;
+
+        if (
+          status === 429 ||
+          status === 402 ||
+          status === 500 ||
+          errorMessage.includes("rate limit") ||
+          errorMessage.includes("insufficient") ||
+          errorMessage.includes("quota")
+        ) {
+          console.warn(
+            `OpenAI Vision API Key ${key.substring(0, 8)}... failed. Trying next key...`,
+          );
+          continue;
+        }
+
+        console.error("OpenAI Vision Analyzer Error:", error);
         throw error;
       }
     }

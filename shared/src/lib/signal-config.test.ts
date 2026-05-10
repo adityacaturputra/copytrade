@@ -41,7 +41,6 @@ test("getSignalConfig returns DB values and default booleans when missing", asyn
     timeWindowHours: 48,
     batchSize: 10,
     includeImageUrls: false,
-    visionAIEnabled: false,
   });
 });
 
@@ -56,7 +55,6 @@ test("getSignalConfig falls back to defaults and warns on DB failure", async () 
     timeWindowHours: 24,
     batchSize: 5,
     includeImageUrls: false,
-    visionAIEnabled: false,
   });
   assert.equal(warnSpy.mock.calls.length, 1);
 
@@ -92,7 +90,6 @@ test("setSignalConfig persists only provided fields and normalizes optional flag
     timeWindowHours: 12,
     batchSize: 7,
     includeImageUrls: true,
-    visionAIEnabled: false,
   });
 });
 
@@ -102,20 +99,17 @@ test("setSignalConfig persists time window and vision flags when provided", asyn
     timeWindowHours: 6,
     batchSize: 5,
     includeImageUrls: false,
-    visionAIEnabled: true,
   });
   dbMocks.findOneAndUpdate.mockReturnValue({ lean: leanMock });
 
   const config = await setSignalConfig({
     timeWindowHours: 6,
-    visionAIEnabled: true,
   });
 
   assert.deepEqual(dbMocks.findOneAndUpdate.mock.calls[0], [
     {},
     {
       timeWindowHours: 6,
-      visionAIEnabled: true,
     },
     { upsert: true, new: true },
   ]);
@@ -124,6 +118,5 @@ test("setSignalConfig persists time window and vision flags when provided", asyn
     timeWindowHours: 6,
     batchSize: 5,
     includeImageUrls: false,
-    visionAIEnabled: true,
   });
 });
