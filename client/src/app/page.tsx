@@ -1655,11 +1655,11 @@ function HoverTapTooltip({
       >
         {trigger}
       </button>
-      <span
-        className={`absolute bottom-full mb-2 z-20 rounded-xl border border-slate-600/90 bg-slate-800 px-4 py-3 text-xs text-slate-100 shadow-2xl shadow-black/50 whitespace-normal leading-relaxed ${isOpen ? "block" : "hidden"} ${tooltipClassName}`}
+      <div
+        className={`absolute bottom-full mb-2 z-[100] rounded-xl border border-slate-600/90 bg-slate-900 px-4 py-3 text-xs text-slate-100 shadow-[0_0_20px_rgba(0,0,0,0.8)] whitespace-normal break-words leading-relaxed ${isOpen ? "block" : "hidden"} ${tooltipClassName}`}
       >
         {content}
-      </span>
+      </div>
     </span>
   );
 }
