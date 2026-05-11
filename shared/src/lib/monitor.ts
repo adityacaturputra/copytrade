@@ -43,7 +43,7 @@ function getAccountPositionKey(
   return `${accountId || "__global__"}::${symbol}`;
 }
 
-function calculatePositionPnlUsd(
+export function calculatePositionPnlUsd(
   position: {
     entryPrice: number;
     quantity: number;
@@ -67,6 +67,8 @@ function calculatePositionPnlUsd(
       : (position.entryPrice - currentPrice) * position.quantity;
   return Number(gross.toFixed(4));
 }
+
+
 
 export async function runPositionMonitor(): Promise<{
   checked: number;
@@ -443,37 +445,7 @@ export async function runPositionMonitor(): Promise<{
           }
         }
 
-        // Check Take Profit
-        const nextTp = position.takeProfitTargets?.find(
-          (t: any) => t.status === "pending",
-        );
-        if (nextTp) {
-          const tpHit =
-            position.side === "LONG"
-              ? currentPrice >= nextTp.price
-              : currentPrice <= nextTp.price;
 
-          if (tpHit) {
-            await logExecutorInfo(
-              `🎯 TP hit for ${position.symbol} at ${currentPrice}`,
-              {
-                accountId: position.accountId,
-                processId,
-                symbol: position.symbol,
-                type: "monitor",
-                action: "take_profit_hit",
-              },
-            );
-            await closePosition(
-              position,
-              currentPrice,
-              "Take Profit Hit",
-              processId,
-            );
-            result.actions++;
-            continue;
-          }
-        }
 
         // ─── AI-assisted analysis ─────────────────────────────────────
 

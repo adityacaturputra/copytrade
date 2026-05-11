@@ -105,6 +105,9 @@ function createExchange() {
     getOpenPositions: vi.fn().mockResolvedValue([]),
     getTickerPrice: vi.fn().mockResolvedValue(100),
     closePosition: vi.fn().mockResolvedValue(undefined),
+    placeStopLoss: vi.fn().mockResolvedValue("sl-1"),
+    getAlgoOrders: vi.fn().mockResolvedValue([]),
+    clearPositionStopLoss: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -221,20 +224,14 @@ test("runPositionMonitor handles pending live, cancelled, filled, and sync-close
   assert.equal(exchange.getTickerPrice.mock.calls[0]?.[0], "FILLUSDT");
 });
 
-test("runPositionMonitor closes positions when stop loss or take profit rules are hit", async () => {
+test("runPositionMonitor closes positions when stop loss rules are hit", async () => {
   const slPosition = createPosition({
     _id: { toString: () => "sl-1" },
     symbol: "SLUSDT",
     stopLossPrice: 95,
     takeProfitTargets: [],
   });
-  const tpPosition = createPosition({
-    _id: { toString: () => "tp-1" },
-    symbol: "TPUSDT",
-    stopLossPrice: undefined,
-    takeProfitTargets: [{ price: 110, quantity: 4, percentage: 100, status: "pending" }],
-  });
-  const positions = [slPosition, tpPosition];
+  const positions = [slPosition];
   const exchange = createExchange();
 
   usePositionState(positions);
@@ -246,30 +243,23 @@ test("runPositionMonitor closes positions when stop loss or take profit rules ar
       entryPrice: 100,
       quantity: 4,
     },
-    {
-      symbol: "TPUSDT",
-      markPrice: 111,
-      unrealizedPnl: 8,
-      entryPrice: 100,
-      quantity: 4,
-    },
   ]);
   monitorMocks.getPaperClient.mockReturnValue(exchange);
 
   const result = await runPositionMonitor();
 
   assert.deepEqual(result, {
-    checked: 2,
-    actions: 2,
+    checked: 1,
+    actions: 1,
     errors: [],
     syncedClosed: 0,
   });
   assert.equal(slPosition.status, "closed");
   assert.equal(slPosition.closeReason, "Stop Loss Hit");
-  assert.equal(tpPosition.status, "closed");
-  assert.equal(tpPosition.closeReason, "Take Profit Hit");
-  assert.equal(exchange.closePosition.mock.calls.length, 2);
+  assert.equal(exchange.closePosition.mock.calls.length, 1);
 });
+
+
 
 test("runPositionMonitor applies AI close, move SL, partial close, update TP, and hold decisions", async () => {
   const aiClose = createPosition({ _id: { toString: () => "ai-close" }, symbol: "CLOSEUSDT" });

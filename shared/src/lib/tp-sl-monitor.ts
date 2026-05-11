@@ -13,6 +13,92 @@ import {
   logProcessStep,
 } from "./process-log";
 import { ensurePersistedProcessId } from "./process-id";
+import { calculatePositionPnlUsd } from "./monitor";
+
+function isSamePrice(a: number, b: number): boolean {
+  const tolerance = Math.max(1e-8, Math.abs(a), Math.abs(b)) * 1e-6;
+  return Math.abs(a - b) <= tolerance;
+}
+
+async function cancelExistingStopLossOrders(
+  exchange: ExchangeClient,
+  position: {
+    symbol: string;
+    accountId?: string;
+  },
+  closeSide: "BUY" | "SELL",
+  processId?: string,
+): Promise<{ cancelled: string[]; errors: string[] }> {
+  const cancelled: string[] = [];
+  const errors: string[] = [];
+
+  let algoOrders:
+    | Array<{
+        orderId: string;
+        symbol: string;
+        side: "BUY" | "SELL";
+        type: string;
+      }>
+    | null = null;
+  try {
+    algoOrders = await exchange.getAlgoOrders(position.symbol);
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    errors.push(`getAlgoOrders: ${errMsg}`);
+    return { cancelled, errors };
+  }
+
+  const slOrders = (algoOrders || []).filter(
+    (order) =>
+      order.type.toLowerCase() === "sl" &&
+      order.side === closeSide &&
+      order.symbol === position.symbol,
+  );
+
+  const bybitLike = exchange as ExchangeClient & {
+    clearPositionStopLoss?: (symbol: string, positionIdx: number) => Promise<void>;
+  };
+
+  for (const order of slOrders) {
+    try {
+      const syntheticMatch = /^position-sl:[^:]+:(\d+)$/.exec(order.orderId);
+      if (syntheticMatch?.[1] && typeof bybitLike.clearPositionStopLoss === "function") {
+        await bybitLike.clearPositionStopLoss(
+          position.symbol,
+          Number(syntheticMatch[1]),
+        );
+        cancelled.push(order.orderId);
+        continue;
+      }
+
+      const ok = await exchange.cancelOrder(order.orderId, position.symbol);
+      if (ok) {
+        cancelled.push(order.orderId);
+      } else {
+        errors.push(`${order.orderId}: cancel returned false`);
+      }
+    } catch (err) {
+      errors.push(
+        `${order.orderId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  if (errors.length > 0) {
+    await logExecutorWarn(
+      `⚠️ Failed to cancel some SL orders for ${position.symbol}: ${errors.join("; ")}`,
+      {
+        accountId: position.accountId,
+        processId,
+        symbol: position.symbol,
+        type: "tpsl-monitor",
+        action: "cancel_old_sl_failed",
+      },
+    );
+  }
+
+  return { cancelled, errors };
+}
 
 /**
  * Resolve the exchange client for a position based on its accountId.
@@ -46,6 +132,176 @@ async function getExchangeForPosition(position: {
  * - Avoids TP/SL being placed on the wrong position when same symbol has both
  *   a MARKET and LIMIT order
  */
+async function checkAndProcessTakeProfitHits(result: { errors: string[] }) {
+  const openPositionsWithPendingTp = await Position.find({
+    status: "open",
+    "takeProfitTargets.status": "pending",
+  });
+
+  if (openPositionsWithPendingTp.length > 0) {
+    await logExecutorInfo(
+      `⏳ [TP/SL Monitor] Checking ${openPositionsWithPendingTp.length} open positions for TP hits...`,
+      { type: "tpsl-monitor", action: "tp_hit_check_started", level: "debug" }
+    );
+
+    const accountGroups = new Map<string, typeof openPositionsWithPendingTp>();
+    for (const pos of openPositionsWithPendingTp) {
+      const key = pos.accountId || "__global__";
+      if (!accountGroups.has(key)) accountGroups.set(key, []);
+      accountGroups.get(key)!.push(pos);
+    }
+
+    for (const [accountId, positions] of accountGroups) {
+      let exchange: ExchangeClient | null = null;
+      try {
+         exchange = await getExchangeForPosition(positions[0]);
+      } catch (err) {
+         result.errors.push(`Exchange connect error for ${accountId}`);
+         continue;
+      }
+
+      let exchangePositions: Array<{symbol: string; quantity: number; markPrice: number}> = [];
+      try {
+         exchangePositions = await exchange.getOpenPositions();
+      } catch (err) {
+         await logExecutorWarn(`⚠️ Failed to fetch exchange positions for account ${accountId}`, { accountId });
+      }
+
+      for (const position of positions) {
+         const processId = await ensurePersistedProcessId(position, "tpslmon");
+         const exPos = exchangePositions.find(p => p.symbol === position.symbol);
+         let currentPrice = position.currentPrice || 0;
+         if (exPos) {
+             currentPrice = exPos.markPrice;
+         } else {
+             try {
+                 currentPrice = await exchange.getTickerPrice(position.symbol);
+             } catch {
+                 // Fallback to last known if fail
+             }
+         }
+
+         const nextTpIndex = position.takeProfitTargets?.findIndex((t: any) => t.status === "pending");
+         if (typeof nextTpIndex === "number" && nextTpIndex >= 0 && currentPrice > 0) {
+           const nextTp = position.takeProfitTargets[nextTpIndex];
+           const tpHit = position.side === "LONG" ? currentPrice >= nextTp.price : currentPrice <= nextTp.price;
+
+           if (tpHit) {
+             const hasRemainingPendingTargets = position.takeProfitTargets.some(
+               (target: any, index: number) => index > nextTpIndex && target.status === "pending"
+             );
+
+             if (nextTpIndex === 0 && hasRemainingPendingTargets) {
+               nextTp.status = "hit";
+               nextTp.hitAt = new Date();
+
+               await logExecutorInfo(
+                 `🎯 TP1 hit for ${position.symbol} at ${currentPrice} — moving SL to breakeven`,
+                 {
+                   accountId: position.accountId,
+                   processId,
+                   symbol: position.symbol,
+                   type: "tpsl-monitor",
+                   action: "take_profit_1_hit",
+                 }
+               );
+
+               const breakevenPrice = Number(position.entryPrice);
+               const oldStopLoss = position.stopLossPrice;
+               const shouldMoveSlToBreakeven =
+                 Number.isFinite(breakevenPrice) &&
+                 breakevenPrice > 0 &&
+                 (!Number.isFinite(Number(oldStopLoss)) || !isSamePrice(Number(oldStopLoss), breakevenPrice));
+
+               const calculatedRemaining = Math.max(0, position.quantity - (Number(nextTp.quantity) || position.quantity));
+               const remainingQty = exPos && exPos.quantity > 0 ? exPos.quantity : calculatedRemaining;
+               
+               position.quantity = remainingQty;
+               
+               if (calculatePositionPnlUsd) {
+                  position.pnlUsd = calculatePositionPnlUsd({ entryPrice: position.entryPrice, quantity: remainingQty, side: position.side }, currentPrice) ?? position.pnlUsd;
+               }
+
+               if (shouldMoveSlToBreakeven) {
+                 position.stopLossPrice = breakevenPrice;
+                 const closeSide = position.side === "LONG" ? "SELL" : "BUY";
+                 try {
+                   const cancelResult = await cancelExistingStopLossOrders(
+                     exchange,
+                     position,
+                     closeSide,
+                     processId,
+                   );
+                   const slOrderId = await exchange.placeStopLoss(
+                     position.symbol,
+                     breakevenPrice,
+                     breakevenPrice,
+                     closeSide,
+                     position.quantity,
+                   );
+
+                   await logProcessStep({
+                     accountId: position.accountId,
+                     processId,
+                     type: "tpsl-monitor",
+                     action: "move_sl_breakeven_after_tp1",
+                     symbol: position.symbol,
+                     details: {
+                       oldStopLoss: oldStopLoss ?? null,
+                       newStopLoss: breakevenPrice,
+                       cancelledStopLossOrders: cancelResult.cancelled,
+                       orderId: slOrderId,
+                     },
+                     result: "success",
+                   });
+                 } catch (slErr) {
+                   await logExecutorWarn(
+                     `⚠️ Failed to place breakeven SL for ${position.symbol}: ${slErr instanceof Error ? slErr.message : String(slErr)}`,
+                     {
+                       accountId: position.accountId,
+                       processId,
+                       symbol: position.symbol,
+                       type: "tpsl-monitor",
+                       action: "breakeven_sl_place_failed",
+                     }
+                   );
+                 }
+               }
+
+               if (remainingQty <= 0) {
+                 position.status = "closed";
+                 position.closedAt = new Date();
+                 position.closeReason = "Take Profit Hit";
+               }
+
+               await position.save();
+             } else if (!hasRemainingPendingTargets) {
+               nextTp.status = "hit";
+               nextTp.hitAt = new Date();
+               position.status = "closed";
+               position.closedAt = new Date();
+               position.closeReason = "Final Take Profit Hit";
+               position.quantity = 0;
+               await position.save();
+
+               await logExecutorInfo(
+                 `🎯 Final TP hit for ${position.symbol} at ${currentPrice} — marking position closed`,
+                 {
+                   accountId: position.accountId,
+                   processId,
+                   symbol: position.symbol,
+                   type: "tpsl-monitor",
+                   action: "final_take_profit_hit",
+                 }
+               );
+             }
+           }
+         }
+      }
+    }
+  }
+}
+
 export async function runTpslMonitor(): Promise<{
   checked: number;
   promoted: number;
@@ -263,6 +519,9 @@ export async function runTpslMonitor(): Promise<{
         );
       }
     }
+
+    // ─── Step 3: Monitor Open Positions for TP Hit ─────────────
+    await checkAndProcessTakeProfitHits(result);
 
     // Count already-monitored open positions
     const openWithTpsl = await Position.countDocuments({

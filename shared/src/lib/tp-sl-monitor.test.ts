@@ -254,3 +254,53 @@ test("runTpslMonitor releases claimed positions and reports general errors", asy
   assert.equal(failedClaim.tpSlPlaced, false);
   assert.equal(failedClaim.save.mock.calls.length > 0, true);
 });
+
+test("runTpslMonitor checks TP hit and moves SL to breakeven", async () => {
+  const tpPosition = createPosition({
+    _id: { toString: () => "tp-hit-1" },
+    symbol: "HITUSDT",
+    status: "open",
+    side: "LONG",
+    quantity: 4,
+    entryPrice: 100,
+    stopLossPrice: 95,
+    takeProfitTargets: [
+      { price: 110, quantity: 2, percentage: 50, status: "pending" },
+      { price: 120, quantity: 2, percentage: 50, status: "pending" }
+    ]
+  });
+
+  tpslMocks.positionFind.mockResolvedValue([tpPosition]);
+  tpslMocks.positionFindOneAndUpdate.mockResolvedValue(null);
+  tpslMocks.positionCountDocuments.mockResolvedValue(0);
+
+  const exchange = {
+    name: "paper",
+    getInstrumentSpecs: vi.fn().mockResolvedValue({ lotSz: 1, qtyDecimals: 0 }),
+    getOpenPositions: vi.fn().mockResolvedValue([
+      { symbol: "HITUSDT", quantity: 2, markPrice: 111 }
+    ]),
+    getAlgoOrders: vi.fn().mockResolvedValue([
+      { orderId: "sl-old-1", symbol: "HITUSDT", type: "sl", side: "SELL" }
+    ]),
+    cancelOrder: vi.fn().mockResolvedValue(true),
+    placeStopLoss: vi.fn().mockResolvedValue("sl-new-1"),
+    clearPositionStopLoss: vi.fn().mockResolvedValue(undefined),
+  };
+  tpslMocks.getPaperClient.mockReturnValue(exchange);
+
+  await runTpslMonitor();
+
+  assert.equal(tpPosition.takeProfitTargets[0].status, "hit");
+  assert.equal(tpPosition.stopLossPrice, 100);
+  assert.equal(tpPosition.quantity, 2);
+  assert.ok(tpPosition.save.mock.calls.length > 0);
+  assert.equal(exchange.placeStopLoss.mock.calls.length, 1);
+  assert.deepEqual(exchange.placeStopLoss.mock.calls[0], [
+    "HITUSDT",
+    100,
+    100,
+    "SELL",
+    2
+  ]);
+});

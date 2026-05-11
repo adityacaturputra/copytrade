@@ -495,6 +495,23 @@ export class BybitExchange implements ExchangeClient {
     );
   }
 
+  async clearPositionStopLoss(
+    symbol: string,
+    positionIdx: number,
+  ): Promise<void> {
+    await this.signedRequest(
+      "POST",
+      "/v5/position/trading-stop",
+      {
+        category: BYBIT_LINEAR_CATEGORY,
+        symbol: this.toSymbol(symbol),
+        positionIdx,
+        tpslMode: "Full",
+        stopLoss: "0",
+      },
+    );
+  }
+
   private isIgnorableMarginModeError(message: string): boolean {
     const normalized = message.toLowerCase();
 
