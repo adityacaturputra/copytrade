@@ -81,6 +81,13 @@ export async function POST(request: NextRequest) {
           body.webshareApiKeyPool.activeIndex !== undefined
             ? Number(body.webshareApiKeyPool.activeIndex)
             : undefined,
+        allowedCountryCodes: Array.isArray(
+          body.webshareApiKeyPool.allowedCountryCodes,
+        )
+          ? body.webshareApiKeyPool.allowedCountryCodes.map((v: unknown) =>
+              String(v),
+            )
+          : undefined,
       });
     }
 

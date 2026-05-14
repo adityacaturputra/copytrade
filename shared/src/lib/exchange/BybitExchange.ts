@@ -16,6 +16,7 @@ import {
   getProxyAgent,
   getCurrentProxyMeta,
   markCurrentProxyCountryBlocked,
+  markCurrentProxyIpBlocked,
   markCurrentProxySuccessful,
 } from "../proxy/ProxyFactory";
 import { buildHttpErrorMessage } from "../http-error";
@@ -298,6 +299,19 @@ export class BybitExchange implements ExchangeClient {
     );
   }
 
+  private isIpUnmatchedError(error: unknown): boolean {
+    if (!axios.isAxiosError(error)) return false;
+    const status = error.response?.status;
+    const dataText = JSON.stringify(error.response?.data || "").toLowerCase();
+    return (
+      status === 403 &&
+      (dataText.includes("unmatched") ||
+        dataText.includes("ip whitelist") ||
+        dataText.includes("ip is not in") ||
+        dataText.includes("ip not in"))
+    );
+  }
+
   private async publicRequest<T>(
     path: string,
     params: Record<string, string | number | boolean | undefined> = {},
@@ -317,15 +331,24 @@ export class BybitExchange implements ExchangeClient {
         );
         return response.data.result;
       } catch (error) {
+        const isCountryBlocked = this.isCountryBlockedError(error);
+        const isIpUnmatched = this.isIpUnmatchedError(error);
         const shouldRetry =
-          this.isCountryBlockedError(error) &&
+          (isCountryBlocked || isIpUnmatched) &&
           attempt < COUNTRY_BLOCK_MAX_RETRIES;
         if (shouldRetry) {
           const meta = await getCurrentProxyMeta();
-          await markCurrentProxyCountryBlocked();
-          console.warn(
-            `[Bybit] Country block detected for GET ${path}. blockedIp=${meta?.ip || "unknown"} blockedCountry=${meta?.countryCode || "unknown"} blockedCity=${meta?.city || "unknown"}. Retrying with next proxy country/IP (${attempt}/${COUNTRY_BLOCK_MAX_RETRIES - 1})`,
-          );
+          if (isCountryBlocked) {
+            await markCurrentProxyCountryBlocked();
+            console.warn(
+              `[Bybit] Country block detected for GET ${path}. blockedIp=${meta?.ip || "unknown"} blockedCountry=${meta?.countryCode || "unknown"} blockedCity=${meta?.city || "unknown"}. Retrying with next proxy country/IP (${attempt}/${COUNTRY_BLOCK_MAX_RETRIES - 1})`,
+            );
+          } else {
+            await markCurrentProxyIpBlocked();
+            console.warn(
+              `[Bybit] Proxy IP unmatched for GET ${path}. blockedIp=${meta?.ip || "unknown"} blockedCountry=${meta?.countryCode || "unknown"} blockedCity=${meta?.city || "unknown"}. Retrying with next saved/whitelisted proxy IP (${attempt}/${COUNTRY_BLOCK_MAX_RETRIES - 1})`,
+            );
+          }
           continue;
         }
         throw this.normalizeError(error, `GET ${path}`, params);
@@ -382,15 +405,24 @@ export class BybitExchange implements ExchangeClient {
         );
         return response.data.result;
       } catch (error) {
+        const isCountryBlocked = this.isCountryBlockedError(error);
+        const isIpUnmatched = this.isIpUnmatchedError(error);
         const shouldRetry =
-          this.isCountryBlockedError(error) &&
+          (isCountryBlocked || isIpUnmatched) &&
           attempt < COUNTRY_BLOCK_MAX_RETRIES;
         if (shouldRetry) {
           const meta = await getCurrentProxyMeta();
-          await markCurrentProxyCountryBlocked();
-          console.warn(
-            `[Bybit] Country block detected for ${method} ${path}. blockedIp=${meta?.ip || "unknown"} blockedCountry=${meta?.countryCode || "unknown"} blockedCity=${meta?.city || "unknown"}. Retrying with next proxy country/IP (${attempt}/${COUNTRY_BLOCK_MAX_RETRIES - 1})`,
-          );
+          if (isCountryBlocked) {
+            await markCurrentProxyCountryBlocked();
+            console.warn(
+              `[Bybit] Country block detected for ${method} ${path}. blockedIp=${meta?.ip || "unknown"} blockedCountry=${meta?.countryCode || "unknown"} blockedCity=${meta?.city || "unknown"}. Retrying with next proxy country/IP (${attempt}/${COUNTRY_BLOCK_MAX_RETRIES - 1})`,
+            );
+          } else {
+            await markCurrentProxyIpBlocked();
+            console.warn(
+              `[Bybit] Proxy IP unmatched for ${method} ${path}. blockedIp=${meta?.ip || "unknown"} blockedCountry=${meta?.countryCode || "unknown"} blockedCity=${meta?.city || "unknown"}. Retrying with next saved/whitelisted proxy IP (${attempt}/${COUNTRY_BLOCK_MAX_RETRIES - 1})`,
+            );
+          }
           continue;
         }
         throw this.normalizeError(error, `${method} ${path}`, payload);

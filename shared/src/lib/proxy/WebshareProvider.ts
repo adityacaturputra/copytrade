@@ -11,6 +11,7 @@ import { IProxyProvider, ProxyEntry, ProxyInfoResult } from "./types";
 type WebshareApiKeyPoolState = {
   keys: string[];
   activeIndex: number;
+  allowedCountryCodes?: string[];
 };
 
 let resolveWebshareApiKeyPool: () =>
@@ -18,6 +19,7 @@ let resolveWebshareApiKeyPool: () =>
   | WebshareApiKeyPoolState = () => ({
   keys: [process.env.WEBSHARE_API_KEY || ""].filter(Boolean),
   activeIndex: 0,
+  allowedCountryCodes: [],
 });
 
 let persistWebshareActiveIndex:
@@ -39,6 +41,7 @@ let missingKeyWarned = false;
 let proxyFetchErrorWarned = false;
 let roundRobinCursor = 0;
 let blockedCountryCodes = new Set<string>();
+let blockedIps = new Set<string>();
 let lastSelectedProxyMeta: {
   ip: string;
   countryCode: string;
@@ -61,6 +64,18 @@ function maskApiKey(key: string): string {
 
 export class WebshareProvider implements IProxyProvider {
   readonly name = "Webshare";
+
+  private async resolveAllowedCountryCodes(): Promise<Set<string>> {
+    const pool = await resolveWebshareApiKeyPool();
+    const allowed = (pool.allowedCountryCodes || [])
+      .map((code) =>
+        String(code || "")
+          .trim()
+          .toUpperCase(),
+      )
+      .filter(Boolean);
+    return new Set(allowed);
+  }
 
   /** Fetch proxy list from Webshare API (cached for 5 min) */
   async fetchProxyList(): Promise<ProxyEntry[]> {
@@ -155,11 +170,24 @@ export class WebshareProvider implements IProxyProvider {
       const validProxies = proxies.filter((p) => p.valid);
       if (validProxies.length === 0) return null;
 
+      const allowedCountryCodes = await this.resolveAllowedCountryCodes();
+      const countryFilteredProxies =
+        allowedCountryCodes.size > 0
+          ? validProxies.filter((p) =>
+              allowedCountryCodes.has((p.country_code || "").toUpperCase()),
+            )
+          : validProxies;
+      const eligibleProxies =
+        countryFilteredProxies.length > 0
+          ? countryFilteredProxies
+          : validProxies;
+
       const preferredIpMatch =
         preferredIp &&
-        validProxies.find(
+        eligibleProxies.find(
           (p) =>
             p.ip === preferredIp &&
+            !blockedIps.has(p.ip) &&
             !blockedCountryCodes.has((p.country_code || "").toUpperCase()),
         );
       if (preferredIpMatch) {
@@ -173,8 +201,9 @@ export class WebshareProvider implements IProxyProvider {
       }
 
       const preferredCountryPool = preferredCountryCode
-        ? validProxies.filter(
+        ? eligibleProxies.filter(
             (p) =>
+              !blockedIps.has(p.ip) &&
               (p.country_code || "").toUpperCase() === preferredCountryCode &&
               !blockedCountryCodes.has((p.country_code || "").toUpperCase()),
           )
@@ -193,10 +222,12 @@ export class WebshareProvider implements IProxyProvider {
         return `http://${selected.username}:${selected.password}@${selected.ip}:${selected.port}`;
       }
 
-      const preferred = validProxies.filter(
-        (p) => !blockedCountryCodes.has((p.country_code || "").toUpperCase()),
+      const preferred = eligibleProxies.filter(
+        (p) =>
+          !blockedIps.has(p.ip) &&
+          !blockedCountryCodes.has((p.country_code || "").toUpperCase()),
       );
-      const candidatePool = preferred.length > 0 ? preferred : validProxies;
+      const candidatePool = preferred.length > 0 ? preferred : eligibleProxies;
 
       const index = roundRobinCursor % candidatePool.length;
       const selectedProxy = candidatePool[index];
@@ -271,6 +302,7 @@ export class WebshareProvider implements IProxyProvider {
     proxyCache = null;
     roundRobinCursor = 0;
     blockedCountryCodes = new Set<string>();
+    blockedIps = new Set<string>();
     lastSelectedProxyMeta = null;
   }
 
@@ -300,5 +332,14 @@ export class WebshareProvider implements IProxyProvider {
       lastSelectedProxyMeta.countryCode || ""
     ).toUpperCase();
     preferredIp = lastSelectedProxyMeta.ip;
+  }
+
+  markIpBlocked(ip?: string): void {
+    const normalized = String(ip || "").trim();
+    if (!normalized) return;
+    blockedIps.add(normalized);
+    if (preferredIp === normalized) {
+      preferredIp = null;
+    }
   }
 }

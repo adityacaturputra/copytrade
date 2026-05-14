@@ -27,6 +27,7 @@ export interface IProxySettings extends Document {
   customPassword: string;
   webshareApiKeys: string[];
   webshareActiveKeyIndex: number;
+  webshareAllowedCountryCodes: string[];
   updatedAt: Date;
 }
 
@@ -51,6 +52,7 @@ const ProxySettingsSchema = new Schema<IProxySettings>(
     customPassword: { type: String, default: "" },
     webshareApiKeys: { type: [String], default: [] },
     webshareActiveKeyIndex: { type: Number, default: 0 },
+    webshareAllowedCountryCodes: { type: [String], default: [] },
   },
   { timestamps: { createdAt: false, updatedAt: true } },
 );
@@ -98,6 +100,7 @@ let customProvider: CustomProvider | null = null;
 async function resolveWebshareApiKeyPoolState(): Promise<{
   keys: string[];
   activeIndex: number;
+  allowedCountryCodes: string[];
 }> {
   await connectDB();
   const doc = await ProxySettings.findOne().sort({ updatedAt: -1 }).lean();
@@ -105,11 +108,31 @@ async function resolveWebshareApiKeyPoolState(): Promise<{
     .map((k) => String(k).trim())
     .filter(Boolean);
   if (keys.length > 0) {
-    return { keys, activeIndex: Number(doc?.webshareActiveKeyIndex || 0) };
+    return {
+      keys,
+      activeIndex: Number(doc?.webshareActiveKeyIndex || 0),
+      allowedCountryCodes: (doc?.webshareAllowedCountryCodes || [])
+        .map((code) =>
+          String(code || "")
+            .trim()
+            .toUpperCase(),
+        )
+        .filter(Boolean),
+    };
   }
 
   const envKey = (process.env.WEBSHARE_API_KEY || "").trim();
-  return { keys: envKey ? [envKey] : [], activeIndex: 0 };
+  return {
+    keys: envKey ? [envKey] : [],
+    activeIndex: 0,
+    allowedCountryCodes: (doc?.webshareAllowedCountryCodes || [])
+      .map((code) =>
+        String(code || "")
+          .trim()
+          .toUpperCase(),
+      )
+      .filter(Boolean),
+  };
 }
 
 async function persistWebshareActiveIndex(index: number): Promise<void> {
@@ -135,6 +158,7 @@ function getWebshareProvider(): WebshareProvider {
 export async function getWebshareApiKeyPoolConfig(): Promise<{
   keys: string[];
   activeIndex: number;
+  allowedCountryCodes: string[];
 }> {
   return resolveWebshareApiKeyPoolState();
 }
@@ -142,18 +166,33 @@ export async function getWebshareApiKeyPoolConfig(): Promise<{
 export async function setWebshareApiKeyPoolConfig(payload: {
   keys?: string[];
   activeIndex?: number;
-}): Promise<{ keys: string[]; activeIndex: number }> {
+  allowedCountryCodes?: string[];
+}): Promise<{
+  keys: string[];
+  activeIndex: number;
+  allowedCountryCodes: string[];
+}> {
   await connectDB();
   const keys = (payload.keys || [])
     .map((k) => String(k).trim())
     .filter(Boolean);
   const activeIndex = Math.max(0, Number(payload.activeIndex) || 0);
+  const allowedCountryCodes = (payload.allowedCountryCodes || [])
+    .map((code) =>
+      String(code || "")
+        .trim()
+        .toUpperCase(),
+    )
+    .filter(Boolean);
   const doc = await ProxySettings.findOneAndUpdate(
     {},
     {
       ...(payload.keys ? { webshareApiKeys: keys } : {}),
       ...(payload.activeIndex !== undefined
         ? { webshareActiveKeyIndex: activeIndex }
+        : {}),
+      ...(payload.allowedCountryCodes
+        ? { webshareAllowedCountryCodes: allowedCountryCodes }
         : {}),
     },
     { upsert: true, new: true },
@@ -165,6 +204,13 @@ export async function setWebshareApiKeyPoolConfig(payload: {
       .map((k) => String(k).trim())
       .filter(Boolean),
     activeIndex: Number(doc.webshareActiveKeyIndex || 0),
+    allowedCountryCodes: (doc.webshareAllowedCountryCodes || [])
+      .map((code) =>
+        String(code || "")
+          .trim()
+          .toUpperCase(),
+      )
+      .filter(Boolean),
   };
 }
 
@@ -312,6 +358,16 @@ export async function markCurrentProxySuccessful(): Promise<void> {
   if (!provider) return;
   if (!(provider instanceof WebshareProvider)) return;
   provider.markCurrentProxySuccessful();
+}
+
+export async function markCurrentProxyIpBlocked(): Promise<void> {
+  const provider = await getProvider();
+  if (!provider) return;
+  if (!(provider instanceof WebshareProvider)) return;
+
+  const meta = provider.getLastSelectedProxyMeta();
+  if (!meta?.ip) return;
+  provider.markIpBlocked(meta.ip);
 }
 
 /**

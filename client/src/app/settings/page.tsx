@@ -217,6 +217,8 @@ export default function SettingsPage() {
   });
   const [webshareApiKeysText, setWebshareApiKeysText] = useState("");
   const [webshareActiveKeyIndex, setWebshareActiveKeyIndex] = useState(0);
+  const [webshareAllowedCountriesText, setWebshareAllowedCountriesText] =
+    useState("");
 
   // ─── Log cleanup state ───────────────────────────────────
   const [logCleanupDays, setLogCleanupDays] = useState("3");
@@ -304,6 +306,9 @@ export default function SettingsPage() {
           );
           setWebshareActiveKeyIndex(
             Number(json.webshareApiKeyPool.activeIndex || 0),
+          );
+          setWebshareAllowedCountriesText(
+            (json.webshareApiKeyPool.allowedCountryCodes || []).join("\n"),
           );
         }
         if (json.config?.custom) {
@@ -1019,6 +1024,10 @@ export default function SettingsPage() {
             .map((line) => line.trim())
             .filter(Boolean),
           activeIndex: webshareActiveKeyIndex,
+          allowedCountryCodes: webshareAllowedCountriesText
+            .split("\n")
+            .map((line) => line.trim().toUpperCase())
+            .filter(Boolean),
         };
       }
       const res = await fetch("/api/proxy", {
@@ -1040,6 +1049,9 @@ export default function SettingsPage() {
           );
           setWebshareActiveKeyIndex(
             Number(json.webshareApiKeyPool.activeIndex || 0),
+          );
+          setWebshareAllowedCountriesText(
+            (json.webshareApiKeyPool.allowedCountryCodes || []).join("\n"),
           );
         }
       } else {
@@ -2736,6 +2748,25 @@ export default function SettingsPage() {
                               }
                               className="w-32 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
                             />
+                          </div>
+
+                          <div>
+                            <label className="block text-xs text-slate-400 mb-1">
+                              Hard filter country codes (optional, 1 per line)
+                            </label>
+                            <textarea
+                              value={webshareAllowedCountriesText}
+                              onChange={(e) =>
+                                setWebshareAllowedCountriesText(e.target.value)
+                              }
+                              rows={3}
+                              placeholder={"SG\nJP\nHK"}
+                              className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-xs font-mono text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none"
+                            />
+                            <p className="text-[11px] text-slate-500 mt-1">
+                              If set, proxy selection will prioritize only these
+                              countries. Leave empty to allow all countries.
+                            </p>
                           </div>
                         </div>
                       )}
