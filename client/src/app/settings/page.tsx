@@ -219,6 +219,7 @@ export default function SettingsPage() {
   const [webshareActiveKeyIndex, setWebshareActiveKeyIndex] = useState(0);
   const [webshareAllowedCountriesText, setWebshareAllowedCountriesText] =
     useState("");
+  const [proxyIpCsvCopied, setProxyIpCsvCopied] = useState(false);
 
   // ─── Log cleanup state ───────────────────────────────────
   const [logCleanupDays, setLogCleanupDays] = useState("3");
@@ -1069,6 +1070,14 @@ export default function SettingsPage() {
   const handleProxyRefresh = async () => {
     setProxyRefreshing(true);
     await fetchProxies();
+  };
+
+  const handleCopyProxyIpCsv = async () => {
+    if (!proxyProviderInfo?.ipList?.length) return;
+    const csv = proxyProviderInfo.ipList.join(",");
+    await navigator.clipboard.writeText(csv);
+    setProxyIpCsvCopied(true);
+    setTimeout(() => setProxyIpCsvCopied(false), 1800);
   };
 
   const handleReset = async () => {
@@ -2773,10 +2782,22 @@ export default function SettingsPage() {
 
                       {proxyProviderInfo && (
                         <div className="bg-slate-800/50 border border-slate-700 rounded-lg p-3 mb-4">
-                          <p className="text-xs text-slate-400 mb-1">
-                            Proxy IPs ({proxyProviderInfo.validCount}/
-                            {proxyProviderInfo.total} valid):
-                          </p>
+                          <div className="flex items-center justify-between gap-2 mb-1">
+                            <p className="text-xs text-slate-400">
+                              Proxy IPs ({proxyProviderInfo.validCount}/
+                              {proxyProviderInfo.total} valid):
+                            </p>
+                            <button
+                              type="button"
+                              onClick={handleCopyProxyIpCsv}
+                              disabled={!proxyProviderInfo.ipList.length}
+                              className="text-[11px] bg-slate-700 hover:bg-slate-600 disabled:opacity-50 px-2 py-1 rounded text-slate-200 transition"
+                            >
+                              {proxyIpCsvCopied
+                                ? "✅ Copied CSV"
+                                : "📋 Copy CSV"}
+                            </button>
+                          </div>
                           <div className="flex flex-wrap gap-1">
                             {proxyProviderInfo.ipList.map((ip) => (
                               <span
@@ -2787,6 +2808,10 @@ export default function SettingsPage() {
                               </span>
                             ))}
                           </div>
+                          <p className="text-[11px] text-slate-500 mt-2">
+                            Copy CSV format:{" "}
+                            <span className="font-mono">ip1,ip2,ip3</span>
+                          </p>
 
                           {proxyProviderInfo.telemetry && (
                             <div className="mt-3 pt-3 border-t border-slate-700 space-y-2">
