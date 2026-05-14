@@ -8,14 +8,55 @@
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { IProxyProvider, ProxyEntry, ProxyInfoResult } from "./types";
 
+type WebshareApiKeyPoolState = {
+  keys: string[];
+  activeIndex: number;
+};
+
+let resolveWebshareApiKeyPool: () =>
+  | Promise<WebshareApiKeyPoolState>
+  | WebshareApiKeyPoolState = () => ({
+  keys: [process.env.WEBSHARE_API_KEY || ""].filter(Boolean),
+  activeIndex: 0,
+});
+
+let persistWebshareActiveIndex:
+  | ((index: number) => Promise<void> | void)
+  | null = null;
+
+export function configureWebshareApiKeyPool(options: {
+  resolvePool: () => Promise<WebshareApiKeyPoolState> | WebshareApiKeyPoolState;
+  persistActiveIndex?: (index: number) => Promise<void> | void;
+}): void {
+  resolveWebshareApiKeyPool = options.resolvePool;
+  persistWebshareActiveIndex = options.persistActiveIndex || null;
+}
+
 /** Cached proxy list to avoid repeated API calls */
 let proxyCache: { data: ProxyEntry[]; ts: number } | null = null;
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 let missingKeyWarned = false;
 let proxyFetchErrorWarned = false;
+let roundRobinCursor = 0;
+let blockedCountryCodes = new Set<string>();
+let lastSelectedProxyMeta: {
+  ip: string;
+  countryCode: string;
+  city: string;
+} | null = null;
+let preferredCountryCode: string | null = null;
+let preferredIp: string | null = null;
 
-function getWebshareApiKey(): string {
-  return process.env.WEBSHARE_API_KEY || "";
+function normalizeIndex(index: number, total: number): number {
+  if (total <= 0) return 0;
+  return ((index % total) + total) % total;
+}
+
+function maskApiKey(key: string): string {
+  const trimmed = key.trim();
+  if (!trimmed) return "";
+  if (trimmed.length <= 8) return "****";
+  return `${trimmed.slice(0, 4)}****${trimmed.slice(-4)}`;
 }
 
 export class WebshareProvider implements IProxyProvider {
@@ -23,9 +64,11 @@ export class WebshareProvider implements IProxyProvider {
 
   /** Fetch proxy list from Webshare API (cached for 5 min) */
   async fetchProxyList(): Promise<ProxyEntry[]> {
-    const apiKey = getWebshareApiKey();
+    const pool = await resolveWebshareApiKeyPool();
+    const apiKeys = (pool.keys || []).map((k) => k.trim()).filter(Boolean);
+    const startIndex = normalizeIndex(pool.activeIndex || 0, apiKeys.length);
 
-    if (!apiKey) {
+    if (apiKeys.length === 0) {
       throw new Error("WEBSHARE_API_KEY is not set in environment variables");
     }
 
@@ -37,19 +80,45 @@ export class WebshareProvider implements IProxyProvider {
     const baseUrl =
       "https://proxy.webshare.io/api/v2/proxy/list/?mode=direct&page=1&page_size=100";
 
-    const response = await fetch(baseUrl, {
-      headers: {
-        Authorization: `Token ${apiKey}`,
-        Accept: "application/json",
-      },
-    });
+    let lastError = "Unknown Webshare API error";
+    let json: any = null;
+    let successfulIndex = startIndex;
 
-    if (!response.ok) {
+    for (let i = 0; i < apiKeys.length; i++) {
+      const keyIndex = normalizeIndex(startIndex + i, apiKeys.length);
+      const response = await fetch(baseUrl, {
+        headers: {
+          Authorization: `Token ${apiKeys[keyIndex]}`,
+          Accept: "application/json",
+        },
+      });
+
+      if (response.ok) {
+        json = await response.json();
+        successfulIndex = keyIndex;
+        break;
+      }
+
       const text = await response.text();
-      throw new Error(`Webshare API error (${response.status}): ${text}`);
+      lastError = `Webshare API error (${response.status}): ${text}`;
+      const usageLimited =
+        response.status === 429 ||
+        response.status === 401 ||
+        response.status === 403 ||
+        /rate.?limit|usage|quota/i.test(text);
+
+      if (!usageLimited) {
+        throw new Error(lastError);
+      }
     }
 
-    const json = await response.json();
+    if (!json) {
+      throw new Error(lastError);
+    }
+
+    if (persistWebshareActiveIndex) {
+      await persistWebshareActiveIndex(successfulIndex);
+    }
 
     const proxies: ProxyEntry[] = (json.results || []).map(
       (p: Record<string, unknown>) => ({
@@ -68,8 +137,9 @@ export class WebshareProvider implements IProxyProvider {
   }
 
   async getProxyUrl(): Promise<string | null> {
-    const apiKey = getWebshareApiKey();
-    if (!apiKey) {
+    const pool = await resolveWebshareApiKeyPool();
+    const hasAnyApiKey = (pool.keys || []).some((k) => k.trim().length > 0);
+    if (!hasAnyApiKey) {
       if (!missingKeyWarned) {
         console.warn(
           "[WebshareProxy] WEBSHARE_API_KEY is missing. Proxy will be skipped and direct connection will be used.",
@@ -82,10 +152,64 @@ export class WebshareProvider implements IProxyProvider {
 
     try {
       const proxies = await this.fetchProxyList();
-      const validProxy = proxies.find((p) => p.valid);
-      if (!validProxy) return null;
+      const validProxies = proxies.filter((p) => p.valid);
+      if (validProxies.length === 0) return null;
+
+      const preferredIpMatch =
+        preferredIp &&
+        validProxies.find(
+          (p) =>
+            p.ip === preferredIp &&
+            !blockedCountryCodes.has((p.country_code || "").toUpperCase()),
+        );
+      if (preferredIpMatch) {
+        lastSelectedProxyMeta = {
+          ip: preferredIpMatch.ip,
+          countryCode: preferredIpMatch.country_code,
+          city: preferredIpMatch.city_name,
+        };
+        proxyFetchErrorWarned = false;
+        return `http://${preferredIpMatch.username}:${preferredIpMatch.password}@${preferredIpMatch.ip}:${preferredIpMatch.port}`;
+      }
+
+      const preferredCountryPool = preferredCountryCode
+        ? validProxies.filter(
+            (p) =>
+              (p.country_code || "").toUpperCase() === preferredCountryCode &&
+              !blockedCountryCodes.has((p.country_code || "").toUpperCase()),
+          )
+        : [];
+
+      if (preferredCountryPool.length > 0) {
+        const idx = roundRobinCursor % preferredCountryPool.length;
+        const selected = preferredCountryPool[idx];
+        roundRobinCursor = (roundRobinCursor + 1) % preferredCountryPool.length;
+        lastSelectedProxyMeta = {
+          ip: selected.ip,
+          countryCode: selected.country_code,
+          city: selected.city_name,
+        };
+        proxyFetchErrorWarned = false;
+        return `http://${selected.username}:${selected.password}@${selected.ip}:${selected.port}`;
+      }
+
+      const preferred = validProxies.filter(
+        (p) => !blockedCountryCodes.has((p.country_code || "").toUpperCase()),
+      );
+      const candidatePool = preferred.length > 0 ? preferred : validProxies;
+
+      const index = roundRobinCursor % candidatePool.length;
+      const selectedProxy = candidatePool[index];
+      roundRobinCursor = (roundRobinCursor + 1) % candidatePool.length;
+
+      lastSelectedProxyMeta = {
+        ip: selectedProxy.ip,
+        countryCode: selectedProxy.country_code,
+        city: selectedProxy.city_name,
+      };
+
       proxyFetchErrorWarned = false;
-      return `http://${validProxy.username}:${validProxy.password}@${validProxy.ip}:${validProxy.port}`;
+      return `http://${selectedProxy.username}:${selectedProxy.password}@${selectedProxy.ip}:${selectedProxy.port}`;
     } catch (error) {
       if (!proxyFetchErrorWarned) {
         console.error(
@@ -106,6 +230,12 @@ export class WebshareProvider implements IProxyProvider {
 
   async getProxyInfo(): Promise<ProxyInfoResult> {
     try {
+      const pool = await resolveWebshareApiKeyPool();
+      const cleaned = (pool.keys || []).map((k) => k.trim()).filter(Boolean);
+      const activeIndex = normalizeIndex(
+        pool.activeIndex || 0,
+        cleaned.length || 1,
+      );
       const proxies = await this.fetchProxyList();
       const validProxies = proxies.filter((p) => p.valid);
       const firstProxy = validProxies[0];
@@ -119,6 +249,13 @@ export class WebshareProvider implements IProxyProvider {
         ipList: validProxies.map((p) => p.ip),
         total: proxies.length,
         validCount: validProxies.length,
+        webshareApiKeys: {
+          total: cleaned.length,
+          activeIndex,
+          activeKeyMasked: cleaned[activeIndex]
+            ? maskApiKey(cleaned[activeIndex])
+            : null,
+        },
       };
     } catch (error) {
       return {
@@ -132,5 +269,36 @@ export class WebshareProvider implements IProxyProvider {
   /** Clear the proxy cache */
   clearCache(): void {
     proxyCache = null;
+    roundRobinCursor = 0;
+    blockedCountryCodes = new Set<string>();
+    lastSelectedProxyMeta = null;
+  }
+
+  markCountryBlocked(countryCode?: string): void {
+    const normalized = String(countryCode || "")
+      .trim()
+      .toUpperCase();
+    if (!normalized) return;
+    blockedCountryCodes.add(normalized);
+    if (preferredCountryCode === normalized) {
+      preferredCountryCode = null;
+      preferredIp = null;
+    }
+  }
+
+  getLastSelectedProxyMeta(): {
+    ip: string;
+    countryCode: string;
+    city: string;
+  } | null {
+    return lastSelectedProxyMeta;
+  }
+
+  markCurrentProxySuccessful(): void {
+    if (!lastSelectedProxyMeta) return;
+    preferredCountryCode = (
+      lastSelectedProxyMeta.countryCode || ""
+    ).toUpperCase();
+    preferredIp = lastSelectedProxyMeta.ip;
   }
 }

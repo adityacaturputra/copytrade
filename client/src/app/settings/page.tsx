@@ -30,7 +30,26 @@ import {
   type ExchangeFormValues,
 } from "./exchange-form";
 
-import { AccountData, HealthStatus, AutoRaiseOverrideMode, ChannelEntry, AccountFormData, createEmptyAccountForm, RiskConfig, defaultRiskConfig, SignalConfigType, defaultSignalConfig, RECOMMENDED_SCHEDULES, EXCHANGE_PROVIDER_OPTIONS, getTradingPlatformConfig, parseOptionalPositiveNumber, parseOptionalNonNegativeNumber, formatOptionalNumber, toAutoRaiseOverrideMode, withActionPassword } from "./types";
+import {
+  AccountData,
+  HealthStatus,
+  AutoRaiseOverrideMode,
+  ChannelEntry,
+  AccountFormData,
+  createEmptyAccountForm,
+  RiskConfig,
+  defaultRiskConfig,
+  SignalConfigType,
+  defaultSignalConfig,
+  RECOMMENDED_SCHEDULES,
+  EXCHANGE_PROVIDER_OPTIONS,
+  getTradingPlatformConfig,
+  parseOptionalPositiveNumber,
+  parseOptionalNonNegativeNumber,
+  formatOptionalNumber,
+  toAutoRaiseOverrideMode,
+  withActionPassword,
+} from "./types";
 // ─── Component ──────────────────────────────────────────────
 
 export default function SettingsPage() {
@@ -178,6 +197,13 @@ export default function SettingsPage() {
     ipList: string[];
     total: number;
     validCount: number;
+    telemetry?: {
+      snapshotUpdatedAt?: string;
+      previousIps?: string[];
+      currentIps?: string[];
+      addedIps?: string[];
+      removedIps?: string[];
+    };
   } | null>(null);
   const [proxyLoading, setProxyLoading] = useState(true);
   const [proxyRefreshing, setProxyRefreshing] = useState(false);
@@ -189,6 +215,8 @@ export default function SettingsPage() {
     username: "",
     password: "",
   });
+  const [webshareApiKeysText, setWebshareApiKeysText] = useState("");
+  const [webshareActiveKeyIndex, setWebshareActiveKeyIndex] = useState(0);
 
   // ─── Log cleanup state ───────────────────────────────────
   const [logCleanupDays, setLogCleanupDays] = useState("3");
@@ -270,6 +298,14 @@ export default function SettingsPage() {
       if (json.success) {
         setProxyConfig(json.config);
         setProxyProviderInfo(json.providerInfo || null);
+        if (json.webshareApiKeyPool) {
+          setWebshareApiKeysText(
+            (json.webshareApiKeyPool.keys || []).join("\n"),
+          );
+          setWebshareActiveKeyIndex(
+            Number(json.webshareApiKeyPool.activeIndex || 0),
+          );
+        }
         if (json.config?.custom) {
           setCustomProxy(json.config.custom);
         }
@@ -976,6 +1012,15 @@ export default function SettingsPage() {
       if (proxyConfig?.provider === "custom") {
         body.custom = customProxy;
       }
+      if ((proxyConfig?.provider || "webshare") === "webshare") {
+        body.webshareApiKeyPool = {
+          keys: webshareApiKeysText
+            .split("\n")
+            .map((line) => line.trim())
+            .filter(Boolean),
+          activeIndex: webshareActiveKeyIndex,
+        };
+      }
       const res = await fetch("/api/proxy", {
         method: "POST",
         headers: withActionPassword({ "Content-Type": "application/json" }),
@@ -989,6 +1034,14 @@ export default function SettingsPage() {
       if (json.success) {
         setProxyConfig(json.config);
         setProxyProviderInfo(json.providerInfo || null);
+        if (json.webshareApiKeyPool) {
+          setWebshareApiKeysText(
+            (json.webshareApiKeyPool.keys || []).join("\n"),
+          );
+          setWebshareActiveKeyIndex(
+            Number(json.webshareApiKeyPool.activeIndex || 0),
+          );
+        }
       } else {
         setProxyError(json.error || "Failed to save proxy config");
       }
@@ -999,6 +1052,11 @@ export default function SettingsPage() {
     } finally {
       setProxySaving(false);
     }
+  };
+
+  const handleProxyRefresh = async () => {
+    setProxyRefreshing(true);
+    await fetchProxies();
   };
 
   const handleReset = async () => {
@@ -2270,7 +2328,6 @@ export default function SettingsPage() {
                       Include image URLs in AI analysis
                     </label>
                   </div>
-
                 </div>
               </div>
               {signalError && (
@@ -2337,7 +2394,6 @@ export default function SettingsPage() {
                 {signalSaving ? "Saving..." : "💾 Save Vision Setting"}
               </button>
             </div>
-
 
             {/* ─── Cron Jobs ────────────────────────── */}
             <div className="card">
@@ -2646,6 +2702,44 @@ export default function SettingsPage() {
                         </div>
                       )}
 
+                      {proxyConfig?.provider === "webshare" && (
+                        <div className="bg-slate-800/40 border border-slate-700 rounded-lg p-3 mb-4 space-y-3">
+                          <p className="text-xs text-slate-400">
+                            Webshare API Key Pool (1 key per line). System will
+                            fallback to next key automatically when active key
+                            is rate-limited / usage reached.
+                          </p>
+                          <textarea
+                            value={webshareApiKeysText}
+                            onChange={(e) =>
+                              setWebshareApiKeysText(e.target.value)
+                            }
+                            rows={4}
+                            placeholder="webshare_key_1\nwebshare_key_2"
+                            className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-xs font-mono text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none"
+                          />
+                          <div>
+                            <label className="block text-xs text-slate-400 mb-1">
+                              Preferred active key index
+                            </label>
+                            <input
+                              type="number"
+                              min="0"
+                              value={webshareActiveKeyIndex}
+                              onChange={(e) =>
+                                setWebshareActiveKeyIndex(
+                                  Math.max(
+                                    0,
+                                    parseInt(e.target.value || "0", 10),
+                                  ),
+                                )
+                              }
+                              className="w-32 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
+                            />
+                          </div>
+                        </div>
+                      )}
+
                       {proxyProviderInfo && (
                         <div className="bg-slate-800/50 border border-slate-700 rounded-lg p-3 mb-4">
                           <p className="text-xs text-slate-400 mb-1">
@@ -2662,6 +2756,76 @@ export default function SettingsPage() {
                               </span>
                             ))}
                           </div>
+
+                          {proxyProviderInfo.telemetry && (
+                            <div className="mt-3 pt-3 border-t border-slate-700 space-y-2">
+                              <p className="text-xs text-slate-400">
+                                IP changes since last snapshot
+                                {proxyProviderInfo.telemetry.snapshotUpdatedAt
+                                  ? ` (${new Date(proxyProviderInfo.telemetry.snapshotUpdatedAt).toLocaleString()})`
+                                  : ""}
+                                :
+                              </p>
+
+                              <div>
+                                <p className="text-[11px] text-emerald-400 mb-1">
+                                  Added (
+                                  {proxyProviderInfo.telemetry.addedIps
+                                    ?.length || 0}
+                                  )
+                                </p>
+                                <div className="flex flex-wrap gap-1">
+                                  {(proxyProviderInfo.telemetry.addedIps || [])
+                                    .length > 0 ? (
+                                    (
+                                      proxyProviderInfo.telemetry.addedIps || []
+                                    ).map((ip) => (
+                                      <span
+                                        key={`added-${ip}`}
+                                        className="text-xs font-mono bg-emerald-900/40 border border-emerald-700 px-1.5 py-0.5 rounded text-emerald-200"
+                                      >
+                                        + {ip}
+                                      </span>
+                                    ))
+                                  ) : (
+                                    <span className="text-xs text-slate-500">
+                                      none
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div>
+                                <p className="text-[11px] text-amber-400 mb-1">
+                                  Removed (
+                                  {proxyProviderInfo.telemetry.removedIps
+                                    ?.length || 0}
+                                  )
+                                </p>
+                                <div className="flex flex-wrap gap-1">
+                                  {(
+                                    proxyProviderInfo.telemetry.removedIps || []
+                                  ).length > 0 ? (
+                                    (
+                                      proxyProviderInfo.telemetry.removedIps ||
+                                      []
+                                    ).map((ip) => (
+                                      <span
+                                        key={`removed-${ip}`}
+                                        className="text-xs font-mono bg-amber-900/40 border border-amber-700 px-1.5 py-0.5 rounded text-amber-200"
+                                      >
+                                        - {ip}
+                                      </span>
+                                    ))
+                                  ) : (
+                                    <span className="text-xs text-slate-500">
+                                      none
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       )}
                     </>
@@ -2670,13 +2834,24 @@ export default function SettingsPage() {
                   {proxyError && (
                     <p className="text-red-400 text-xs mb-2">⚠️ {proxyError}</p>
                   )}
-                  <button
-                    onClick={handleProxySave}
-                    disabled={proxySaving}
-                    className="bg-primary-600 hover:bg-primary-700 disabled:opacity-50 px-4 py-2 rounded-lg text-sm font-medium transition"
-                  >
-                    {proxySaving ? "Saving..." : "💾 Save Proxy Config"}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleProxyRefresh}
+                      disabled={proxyRefreshing || proxySaving}
+                      className="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 px-4 py-2 rounded-lg text-sm font-medium transition"
+                    >
+                      {proxyRefreshing
+                        ? "Refreshing..."
+                        : "🔄 Refresh Proxy Snapshot"}
+                    </button>
+                    <button
+                      onClick={handleProxySave}
+                      disabled={proxySaving || proxyRefreshing}
+                      className="bg-primary-600 hover:bg-primary-700 disabled:opacity-50 px-4 py-2 rounded-lg text-sm font-medium transition"
+                    >
+                      {proxySaving ? "Saving..." : "💾 Save Proxy Config"}
+                    </button>
+                  </div>
                 </>
               )}
             </div>

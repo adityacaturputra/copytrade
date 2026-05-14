@@ -8,7 +8,10 @@
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { connectDB } from "../database";
 import { ProxyConfig, ProxyProviderType, ProxyInfoResult } from "./types";
-import { WebshareProvider } from "./WebshareProvider";
+import {
+  WebshareProvider,
+  configureWebshareApiKeyPool,
+} from "./WebshareProvider";
 import { CustomProvider, CustomProxySettings } from "./CustomProvider";
 
 // ─── DB Schema (inline, follows project pattern) ───────────────────────────
@@ -22,6 +25,15 @@ export interface IProxySettings extends Document {
   customPort: number;
   customUsername: string;
   customPassword: string;
+  webshareApiKeys: string[];
+  webshareActiveKeyIndex: number;
+  updatedAt: Date;
+}
+
+interface IProxyIpSnapshot extends Document {
+  provider: ProxyProviderType;
+  previousIps: string[];
+  currentIps: string[];
   updatedAt: Date;
 }
 
@@ -37,6 +49,8 @@ const ProxySettingsSchema = new Schema<IProxySettings>(
     customPort: { type: Number, default: 1080 },
     customUsername: { type: String, default: "" },
     customPassword: { type: String, default: "" },
+    webshareApiKeys: { type: [String], default: [] },
+    webshareActiveKeyIndex: { type: Number, default: 0 },
   },
   { timestamps: { createdAt: false, updatedAt: true } },
 );
@@ -44,6 +58,24 @@ const ProxySettingsSchema = new Schema<IProxySettings>(
 const ProxySettings: Model<IProxySettings> =
   models.ProxySettings ||
   mongoose.model<IProxySettings>("ProxySettings", ProxySettingsSchema);
+
+const ProxyIpSnapshotSchema = new Schema<IProxyIpSnapshot>(
+  {
+    provider: {
+      type: String,
+      enum: ["webshare", "custom"],
+      required: true,
+      unique: true,
+    },
+    previousIps: { type: [String], default: [] },
+    currentIps: { type: [String], default: [] },
+  },
+  { timestamps: { createdAt: false, updatedAt: true } },
+);
+
+const ProxyIpSnapshot: Model<IProxyIpSnapshot> =
+  models.ProxyIpSnapshot ||
+  mongoose.model<IProxyIpSnapshot>("ProxyIpSnapshot", ProxyIpSnapshotSchema);
 
 // ─── Defaults ───────────────────────────────────────────────────────────────
 
@@ -63,11 +95,77 @@ const DEFAULT_PROXY_CONFIG: ProxyConfig = {
 let webshareProvider: WebshareProvider | null = null;
 let customProvider: CustomProvider | null = null;
 
+async function resolveWebshareApiKeyPoolState(): Promise<{
+  keys: string[];
+  activeIndex: number;
+}> {
+  await connectDB();
+  const doc = await ProxySettings.findOne().sort({ updatedAt: -1 }).lean();
+  const keys = (doc?.webshareApiKeys || [])
+    .map((k) => String(k).trim())
+    .filter(Boolean);
+  if (keys.length > 0) {
+    return { keys, activeIndex: Number(doc?.webshareActiveKeyIndex || 0) };
+  }
+
+  const envKey = (process.env.WEBSHARE_API_KEY || "").trim();
+  return { keys: envKey ? [envKey] : [], activeIndex: 0 };
+}
+
+async function persistWebshareActiveIndex(index: number): Promise<void> {
+  await connectDB();
+  await ProxySettings.findOneAndUpdate(
+    {},
+    { webshareActiveKeyIndex: Math.max(0, Number(index) || 0) },
+    { upsert: true, new: true },
+  );
+}
+
 function getWebshareProvider(): WebshareProvider {
+  configureWebshareApiKeyPool({
+    resolvePool: resolveWebshareApiKeyPoolState,
+    persistActiveIndex: persistWebshareActiveIndex,
+  });
   if (!webshareProvider) {
     webshareProvider = new WebshareProvider();
   }
   return webshareProvider;
+}
+
+export async function getWebshareApiKeyPoolConfig(): Promise<{
+  keys: string[];
+  activeIndex: number;
+}> {
+  return resolveWebshareApiKeyPoolState();
+}
+
+export async function setWebshareApiKeyPoolConfig(payload: {
+  keys?: string[];
+  activeIndex?: number;
+}): Promise<{ keys: string[]; activeIndex: number }> {
+  await connectDB();
+  const keys = (payload.keys || [])
+    .map((k) => String(k).trim())
+    .filter(Boolean);
+  const activeIndex = Math.max(0, Number(payload.activeIndex) || 0);
+  const doc = await ProxySettings.findOneAndUpdate(
+    {},
+    {
+      ...(payload.keys ? { webshareApiKeys: keys } : {}),
+      ...(payload.activeIndex !== undefined
+        ? { webshareActiveKeyIndex: activeIndex }
+        : {}),
+    },
+    { upsert: true, new: true },
+  ).lean();
+
+  getWebshareProvider().clearCache();
+  return {
+    keys: (doc.webshareApiKeys || [])
+      .map((k) => String(k).trim())
+      .filter(Boolean),
+    activeIndex: Number(doc.webshareActiveKeyIndex || 0),
+  };
 }
 
 function getCustomProvider(settings: CustomProxySettings): CustomProvider {
@@ -177,6 +275,45 @@ export async function getProxyAgent(): Promise<HttpsProxyAgent<string> | null> {
   return provider.getProxyAgent();
 }
 
+export async function getCurrentProxyMeta(): Promise<{
+  provider: string;
+  ip?: string;
+  countryCode?: string;
+  city?: string;
+} | null> {
+  const provider = await getProvider();
+  if (!provider) return null;
+
+  if (provider instanceof WebshareProvider) {
+    const meta = provider.getLastSelectedProxyMeta();
+    return {
+      provider: provider.name,
+      ip: meta?.ip,
+      countryCode: meta?.countryCode,
+      city: meta?.city,
+    };
+  }
+
+  return { provider: provider.name };
+}
+
+export async function markCurrentProxyCountryBlocked(): Promise<void> {
+  const provider = await getProvider();
+  if (!provider) return;
+  if (!(provider instanceof WebshareProvider)) return;
+
+  const meta = provider.getLastSelectedProxyMeta();
+  if (!meta?.countryCode) return;
+  provider.markCountryBlocked(meta.countryCode);
+}
+
+export async function markCurrentProxySuccessful(): Promise<void> {
+  const provider = await getProvider();
+  if (!provider) return;
+  if (!(provider instanceof WebshareProvider)) return;
+  provider.markCurrentProxySuccessful();
+}
+
 /**
  * Get proxy info for the settings page from the current provider.
  */
@@ -199,6 +336,41 @@ export async function getProxyInfo(): Promise<ProxyInfoResult> {
   }
 
   const info = await provider.getProxyInfo();
+
+  if (config.provider === "webshare" && info.success && info.ipList) {
+    const snapshot = await ProxyIpSnapshot.findOne({ provider: "webshare" })
+      .lean()
+      .catch(() => null);
+    const previousIps = snapshot?.currentIps || [];
+    const currentIps = info.ipList;
+    const addedIps = currentIps.filter((ip) => !previousIps.includes(ip));
+    const removedIps = previousIps.filter((ip) => !currentIps.includes(ip));
+
+    await ProxyIpSnapshot.findOneAndUpdate(
+      { provider: "webshare" },
+      {
+        provider: "webshare",
+        previousIps,
+        currentIps,
+      },
+      { upsert: true, new: true },
+    ).catch(() => null);
+
+    return {
+      ...info,
+      providerName: provider.name,
+      telemetry: {
+        snapshotUpdatedAt: snapshot?.updatedAt
+          ? new Date(snapshot.updatedAt).toISOString()
+          : undefined,
+        previousIps,
+        currentIps,
+        addedIps,
+        removedIps,
+      },
+    };
+  }
+
   return { ...info, providerName: provider.name };
 }
 

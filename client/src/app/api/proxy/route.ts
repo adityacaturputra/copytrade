@@ -4,6 +4,8 @@ import {
   setProxyConfig,
   getProxyInfo,
   getProviderProxyInfo,
+  getWebshareApiKeyPoolConfig,
+  setWebshareApiKeyPoolConfig,
 } from "@copytrade/shared/lib/proxy/ProxyFactory";
 import { verifyActionAuth } from "../_lib/action-auth";
 
@@ -28,6 +30,7 @@ export async function GET() {
         custom: config.custom,
       },
       providerInfo,
+      webshareApiKeyPool: await getWebshareApiKeyPoolConfig(),
     });
   } catch (error) {
     return NextResponse.json(
@@ -69,6 +72,18 @@ export async function POST(request: NextRequest) {
         : undefined,
     });
 
+    if (body.webshareApiKeyPool) {
+      await setWebshareApiKeyPoolConfig({
+        keys: Array.isArray(body.webshareApiKeyPool.keys)
+          ? body.webshareApiKeyPool.keys.map((k: unknown) => String(k))
+          : undefined,
+        activeIndex:
+          body.webshareApiKeyPool.activeIndex !== undefined
+            ? Number(body.webshareApiKeyPool.activeIndex)
+            : undefined,
+      });
+    }
+
     // Get updated provider info
     let providerInfo = null;
     if (config.enabled) {
@@ -83,6 +98,7 @@ export async function POST(request: NextRequest) {
         custom: config.custom,
       },
       providerInfo,
+      webshareApiKeyPool: await getWebshareApiKeyPoolConfig(),
     });
   } catch (error) {
     return NextResponse.json(

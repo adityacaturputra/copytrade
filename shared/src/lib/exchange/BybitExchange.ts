@@ -12,7 +12,12 @@ import {
   HistoricalOrder,
   InstrumentSpecs,
 } from "./types";
-import { getProxyAgent } from "../proxy/ProxyFactory";
+import {
+  getProxyAgent,
+  getCurrentProxyMeta,
+  markCurrentProxyCountryBlocked,
+  markCurrentProxySuccessful,
+} from "../proxy/ProxyFactory";
 import { buildHttpErrorMessage } from "../http-error";
 
 type HttpMethod = "GET" | "POST";
@@ -134,6 +139,7 @@ const BYBIT_ACCOUNT_TYPE = "UNIFIED";
 const BYBIT_RECV_WINDOW = "10000";
 const SPECS_CACHE_TTL = 30 * 60 * 1000;
 const ACCOUNT_INFO_CACHE_TTL = 5 * 60 * 1000;
+const COUNTRY_BLOCK_MAX_RETRIES = 10;
 const BYBIT_MARGIN_MODE = {
   isolated: {
     account: "ISOLATED_MARGIN",
@@ -202,9 +208,7 @@ export class BybitExchange implements ExchangeClient {
 
   private toSymbol(symbol: string): string {
     const normalized = symbol.replace(/[-_/]/g, "").toUpperCase();
-    return normalized.endsWith("SWAP")
-      ? normalized.slice(0, -4)
-      : normalized;
+    return normalized.endsWith("SWAP") ? normalized.slice(0, -4) : normalized;
   }
 
   private parseNumber(value: unknown, fallback: number = 0): number {
@@ -283,19 +287,52 @@ export class BybitExchange implements ExchangeClient {
     );
   }
 
+  private isCountryBlockedError(error: unknown): boolean {
+    if (!axios.isAxiosError(error)) return false;
+    const status = error.response?.status;
+    const dataText = JSON.stringify(error.response?.data || "").toLowerCase();
+    return (
+      status === 403 &&
+      dataText.includes("cloudfront") &&
+      dataText.includes("block access from your country")
+    );
+  }
+
   private async publicRequest<T>(
     path: string,
     params: Record<string, string | number | boolean | undefined> = {},
   ): Promise<T> {
-    try {
-      const response = await this.client.get<BybitResponse<T>>(path, { params });
-      if (response.data.retCode !== 0) {
-        throw new Error(response.data.retMsg || "Unknown Bybit error");
+    for (let attempt = 1; attempt <= COUNTRY_BLOCK_MAX_RETRIES; attempt++) {
+      try {
+        const response = await this.client.get<BybitResponse<T>>(path, {
+          params,
+        });
+        if (response.data.retCode !== 0) {
+          throw new Error(response.data.retMsg || "Unknown Bybit error");
+        }
+        await markCurrentProxySuccessful();
+        const successMeta = await getCurrentProxyMeta();
+        console.info(
+          `[Bybit] Proxy success GET ${path} via ip=${successMeta?.ip || "unknown"} country=${successMeta?.countryCode || "unknown"} city=${successMeta?.city || "unknown"} attempt=${attempt}/${COUNTRY_BLOCK_MAX_RETRIES}`,
+        );
+        return response.data.result;
+      } catch (error) {
+        const shouldRetry =
+          this.isCountryBlockedError(error) &&
+          attempt < COUNTRY_BLOCK_MAX_RETRIES;
+        if (shouldRetry) {
+          const meta = await getCurrentProxyMeta();
+          await markCurrentProxyCountryBlocked();
+          console.warn(
+            `[Bybit] Country block detected for GET ${path}. blockedIp=${meta?.ip || "unknown"} blockedCountry=${meta?.countryCode || "unknown"} blockedCity=${meta?.city || "unknown"}. Retrying with next proxy country/IP (${attempt}/${COUNTRY_BLOCK_MAX_RETRIES - 1})`,
+          );
+          continue;
+        }
+        throw this.normalizeError(error, `GET ${path}`, params);
       }
-      return response.data.result;
-    } catch (error) {
-      throw this.normalizeError(error, `GET ${path}`, params);
     }
+
+    throw new Error(`[Bybit] GET ${path} failed after retry attempts`);
   }
 
   private async signedRequest<T>(
@@ -303,44 +340,67 @@ export class BybitExchange implements ExchangeClient {
     path: string,
     payload: Record<string, string | number | boolean | undefined> = {},
   ): Promise<T> {
-    const timestamp = String(Date.now());
+    for (let attempt = 1; attempt <= COUNTRY_BLOCK_MAX_RETRIES; attempt++) {
+      const timestamp = String(Date.now());
 
-    try {
-      if (method === "GET") {
-        const query = this.buildQueryString(payload);
-        const response = await this.client.get<BybitResponse<T>>(
-          query ? `${path}?${query}` : path,
-          {
-            headers: this.buildSignedHeaders(timestamp, query),
-          },
+      try {
+        if (method === "GET") {
+          const query = this.buildQueryString(payload);
+          const response = await this.client.get<BybitResponse<T>>(
+            query ? `${path}?${query}` : path,
+            {
+              headers: this.buildSignedHeaders(timestamp, query),
+            },
+          );
+          if (response.data.retCode !== 0) {
+            throw new Error(response.data.retMsg || "Unknown Bybit error");
+          }
+          await markCurrentProxySuccessful();
+          const successMeta = await getCurrentProxyMeta();
+          console.info(
+            `[Bybit] Proxy success ${method} ${path} via ip=${successMeta?.ip || "unknown"} country=${successMeta?.countryCode || "unknown"} city=${successMeta?.city || "unknown"} attempt=${attempt}/${COUNTRY_BLOCK_MAX_RETRIES}`,
+          );
+          return response.data.result;
+        }
+
+        const body = Object.fromEntries(
+          Object.entries(payload).filter(
+            ([, value]) => value !== undefined && value !== null,
+          ),
         );
+        const serializedBody = JSON.stringify(body);
+        const response = await this.client.post<BybitResponse<T>>(path, body, {
+          headers: this.buildSignedHeaders(timestamp, serializedBody),
+        });
         if (response.data.retCode !== 0) {
           throw new Error(response.data.retMsg || "Unknown Bybit error");
         }
+        await markCurrentProxySuccessful();
+        const successMeta = await getCurrentProxyMeta();
+        console.info(
+          `[Bybit] Proxy success ${method} ${path} via ip=${successMeta?.ip || "unknown"} country=${successMeta?.countryCode || "unknown"} city=${successMeta?.city || "unknown"} attempt=${attempt}/${COUNTRY_BLOCK_MAX_RETRIES}`,
+        );
         return response.data.result;
+      } catch (error) {
+        const shouldRetry =
+          this.isCountryBlockedError(error) &&
+          attempt < COUNTRY_BLOCK_MAX_RETRIES;
+        if (shouldRetry) {
+          const meta = await getCurrentProxyMeta();
+          await markCurrentProxyCountryBlocked();
+          console.warn(
+            `[Bybit] Country block detected for ${method} ${path}. blockedIp=${meta?.ip || "unknown"} blockedCountry=${meta?.countryCode || "unknown"} blockedCity=${meta?.city || "unknown"}. Retrying with next proxy country/IP (${attempt}/${COUNTRY_BLOCK_MAX_RETRIES - 1})`,
+          );
+          continue;
+        }
+        throw this.normalizeError(error, `${method} ${path}`, payload);
       }
-
-      const body = Object.fromEntries(
-        Object.entries(payload).filter(
-          ([, value]) => value !== undefined && value !== null,
-        ),
-      );
-      const serializedBody = JSON.stringify(body);
-      const response = await this.client.post<BybitResponse<T>>(path, body, {
-        headers: this.buildSignedHeaders(timestamp, serializedBody),
-      });
-      if (response.data.retCode !== 0) {
-        throw new Error(response.data.retMsg || "Unknown Bybit error");
-      }
-      return response.data.result;
-    } catch (error) {
-      throw this.normalizeError(error, `${method} ${path}`, payload);
     }
+
+    throw new Error(`[Bybit] ${method} ${path} failed after retry attempts`);
   }
 
-  private async fetchPositions(
-    symbol?: string,
-  ): Promise<BybitPositionRow[]> {
+  private async fetchPositions(symbol?: string): Promise<BybitPositionRow[]> {
     const rows: BybitPositionRow[] = [];
     let cursor: string | undefined;
 
@@ -374,10 +434,7 @@ export class BybitExchange implements ExchangeClient {
       "GET",
       "/v5/account/info",
     );
-    const unifiedMarginStatus = this.parseNumber(
-      result.unifiedMarginStatus,
-      0,
-    );
+    const unifiedMarginStatus = this.parseNumber(result.unifiedMarginStatus, 0);
 
     this.accountInfoCache = {
       unifiedMarginStatus,
@@ -440,8 +497,7 @@ export class BybitExchange implements ExchangeClient {
     }
 
     const explicit = positions.find(
-      (row) =>
-        row.positionIdx === (desiredPositionSide === "Buy" ? 1 : 2),
+      (row) => row.positionIdx === (desiredPositionSide === "Buy" ? 1 : 2),
     );
     return explicit || positions[0];
   }
@@ -457,7 +513,9 @@ export class BybitExchange implements ExchangeClient {
     return "conditional";
   }
 
-  private parseAlgoTypeFromOrder(row: BybitOrderRow): "tp" | "sl" | "conditional" {
+  private parseAlgoTypeFromOrder(
+    row: BybitOrderRow,
+  ): "tp" | "sl" | "conditional" {
     const linkId = String(row.orderLinkId || "").toLowerCase();
     if (linkId.startsWith("ct_tp_")) return "tp";
     if (linkId.startsWith("ct_sl_")) return "sl";
@@ -481,35 +539,27 @@ export class BybitExchange implements ExchangeClient {
     symbol: string,
     positionIdx: number,
   ): Promise<void> {
-    await this.signedRequest(
-      "POST",
-      "/v5/position/trading-stop",
-      {
-        category: BYBIT_LINEAR_CATEGORY,
-        symbol: this.toSymbol(symbol),
-        positionIdx,
-        tpslMode: "Full",
-        takeProfit: "0",
-        stopLoss: "0",
-      },
-    );
+    await this.signedRequest("POST", "/v5/position/trading-stop", {
+      category: BYBIT_LINEAR_CATEGORY,
+      symbol: this.toSymbol(symbol),
+      positionIdx,
+      tpslMode: "Full",
+      takeProfit: "0",
+      stopLoss: "0",
+    });
   }
 
   async clearPositionStopLoss(
     symbol: string,
     positionIdx: number,
   ): Promise<void> {
-    await this.signedRequest(
-      "POST",
-      "/v5/position/trading-stop",
-      {
-        category: BYBIT_LINEAR_CATEGORY,
-        symbol: this.toSymbol(symbol),
-        positionIdx,
-        tpslMode: "Full",
-        stopLoss: "0",
-      },
-    );
+    await this.signedRequest("POST", "/v5/position/trading-stop", {
+      category: BYBIT_LINEAR_CATEGORY,
+      symbol: this.toSymbol(symbol),
+      positionIdx,
+      tpslMode: "Full",
+      stopLoss: "0",
+    });
   }
 
   private isIgnorableMarginModeError(message: string): boolean {
@@ -532,13 +582,9 @@ export class BybitExchange implements ExchangeClient {
     marginType: "isolated" | "cross",
   ): Promise<void> {
     try {
-      await this.signedRequest(
-        "POST",
-        "/v5/account/set-margin-mode",
-        {
-          setMarginMode: BYBIT_MARGIN_MODE[marginType].account,
-        },
-      );
+      await this.signedRequest("POST", "/v5/account/set-margin-mode", {
+        setMarginMode: BYBIT_MARGIN_MODE[marginType].account,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (this.isIgnorableMarginModeError(message)) {
@@ -554,17 +600,13 @@ export class BybitExchange implements ExchangeClient {
     marginType: "isolated" | "cross",
   ): Promise<void> {
     try {
-      await this.signedRequest(
-        "POST",
-        "/v5/position/switch-isolated",
-        {
-          category: BYBIT_LINEAR_CATEGORY,
-          symbol,
-          tradeMode: BYBIT_MARGIN_MODE[marginType].tradeMode,
-          buyLeverage: String(leverage),
-          sellLeverage: String(leverage),
-        },
-      );
+      await this.signedRequest("POST", "/v5/position/switch-isolated", {
+        category: BYBIT_LINEAR_CATEGORY,
+        symbol,
+        tradeMode: BYBIT_MARGIN_MODE[marginType].tradeMode,
+        buyLeverage: String(leverage),
+        sellLeverage: String(leverage),
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (this.isIgnorableMarginModeError(message)) {
@@ -821,9 +863,7 @@ export class BybitExchange implements ExchangeClient {
       orderId,
       price:
         orderParams.price ||
-        (orderParams.type === "MARKET"
-          ? await this.getTickerPrice(symbol)
-          : 0),
+        (orderParams.type === "MARKET" ? await this.getTickerPrice(symbol) : 0),
       quantity: qty,
       status: "submitted",
       raw: result,
@@ -868,20 +908,16 @@ export class BybitExchange implements ExchangeClient {
 
       if (closeQty <= 0) continue;
 
-      await this.signedRequest(
-        "POST",
-        "/v5/order/create",
-        {
-          category: BYBIT_LINEAR_CATEGORY,
-          symbol: normalized,
-          side: row.side === "Buy" ? "Sell" : "Buy",
-          orderType: "Market",
-          qty: this.formatNum(closeQty, specs.qtyDecimals),
-          reduceOnly: true,
-          closeOnTrigger: true,
-          positionIdx: row.positionIdx ?? 0,
-        },
-      );
+      await this.signedRequest("POST", "/v5/order/create", {
+        category: BYBIT_LINEAR_CATEGORY,
+        symbol: normalized,
+        side: row.side === "Buy" ? "Sell" : "Buy",
+        orderType: "Market",
+        qty: this.formatNum(closeQty, specs.qtyDecimals),
+        reduceOnly: true,
+        closeOnTrigger: true,
+        positionIdx: row.positionIdx ?? 0,
+      });
 
       if (remaining !== null) {
         remaining = Math.max(0, remaining - closeQty);
@@ -933,21 +969,13 @@ export class BybitExchange implements ExchangeClient {
     const requestedLeverage = Math.max(1, Math.floor(leverage));
 
     try {
-      await this.ensureMarginMode(
-        normalized,
-        requestedLeverage,
-        marginType,
-      );
-      await this.signedRequest(
-        "POST",
-        "/v5/position/set-leverage",
-        {
-          category: BYBIT_LINEAR_CATEGORY,
-          symbol: normalized,
-          buyLeverage: String(requestedLeverage),
-          sellLeverage: String(requestedLeverage),
-        },
-      );
+      await this.ensureMarginMode(normalized, requestedLeverage, marginType);
+      await this.signedRequest("POST", "/v5/position/set-leverage", {
+        category: BYBIT_LINEAR_CATEGORY,
+        symbol: normalized,
+        buyLeverage: String(requestedLeverage),
+        sellLeverage: String(requestedLeverage),
+      });
       return requestedLeverage;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1009,15 +1037,11 @@ export class BybitExchange implements ExchangeClient {
 
   async cancelOrder(orderId: string, symbol: string): Promise<boolean> {
     try {
-      await this.signedRequest(
-        "POST",
-        "/v5/order/cancel",
-        {
-          category: BYBIT_LINEAR_CATEGORY,
-          symbol: this.toSymbol(symbol),
-          orderId,
-        },
-      );
+      await this.signedRequest("POST", "/v5/order/cancel", {
+        category: BYBIT_LINEAR_CATEGORY,
+        symbol: this.toSymbol(symbol),
+        orderId,
+      });
       return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1049,7 +1073,10 @@ export class BybitExchange implements ExchangeClient {
     }));
 
     for (const position of positionRows) {
-      if (!position.symbol || (position.side !== "Buy" && position.side !== "Sell")) {
+      if (
+        !position.symbol ||
+        (position.side !== "Buy" && position.side !== "Sell")
+      ) {
         continue;
       }
       const qty = this.parseNumber(position.size);
@@ -1215,7 +1242,10 @@ export class BybitExchange implements ExchangeClient {
     }
 
     const lotSz = this.parseNumber(instrument.lotSizeFilter?.qtyStep, 1);
-    const minSz = this.parseNumber(instrument.lotSizeFilter?.minOrderQty, lotSz);
+    const minSz = this.parseNumber(
+      instrument.lotSizeFilter?.minOrderQty,
+      lotSz,
+    );
     const minNotional = this.parseNumber(
       instrument.lotSizeFilter?.minNotionalValue,
       0,
@@ -1226,9 +1256,7 @@ export class BybitExchange implements ExchangeClient {
       lotSz,
       minSz,
       ...(minNotional > 0 ? { minNotional } : {}),
-      ctValCcy:
-        instrument.baseCoin ||
-        normalized.replace(/USDT|USDC|USD$/, ""),
+      ctValCcy: instrument.baseCoin || normalized.replace(/USDT|USDC|USD$/, ""),
       tickSz,
       qtyDecimals: this.countDecimals(lotSz),
       priceDecimals: this.countDecimals(tickSz),

@@ -45,6 +45,18 @@ export interface ProxyInfoResult {
   validCount?: number;
   error?: string;
   providerName?: string;
+  telemetry?: {
+    snapshotUpdatedAt?: string;
+    previousIps?: string[];
+    currentIps?: string[];
+    addedIps?: string[];
+    removedIps?: string[];
+  };
+  webshareApiKeys?: {
+    total: number;
+    activeIndex: number;
+    activeKeyMasked: string | null;
+  };
 }
 
 /** Interface that all proxy providers must implement */
