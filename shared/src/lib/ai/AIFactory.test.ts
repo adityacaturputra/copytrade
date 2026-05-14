@@ -185,3 +185,115 @@ test("AIFactory fallback analyzer tries next provider on parseSignal failure", a
   warnSpy.mockRestore();
   logSpy.mockRestore();
 });
+
+test("Fallback parseSignal continues until 4th provider (error + null + success)", async () => {
+  process.env.AI_PROVIDER = "patungin";
+  process.env.AI_PROVIDER_FALLBACK = "glm,konektika,kimi";
+
+  const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+  const analyzer = AIFactory.getAnalyzer() as {
+    parseSignal(
+      message: string,
+    ): Promise<{ action: string; symbol: string } | null>;
+    providerChain: string;
+  };
+
+  assert.equal(analyzer.providerChain, "patungin → glm → konektika → kimi");
+
+  const codex = (
+    analyzer as unknown as {
+      analyzers: Array<{ analyzer: { parseSignal: ReturnType<typeof vi.fn> } }>;
+    }
+  ).analyzers[0].analyzer;
+  const glm = (
+    analyzer as unknown as {
+      analyzers: Array<{ analyzer: { parseSignal: ReturnType<typeof vi.fn> } }>;
+    }
+  ).analyzers[1].analyzer;
+  const konektika = (
+    analyzer as unknown as {
+      analyzers: Array<{ analyzer: { parseSignal: ReturnType<typeof vi.fn> } }>;
+    }
+  ).analyzers[2].analyzer;
+  const kimi = (
+    analyzer as unknown as {
+      analyzers: Array<{ analyzer: { parseSignal: ReturnType<typeof vi.fn> } }>;
+    }
+  ).analyzers[3].analyzer;
+
+  codex.parseSignal.mockRejectedValue(new Error("patungin upstream error"));
+  glm.parseSignal.mockResolvedValue(null);
+  konektika.parseSignal.mockRejectedValue(new Error("konektika temp error"));
+  kimi.parseSignal.mockResolvedValue({ action: "BUY", symbol: "BTCUSDT" });
+
+  const result = await analyzer.parseSignal("buy btc now");
+  assert.deepEqual(result, { action: "BUY", symbol: "BTCUSDT" });
+
+  assert.equal(codex.parseSignal.mock.calls.length, 1);
+  assert.equal(glm.parseSignal.mock.calls.length, 1);
+  assert.equal(konektika.parseSignal.mock.calls.length, 1);
+  assert.equal(kimi.parseSignal.mock.calls.length, 1);
+
+  warnSpy.mockRestore();
+  logSpy.mockRestore();
+});
+
+test("Fallback parseBulkSignals continues until later provider and returns actionable result", async () => {
+  process.env.AI_PROVIDER = "patungin";
+  process.env.AI_PROVIDER_FALLBACK = "glm,konektika,kimi";
+
+  const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+  const analyzer = AIFactory.getAnalyzer() as {
+    parseBulkSignals(
+      messages: Array<{ messageId: string; content: string }>,
+    ): Promise<
+      Array<{
+        messageId: string;
+        signal: { action: string; symbol: string } | null;
+      }>
+    >;
+    providerChain: string;
+  };
+
+  assert.equal(analyzer.providerChain, "patungin → glm → konektika → kimi");
+
+  const analyzers = (
+    analyzer as unknown as {
+      analyzers: Array<{
+        analyzer: { parseBulkSignals: ReturnType<typeof vi.fn> };
+      }>;
+    }
+  ).analyzers;
+
+  analyzers[0].analyzer.parseBulkSignals.mockRejectedValue(
+    new Error("patungin failed"),
+  );
+  analyzers[1].analyzer.parseBulkSignals.mockResolvedValue([
+    { messageId: "m1", signal: null },
+  ]);
+  analyzers[2].analyzer.parseBulkSignals.mockResolvedValue([
+    { messageId: "m1", signal: { action: "SELL", symbol: "ETHUSDT" } },
+  ]);
+
+  const result = await analyzer.parseBulkSignals([
+    { messageId: "m1", content: "sell eth" },
+  ]);
+
+  assert.equal(result.length, 1);
+  assert.deepEqual(result[0], {
+    messageId: "m1",
+    signal: { action: "SELL", symbol: "ETHUSDT" },
+  });
+
+  assert.equal(analyzers[0].analyzer.parseBulkSignals.mock.calls.length, 1);
+  assert.equal(analyzers[1].analyzer.parseBulkSignals.mock.calls.length, 1);
+  assert.equal(analyzers[2].analyzer.parseBulkSignals.mock.calls.length, 1);
+  assert.equal(analyzers[3].analyzer.parseBulkSignals.mock.calls.length, 0);
+
+  warnSpy.mockRestore();
+  logSpy.mockRestore();
+});

@@ -1,4 +1,15 @@
 import OpenAI from "openai";
+import { buildSystemPrompt } from "./prompt";
+import { resolveProviderConfig, buildAgentProviderChain } from "./providers";
+import { 
+  cloneMessages, 
+  parseToolArgs, 
+  buildToolResultMessage, 
+  buildAssistantToolCallMessage,
+  type AgentChatMessage,
+  type PendingToolCall
+} from "./message-helpers";
+
 import { getCodexPatunginConfig } from "@copytrade/shared/lib/ai/CodexPatunginConfig";
 import {
   Account,
@@ -42,14 +53,6 @@ type ConversationHistoryMessage = {
   role: "user" | "assistant";
   content: string;
 };
-
-type PendingToolCall = {
-  id: string;
-  name: string;
-  arguments: string;
-};
-
-type AgentChatMessage = OpenAI.ChatCompletionMessageParam;
 
 export interface AgentStep {
   type: "thinking" | "tool_call" | "tool_result" | "response";
@@ -98,52 +101,6 @@ interface AgentRunInput {
   actionPassword?: string;
 }
 
-const BASE_SYSTEM_PROMPT = `You are an intelligent trading assistant for a crypto copy-trading system. You have access to tools that let you:
-
-📊 **Account & Market**: Check balances, get prices, view positions, get kline/candlestick data
-📈 **Trading**: Place orders (market/limit), close positions, set leverage, set TP/SL
-🔧 **Order Management**: Get/cancel open orders, get/cancel algo orders (TP/SL), modify TP/SL, view order history
-🛡️ **Protection Management**: Inspect live TP/SL protection, replace TP ladders, move/clear SL, clean orphan protection orders
-📝 **Drafts**: Review, accept, or reject pending signal drafts
-💬 **Signal Sources**: Inspect configured source accounts, check source health, fetch source messages, trigger manual signal checks
-🧠 **Operator Tools**: Analyze one tracked position with AI context, manage a tracked position, review a signal thread, inspect process logs
-🗄️ **Database**: View logs, signal history, position history
-⚙️ **Settings**: Get/set trading mode, risk settings, calculate risk
-
-**CRITICAL — Exact Enum Values for Tool Parameters:**
-- Order side: MUST be exactly "BUY" or "SELL" (NOT "LONG" or "SHORT"). "BUY" opens long / closes short. "SELL" opens short / closes long.
-- Order type: MUST be exactly "MARKET" or "LIMIT"
-- Trading mode: MUST be exactly "auto" or "manual"
-- When closing a position: use the OPPOSITE side (SELL for LONG positions, BUY for SHORT positions)
-
-**Guidelines:**
-- Always gather context FIRST before making trading decisions (check positions, account balance, current price)
-- If there are multiple trading accounts, call get_trading_accounts first and then pass accountId to exchange tools
-- If there are multiple signal source accounts, call get_signal_sources first and then pass accountId to source tools
-- Exchange tools are selected per account via that account's tradingPlatform using ExchangeFactory
-- Source tools are selected per account via that account's sourceType using SourceFactory
-- Be helpful and explain what you're doing step by step
-- When showing data, format it in a human-readable way (tables, summaries)
-- High-risk and mutating tools are enforced server-side. If a mutating action needs confirmation, wait for approval flow rather than claiming it is already executed.
-- Prefer high-level tools first when they match the task:
-  - use analyze_position_context for "what should I do with this position?"
-  - use get_position_protection to inspect live TP/SL and DB mismatches
-  - use manage_position for close / partial close / move SL / breakeven / trailing stop / move TP workflows
-  - use adjust_position_protection when you need to rewrite the live TP/SL ladder or clear stale protection
-  - use cleanup_orphan_protection_orders to remove stale TP/SL orders that no longer belong to active or pending positions
-  - use sync_position_with_exchange when the user wants to reconcile DB state against live exchange state
-  - use review_signal_thread for reconstructing a signal/update thread
-  - use get_process_logs for debugging one processId
-- If a tool returns an error, explain it clearly and suggest next steps
-- Always show prices with appropriate decimal places (round to 2 decimals, e.g., 62333.34 not 62333.333333)
-- When calculating or suggesting SL/TP prices, ALWAYS round to 2 decimal places
-
-The exchange is determined by the selected account's tradingPlatform, not by a global env variable. Symbols must match that exchange format (e.g., BTC-USDT-SWAP for OKX, BTCUSDT for Binance/Bybit/MEXC, XAUUSD or EURUSD for MetaTrader/broker symbols).`;
-
-function cloneMessages(messages: AgentChatMessage[]): AgentChatMessage[] {
-  return JSON.parse(JSON.stringify(messages)) as AgentChatMessage[];
-}
-
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -161,140 +118,6 @@ function isAbortError(error: unknown): boolean {
     message.includes("aborterror") ||
     message.includes("request was aborted")
   );
-}
-
-async function buildSystemPrompt(role: AgentRole): Promise<string> {
-  try {
-    await connectDB();
-
-    const sourceAccounts = (await Account.find({
-      isActive: true,
-      sourceType: { $exists: true, $ne: null },
-    })
-      .sort({ createdAt: 1 })
-      .lean()
-      .exec()) as SourcePromptAccount[];
-
-    const sourceLines = sourceAccounts
-      .filter((account) => typeof account.sourceType === "string")
-      .map((account) => {
-        const channels = Array.isArray(account.channelIds)
-          ? account.channelIds.length
-          : 0;
-        return `- ${account.name} (${account.sourceType}, accountId=${String(account._id)}, channels=${channels})`;
-      });
-
-    const roleSection = `\n\n**Current Operator Role:** ${role}\n- viewer: read-only tools only\n- operator: mutating tools allowed, but server approval is required\n- admin: full access, but mutating tools still require server approval when enabled`;
-
-    const sourceSection =
-      sourceLines.length > 0
-        ? `\n\n**Configured Signal Sources Right Now:**\n${sourceLines.join("\n")}\n\n**Dynamic Source Example:**\n- "Check inputs from my configured sources" → get_signal_sources → check_source_health → fetch_source_messages → summarize by account name`
-        : `\n\n**Configured Signal Sources Right Now:**\n- No active source accounts found in the database yet.\n\n**Dynamic Source Example:**\n- "Check inputs from my configured sources" → get_signal_sources → check_source_health → fetch_source_messages → summarize`;
-
-    return `${BASE_SYSTEM_PROMPT}${roleSection}${sourceSection}`;
-  } catch {
-    return `${BASE_SYSTEM_PROMPT}\n\n**Current Operator Role:** ${role}`;
-  }
-}
-
-function resolveProviderConfig(provider?: string) {
-  const codexPatunginCfg = getCodexPatunginConfig();
-  const selectedProvider = (
-    provider ||
-    process.env.AI_PROVIDER ||
-    (codexPatunginCfg.apiKey ? "patungin" : "glm")
-  )
-    .toLowerCase()
-    .trim();
-
-  const normalized =
-    selectedProvider === "codex" ? "patungin" : selectedProvider;
-
-  const rawApiKey =
-    normalized === "kimi"
-      ? process.env.ANTHROPIC_API_KEY
-      : normalized === "openai"
-        ? process.env.OPENAI_API_KEY
-        : normalized === "patungin"
-          ? codexPatunginCfg.apiKey
-          : normalized === "konektika"
-            ? process.env.KONEKTIKA_API_KEY
-            : process.env.GLM_API_KEY;
-
-  const baseURL =
-    normalized === "kimi"
-      ? process.env.ANTHROPIC_BASE_URL || "https://api.kimi.com/coding/"
-      : normalized === "openai"
-        ? process.env.OPENAI_BASE_URL || "https://api.openai.com/v1"
-        : normalized === "patungin"
-          ? codexPatunginCfg.baseURL
-          : normalized === "konektika"
-            ? process.env.KONEKTIKA_BASE_URL ||
-              "https://konektikacloud.web.id/v1"
-            : process.env.GLM_BASE_URL || "https://api.z.ai/api/coding/paas/v4";
-
-  const model =
-    normalized === "kimi"
-      ? process.env.ANTHROPIC_MODEL || "kimi-latest"
-      : normalized === "openai"
-        ? process.env.OPENAI_MODEL || "gpt-4o-mini"
-        : normalized === "patungin"
-          ? codexPatunginCfg.model
-          : normalized === "konektika"
-            ? process.env.KONEKTIKA_MODEL || "konektika-pro"
-            : process.env.GLM_MODEL || "glm-4-flash";
-
-  const providerHeaders =
-    normalized === "patungin" ? codexPatunginCfg.headers : undefined;
-
-  const apiKeys = (rawApiKey || "")
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean);
-
-  return {
-    selectedProvider: normalized,
-    baseURL,
-    model,
-    providerHeaders,
-    apiKeys,
-    contextLimits: getContextLimits(normalized),
-  };
-}
-
-function parseAgentFallbackProviders(primary: string): string[] {
-  const raw = process.env.AI_PROVIDER_FALLBACK;
-  if (!raw || !raw.trim()) return [];
-  const valid = new Set([
-    "glm",
-    "kimi",
-    "openai",
-    "codex",
-    "patungin",
-    "konektika",
-  ]);
-  const normalizedPrimary = primary === "codex" ? "patungin" : primary;
-  return raw
-    .split(",")
-    .map((s) => s.trim().toLowerCase())
-    .filter((p) => valid.has(p))
-    .map((p) => (p === "codex" ? "patungin" : p))
-    .filter((p) => p !== normalizedPrimary);
-}
-
-function buildAgentProviderChain(provider?: string): string[] {
-  const config = resolveProviderConfig(provider);
-  const primary = config.selectedProvider;
-  const fallbacks = parseAgentFallbackProviders(primary);
-  const seen = new Set<string>([primary]);
-  const chain = [primary];
-  for (const fb of fallbacks) {
-    if (!seen.has(fb)) {
-      seen.add(fb);
-      chain.push(fb);
-    }
-  }
-  return chain;
 }
 
 async function* streamAssistantResponse(input: {
@@ -432,46 +255,6 @@ async function* streamAssistantResponse(input: {
   throw new Error(
     `All AI providers failed for agent loop. Last error: ${lastError?.message || "Unknown error"}`,
   );
-}
-
-function parseToolArgs(input: string): Record<string, unknown> {
-  if (!input || input.trim().length === 0) {
-    return {};
-  }
-
-  const parsed = JSON.parse(input);
-  return parsed && typeof parsed === "object"
-    ? (parsed as Record<string, unknown>)
-    : {};
-}
-
-function buildToolResultMessage(
-  toolCallId: string,
-  content: string,
-): AgentChatMessage {
-  return {
-    role: "tool",
-    tool_call_id: toolCallId,
-    content,
-  } as AgentChatMessage;
-}
-
-function buildAssistantToolCallMessage(
-  content: string,
-  toolCalls: PendingToolCall[],
-): AgentChatMessage {
-  return {
-    role: "assistant",
-    content,
-    tool_calls: toolCalls.map((toolCall) => ({
-      id: toolCall.id,
-      type: "function",
-      function: {
-        name: toolCall.name,
-        arguments: toolCall.arguments,
-      },
-    })),
-  } as AgentChatMessage;
 }
 
 function getApprovalRequest(
