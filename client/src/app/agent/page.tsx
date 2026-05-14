@@ -7,49 +7,7 @@ import Link from "next/link";
 import { getStoredActionPassword } from "@/lib/action-auth";
 import { useActionAuth } from "@/lib/action-auth-context";
 
-interface AgentStep {
-  type: "thinking" | "tool_call" | "tool_result" | "response";
-  content: string;
-  toolName?: string;
-  toolArgs?: Record<string, unknown>;
-  duration?: number;
-}
-
-interface AgentApproval {
-  sessionId: string;
-  processId: string;
-  toolCallId: string;
-  toolName: string;
-  toolArgs: Record<string, unknown>;
-  role: "viewer" | "operator" | "admin";
-  minimumRole: "viewer" | "operator" | "admin";
-}
-
-interface ChatMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  steps: AgentStep[];
-  timestamp: Date;
-  streaming?: boolean;
-  approval?: AgentApproval | null;
-  processId?: string | null;
-}
-
-type AgentRole = "viewer" | "operator" | "admin";
-
-interface HistoryItem {
-  id: string;
-  processId: string;
-  sessionId: string;
-  role: string;
-  status: string;
-  userMessage: string;
-  assistantResponse: string | null;
-  createdAt: string;
-  toolCount: number;
-}
-
+import { AgentStep, AgentApproval, ChatMessage, AgentRole, HistoryItem } from "./types";
 const API_BASE = (
   process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3001"
 ).replace(/\/+$/, "");
@@ -70,6 +28,8 @@ function createSessionId() {
   return `agentsess_${Date.now()}`;
 }
 
+import { ApprovalCard } from "./components/ApprovalCard";
+import { StepCard } from "./components/StepCard";
 export default function AgentChatPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -1017,102 +977,5 @@ export default function AgentChatPage() {
   );
 }
 
-function ApprovalCard({
-  approval,
-  disabled,
-  onApprove,
-  onReject,
-}: {
-  approval: AgentApproval;
-  disabled: boolean;
-  onApprove: () => void;
-  onReject: () => void;
-}) {
-  return (
-    <div className="mt-3 rounded-xl border border-amber-700/50 bg-amber-900/20 p-4">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <p className="text-sm font-semibold text-amber-200">
-            Approval required for `{approval.toolName}`
-          </p>
-          <p className="mt-1 text-xs text-amber-100/80">
-            Current role: {approval.role} • minimum role: {approval.minimumRole}
-          </p>
-        </div>
-        <span className="text-xs text-amber-100/70">{approval.processId}</span>
-      </div>
-      <pre className="mt-3 max-h-48 overflow-y-auto whitespace-pre-wrap rounded-lg bg-slate-950/40 p-3 text-xs text-slate-300">
-        {JSON.stringify(approval.toolArgs, null, 2)}
-      </pre>
-      <div className="mt-3 flex gap-2">
-        <button
-          onClick={onApprove}
-          disabled={disabled}
-          className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
-        >
-          Approve
-        </button>
-        <button
-          onClick={onReject}
-          disabled={disabled}
-          className="rounded-lg bg-red-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
-        >
-          Reject
-        </button>
-      </div>
-    </div>
-  );
-}
 
-function StepCard({ step }: { step: AgentStep }) {
-  if (step.type === "tool_call") {
-    return (
-      <div className="rounded-lg border border-slate-700/50 bg-slate-900/50 p-2.5">
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-mono text-primary-400">
-            {step.toolName}
-          </span>
-          {step.toolArgs ? (
-            <span className="truncate text-xs text-slate-500">
-              {Object.entries(step.toolArgs)
-                .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
-                .join(", ")}
-            </span>
-          ) : null}
-          {step.duration ? (
-            <span className="ml-auto text-xs text-slate-600">
-              {step.duration}ms
-            </span>
-          ) : null}
-        </div>
-      </div>
-    );
-  }
 
-  const isError = step.content.includes('"error"');
-  return (
-    <div
-      className={`rounded-lg p-2.5 text-xs font-mono ${
-        isError
-          ? "border border-red-700/30 bg-red-900/20 text-red-300"
-          : "border border-green-700/20 bg-green-900/10 text-slate-300"
-      }`}
-    >
-      <div className="mb-1 flex items-center gap-2">
-        <span>{isError ? "❌" : "✅"}</span>
-        <span className="text-slate-500">{step.toolName} result</span>
-      </div>
-      <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap break-all">
-        {formatToolResult(step.content)}
-      </pre>
-    </div>
-  );
-}
-
-function formatToolResult(content: string): string {
-  try {
-    return JSON.stringify(JSON.parse(content), null, 2);
-  } catch {
-    return content;
-  }
-}

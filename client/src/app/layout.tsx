@@ -1,6 +1,10 @@
 import type { Metadata, Viewport } from "next";
 import { ClientProviders } from "@/lib/components/ClientProviders";
 import "./globals.css";
+import { Geist } from "next/font/google";
+import { cn } from "@/lib/utils";
+
+const geist = Geist({subsets:['latin'],variable:'--font-sans'});
 
 export const viewport: Viewport = {
   width: "device-width",
@@ -21,7 +25,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
+    <html lang="en" className={cn("font-sans", geist.variable)}>
       <body className="min-h-screen bg-dark-200 text-slate-100">
         <ClientProviders>{children}</ClientProviders>
       </body>
