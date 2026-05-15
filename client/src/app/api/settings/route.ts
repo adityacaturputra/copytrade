@@ -3,13 +3,13 @@ import {
   connectDB,
   getTradingMode,
   setTradingMode,
-} from "@copytrade/shared/lib/database";
-import { getRiskConfig, setRiskConfig } from "@copytrade/shared/lib/risk";
+} from "@copytrade/shared/lib/database/index";
+import { getRiskConfig, setRiskConfig } from "@copytrade/shared/lib/risk/index";
 import {
   getSignalConfig,
   setSignalConfig,
   SignalConfigType,
-} from "@copytrade/shared/lib/signal-config";
+} from "@copytrade/shared/lib/signal/config";
 import { verifyActionAuth } from "../_lib/action-auth";
 
 export const dynamic = "force-dynamic";

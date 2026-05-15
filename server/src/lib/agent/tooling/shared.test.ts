@@ -14,7 +14,7 @@ const sharedMocks = vi.hoisted(() => ({
   getProvider: vi.fn(),
 }));
 
-vi.mock("@copytrade/shared/lib/database", () => ({
+vi.mock("@copytrade/shared/lib/database/index", () => ({
   connectDB: sharedMocks.connectDB,
   Account: {
     find: sharedMocks.accountFind,

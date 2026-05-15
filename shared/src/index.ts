@@ -1,1 +1,1 @@
-export * from "./lib/ai/AIFactory";
+export * from "./lib/ai/core/factory";

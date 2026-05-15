@@ -1,10 +1,10 @@
-import { BinanceExchange } from "./BinanceExchange";
-import { BybitExchange } from "./BybitExchange";
+import { BinanceExchange } from "./binance/index";
+import { BybitExchange } from "./bybit/index";
 import { type ExchangeCredentials } from "./exchange-credentials";
-import { MetaTraderExchange } from "./MetaTraderExchange";
-import { MexcExchange } from "./MexcExchange";
-import { OkxExchange } from "./OkxExchange";
-import { PaperExchange } from "./PaperExchange";
+import { MetaTraderExchange } from "./metatrader/index";
+import { MexcExchange } from "./mexc/index";
+import { OkxExchange } from "./okx/index";
+import { PaperExchange } from "./paper/index";
 import {
   type ExchangeCredentialField,
   type ExchangeProvider,

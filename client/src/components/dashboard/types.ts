@@ -1,5 +1,5 @@
-import { calculateRisk } from "@copytrade/shared/lib/risk-calc";
-import { autoCalculateTPFromRR } from "@copytrade/shared/lib/executor-signal-utils";
+import { calculateRisk } from "@copytrade/shared/lib/risk/calc";
+import { autoCalculateTPFromRR } from "@copytrade/shared/lib/executor/utils/signal";
 
 // ==================== Types ====================
 

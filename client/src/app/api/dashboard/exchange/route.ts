@@ -5,12 +5,12 @@ import {
   getOpenPositions,
   Position,
   Account,
-} from "@copytrade/shared/lib/database";
+} from "@copytrade/shared/lib/database/index";
 import {
   ExchangeFactory,
   buildExchangeCredentials,
 } from "@copytrade/shared/lib/exchange/ExchangeFactory";
-import { createTradeLog } from "@copytrade/shared/lib/trade-log-store";
+import { createTradeLog } from "@copytrade/shared/lib/trade-log/store";
 
 export const dynamic = "force-dynamic";
 

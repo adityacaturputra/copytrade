@@ -3,7 +3,7 @@ import {
   connectDB,
   DiscordSource,
   getAllDiscordSources,
-} from "@copytrade/shared/lib/database";
+} from "@copytrade/shared/lib/database/index";
 import { checkTokenHealth } from "@/lib/discord";
 import { verifyActionAuth } from "../_lib/action-auth";
 

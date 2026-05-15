@@ -31,10 +31,10 @@ vi.mock("@copytrade/shared/lib/executor", async () => {
   };
 });
 
-vi.mock("@copytrade/shared/lib/process-log", async () => {
+vi.mock("@copytrade/shared/lib/process/log", async () => {
   const actual = await vi.importActual<
-    typeof import("@copytrade/shared/lib/process-log")
-  >("@copytrade/shared/lib/process-log");
+    typeof import("@copytrade/shared/lib/process/log")
+  >("@copytrade/shared/lib/process/log");
 
   return {
     ...actual,
@@ -43,7 +43,7 @@ vi.mock("@copytrade/shared/lib/process-log", async () => {
 });
 
 import { createApp } from "../app";
-import { DraftTrade } from "@copytrade/shared/lib/database";
+import { DraftTrade } from "@copytrade/shared/lib/database/index";
 
 describe("drafts routes integration", () => {
   const app = createApp();

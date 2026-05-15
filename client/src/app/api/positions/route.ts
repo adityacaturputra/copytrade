@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { connectDB, Position } from "@copytrade/shared/lib/database";
+import { connectDB, Position } from "@copytrade/shared/lib/database/index";
 
 export const dynamic = "force-dynamic";
 

@@ -11,7 +11,7 @@ const marketMocks = vi.hoisted(() => ({
   resolveExchangeContext: vi.fn(),
 }));
 
-vi.mock("@copytrade/shared/lib/database", () => ({
+vi.mock("@copytrade/shared/lib/database/index", () => ({
   connectDB: marketMocks.connectDB,
   getOpenPositions: marketMocks.getOpenPositions,
   Account: {

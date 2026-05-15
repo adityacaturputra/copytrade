@@ -3,12 +3,12 @@ import {
   AgentTurn,
   connectDB,
   type IAgentTurn,
-} from "@copytrade/shared/lib/database";
+} from "@copytrade/shared/lib/database/index";
 import {
   createTradeProcessId,
   logProcessStep,
   serializeProcessLogDetails,
-} from "@copytrade/shared/lib/process-log";
+} from "@copytrade/shared/lib/process/log";
 import type { AgentRole } from "./auth";
 
 function truncateText(value: string | undefined, maxLength: number = 4000) {

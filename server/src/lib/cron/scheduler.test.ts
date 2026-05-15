@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test, vi } from "vitest";
-import * as sharedCronSettings from "@copytrade/shared/lib/cron-settings";
-import type { CronJobConfig } from "@copytrade/shared/lib/cron-settings";
+import * as sharedCronSettings from "@copytrade/shared/lib/cron/settings";
+import type { CronJobConfig } from "@copytrade/shared/lib/cron/settings";
 import {
   createAppCronScheduler,
   startAppCronScheduler,

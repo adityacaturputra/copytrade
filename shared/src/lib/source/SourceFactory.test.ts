@@ -16,10 +16,10 @@ const providerMocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("./DiscordSourceProvider", () => ({
+vi.mock("./discord/index", () => ({
   DiscordSourceProvider: providerMocks.FakeDiscordSourceProvider,
 }));
-vi.mock("./TelegramSourceProvider", () => ({
+vi.mock("./telegram/index", () => ({
   TelegramSourceProvider: providerMocks.FakeTelegramSourceProvider,
 }));
 

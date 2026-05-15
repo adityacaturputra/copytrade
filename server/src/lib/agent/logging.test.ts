@@ -14,7 +14,7 @@ const loggingMocks = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("@copytrade/shared/lib/database", () => ({
+vi.mock("@copytrade/shared/lib/database/index", () => ({
   connectDB: loggingMocks.connectDB,
   AgentSession: {
     findOneAndUpdate: loggingMocks.agentSessionFindOneAndUpdate,
@@ -26,7 +26,7 @@ vi.mock("@copytrade/shared/lib/database", () => ({
   },
 }));
 
-vi.mock("@copytrade/shared/lib/process-log", () => ({
+vi.mock("@copytrade/shared/lib/process/log", () => ({
   createTradeProcessId: loggingMocks.createTradeProcessId,
   logProcessStep: loggingMocks.logProcessStep,
   serializeProcessLogDetails: loggingMocks.serializeProcessLogDetails,

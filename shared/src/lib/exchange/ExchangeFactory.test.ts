@@ -1,6 +1,6 @@
 import { test, vi } from "vitest";
 import assert from "node:assert/strict";
-import { PaperExchange } from "./PaperExchange";
+import { PaperExchange } from "./paper/index";
 import { ExchangeFactory } from "./ExchangeFactory";
 
 test("ExchangeFactory creates account-scoped and paper clients", () => {

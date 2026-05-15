@@ -1,4 +1,4 @@
-import { connectDB, Account } from "@copytrade/shared/lib/database";
+import { connectDB, Account } from "@copytrade/shared/lib/database/index";
 import type { AgentRole } from "./auth";
 
 export const BASE_SYSTEM_PROMPT = `You are an intelligent trading assistant for a crypto copy-trading system. You have access to tools that let you:

@@ -1,5 +1,5 @@
-import { calculateRisk } from "@copytrade/shared/lib/risk-calc";
-import { autoCalculateTPFromRR } from "@copytrade/shared/lib/executor-signal-utils";
+import { calculateRisk } from "@copytrade/shared/lib/risk/calc";
+import { autoCalculateTPFromRR } from "@copytrade/shared/lib/executor/utils/signal";
 import { RiskConfig } from './types';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Position, DraftTrade, formatUsd, formatCompactDateTime, getPositionSourceLabel, getPositionKey, formatPositionTakeProfitTargets, calculatePositionPnlUsd, estimatePositionMargin, formatMarginMode, resolvePositionPnlUsd, resolvePositionPnlPercent, DraftAction } from './types';

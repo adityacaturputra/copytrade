@@ -9,7 +9,7 @@ const draftsMocks = vi.hoisted(() => ({
   fetchMock: vi.fn(),
 }));
 
-vi.mock("@copytrade/shared/lib/database", () => ({
+vi.mock("@copytrade/shared/lib/database/index", () => ({
   connectDB: draftsMocks.connectDB,
   getPendingDrafts: draftsMocks.getPendingDrafts,
 }));

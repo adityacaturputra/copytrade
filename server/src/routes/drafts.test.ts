@@ -19,7 +19,7 @@ const draftRouteMocks = vi.hoisted(() => ({
   logProcessStep: vi.fn(),
 }));
 
-vi.mock("@copytrade/shared/lib/database", () => ({
+vi.mock("@copytrade/shared/lib/database/index", () => ({
   connectDB: draftRouteMocks.connectDB,
   DraftTrade: {
     find: draftRouteMocks.draftFind,
@@ -40,7 +40,7 @@ vi.mock("@copytrade/shared/lib/executor", () => ({
   resolveDraftWithExecution: draftRouteMocks.resolveDraftWithExecution,
 }));
 
-vi.mock("@copytrade/shared/lib/process-log", () => ({
+vi.mock("@copytrade/shared/lib/process/log", () => ({
   createTradeProcessId: draftRouteMocks.createTradeProcessId,
   logProcessStep: draftRouteMocks.logProcessStep,
 }));

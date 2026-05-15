@@ -39,11 +39,11 @@ vi.mock("../database", () => ({
   connectDB: proxyFactoryMocks.connectDB,
 }));
 
-vi.mock("./WebshareProvider", () => ({
+vi.mock("./webshare/index", () => ({
   WebshareProvider: proxyFactoryMocks.FakeWebshareProvider,
 }));
 
-vi.mock("./CustomProvider", () => ({
+vi.mock("./custom/index", () => ({
   CustomProvider: proxyFactoryMocks.FakeCustomProvider,
 }));
 

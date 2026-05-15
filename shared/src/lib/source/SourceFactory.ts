@@ -19,8 +19,8 @@
 
 import { SourceType } from "../enums";
 import { ISourceProvider, BaseSourceConfig } from "./types";
-import { DiscordSourceProvider } from "./DiscordSourceProvider";
-import { TelegramSourceProvider } from "./TelegramSourceProvider";
+import { DiscordSourceProvider } from "./discord/index";
+import { TelegramSourceProvider } from "./telegram/index";
 
 export type SourceProviderType = "discord" | "telegram";
 

@@ -1,5 +1,5 @@
 import { ExchangeClient } from "./types";
-import { PaperExchange } from "./PaperExchange";
+import { PaperExchange } from "./paper/index";
 import { type ExchangeProvider } from "./provider-config";
 import {
   buildExchangeCredentials,

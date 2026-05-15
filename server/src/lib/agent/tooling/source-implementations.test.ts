@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { beforeEach, test, vi } from "vitest";
-import { SourceType } from "@copytrade/shared/lib/enums";
+import { SourceType } from "@copytrade/shared/lib/enums/index";
 
 const sourceMocks = vi.hoisted(() => ({
   buildSourceSummary: vi.fn(),

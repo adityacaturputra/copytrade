@@ -15,7 +15,7 @@ const logsMocks = vi.hoisted(() => ({
   roundPrice: vi.fn(),
 }));
 
-vi.mock("@copytrade/shared/lib/database", () => ({
+vi.mock("@copytrade/shared/lib/database/index", () => ({
   connectDB: logsMocks.connectDB,
   getAllPositions: logsMocks.getAllPositions,
   getRecentLogs: logsMocks.getRecentLogs,
@@ -25,11 +25,11 @@ vi.mock("@copytrade/shared/lib/database", () => ({
   setTradingMode: logsMocks.setTradingMode,
 }));
 
-vi.mock("@copytrade/shared/lib/risk-calc", () => ({
+vi.mock("@copytrade/shared/lib/risk/calc", () => ({
   calculateRisk: logsMocks.calculateRisk,
 }));
 
-vi.mock("@copytrade/shared/lib/risk", () => ({
+vi.mock("@copytrade/shared/lib/risk/index", () => ({
   getRiskConfig: logsMocks.getRiskConfig,
 }));
 

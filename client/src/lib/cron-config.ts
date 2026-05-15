@@ -6,7 +6,7 @@ import {
   setCronSettings,
   type CronJobConfig,
   type CronSettingsType,
-} from "@copytrade/shared/lib/cron-settings";
+} from "@copytrade/shared/lib/cron/settings";
 
 export {
   CRON_PROVIDER_OPTIONS,

@@ -1,4 +1,4 @@
-import { SourceType } from "@copytrade/shared/lib/enums";
+import { SourceType } from "@copytrade/shared/lib/enums/index";
 import type { ToolExecutor } from "./shared";
 import {
   buildSourceSummary,

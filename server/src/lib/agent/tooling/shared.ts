@@ -2,7 +2,7 @@ import {
   connectDB,
   Account,
   Position,
-} from "@copytrade/shared/lib/database";
+} from "@copytrade/shared/lib/database/index";
 import {
   ExchangeFactory,
   type ExchangeProvider,
@@ -13,7 +13,7 @@ import {
 } from "@copytrade/shared/lib/exchange/ExchangeFactory";
 import type { ExchangeClient } from "@copytrade/shared/lib/exchange/types";
 import { SourceFactory } from "@copytrade/shared/lib/source/SourceFactory";
-import { SourceType } from "@copytrade/shared/lib/enums";
+import { SourceType } from "@copytrade/shared/lib/enums/index";
 import type {
   BaseSourceConfig,
   BaseSourceMessage,

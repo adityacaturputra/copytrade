@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { connectDB, DiscordSource } from "@copytrade/shared/lib/database";
+import { connectDB, DiscordSource } from "@copytrade/shared/lib/database/index";
 import { checkTokenHealth } from "@/lib/discord";
 
 export const dynamic = "force-dynamic";

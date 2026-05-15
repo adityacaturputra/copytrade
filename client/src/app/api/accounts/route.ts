@@ -4,8 +4,8 @@ import {
   connectDB,
   Account,
   DiscordSource,
-} from "@copytrade/shared/lib/database";
-import { SourceType } from "@copytrade/shared/lib/enums";
+} from "@copytrade/shared/lib/database/index";
+import { SourceType } from "@copytrade/shared/lib/enums/index";
 import type { ExchangeCredentialValues } from "@copytrade/shared/lib/exchange/exchange-credentials";
 import {
   DEFAULT_EXCHANGE_PROVIDER,

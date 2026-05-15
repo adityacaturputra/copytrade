@@ -8,7 +8,7 @@ import {
   cleanupTradeLogs,
   createTradeLog,
   listTradeLogs,
-} from "@copytrade/shared/lib/trade-log-store";
+} from "@copytrade/shared/lib/trade-log/store";
 import { requireActionAuth } from "../lib/action-auth";
 
 const router: ExpressRouter = Router();

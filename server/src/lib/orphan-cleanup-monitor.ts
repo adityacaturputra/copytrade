@@ -1,6 +1,6 @@
-import { Account, Position } from "@copytrade/shared/lib/database";
+import { Account, Position } from "@copytrade/shared/lib/database/index";
 import { ExchangeFactory } from "@copytrade/shared/lib/exchange/ExchangeFactory";
-import { createTradeLog } from "@copytrade/shared/lib/trade-log-store";
+import { createTradeLog } from "@copytrade/shared/lib/trade-log/store";
 import {
   toExchangeCredentials,
   type AccountRecord,

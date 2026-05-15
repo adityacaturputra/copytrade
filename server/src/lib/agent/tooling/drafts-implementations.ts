@@ -1,4 +1,4 @@
-import { connectDB, getPendingDrafts } from "@copytrade/shared/lib/database";
+import { connectDB, getPendingDrafts } from "@copytrade/shared/lib/database/index";
 import type { ToolExecutor } from "./shared";
 import {
   getErrorMessage,

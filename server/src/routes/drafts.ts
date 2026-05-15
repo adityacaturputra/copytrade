@@ -8,7 +8,7 @@ import {
   connectDB,
   DraftTrade,
   ProcessedMessage,
-} from "@copytrade/shared/lib/database";
+} from "@copytrade/shared/lib/database/index";
 import type { TradingSignal } from "@copytrade/shared/lib/ai/types";
 import {
   analyzeMessagesWithAI,
@@ -20,7 +20,7 @@ import {
 import {
   createTradeProcessId,
   logProcessStep,
-} from "@copytrade/shared/lib/process-log";
+} from "@copytrade/shared/lib/process/log";
 import { requireActionAuth } from "../lib/action-auth";
 
 const router: ExpressRouter = Router();

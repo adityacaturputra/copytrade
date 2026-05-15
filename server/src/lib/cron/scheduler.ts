@@ -3,7 +3,7 @@ import {
   getCronSettings,
   type CronJobConfig,
   type KnownCronJobType,
-} from "@copytrade/shared/lib/cron-settings";
+} from "@copytrade/shared/lib/cron/settings";
 
 const DEFAULT_POLL_INTERVAL_MS = 15_000;
 const DEFAULT_TIMEZONE = process.env.CRON_TIMEZONE || "Asia/Jakarta";

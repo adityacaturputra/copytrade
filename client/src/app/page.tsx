@@ -15,8 +15,8 @@ import {
   getPositionKey, formatPositionTakeProfitTargets, DraftTrade, DraftAction, AccountInfo,
   RiskConfig, CronStep, CronRunStatus, SignalConfig, AccountExchangeInfo, DashboardData
 } from "@/components/dashboard/types";
-import { calculateRisk } from "@copytrade/shared/lib/risk-calc";
-import { autoCalculateTPFromRR } from "@copytrade/shared/lib/executor-signal-utils";
+import { calculateRisk } from "@copytrade/shared/lib/risk/calc";
+import { autoCalculateTPFromRR } from "@copytrade/shared/lib/executor/utils/signal";
 import { buildBackendApiUrl } from "@/lib/backend-url";
 import { getStoredActionPassword } from "@/lib/action-auth";
 import { useActionAuth } from "@/lib/action-auth-context";
@@ -1243,7 +1243,6 @@ function formatProcessActionLabel(action: string) {
  * Pending Limit Orders on the dashboard.  Follows the same mobile-card +
  * desktop-table pattern as PositionsTab so the UI is consistent everywhere.
  */
-
 
 
 

@@ -5,16 +5,16 @@ import {
   type Router as ExpressRouter,
 } from "express";
 import { runSignalCheck } from "@copytrade/shared/lib/executor";
-import { runTpslMonitor } from "@copytrade/shared/lib/tp-sl-monitor";
-import { connectDB } from "@copytrade/shared/lib/database";
+import { runTpslMonitor } from "@copytrade/shared/lib/monitor/tp-sl";
+import { connectDB } from "@copytrade/shared/lib/database/index";
 import {
   tryStart,
   updateProgress,
   finishCron,
   getCronStatus,
   getAllCronStatus,
-} from "@copytrade/shared/lib/cron-status";
-import { createTradeLog } from "@copytrade/shared/lib/trade-log-store";
+} from "@copytrade/shared/lib/cron/status";
+import { createTradeLog } from "@copytrade/shared/lib/trade-log/store";
 import { runPositionMonitorAgent } from "../lib/agent/position-monitor-agent";
 import { runOrphanCleanupMonitor } from "../lib/orphan-cleanup-monitor";
 

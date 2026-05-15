@@ -6,22 +6,22 @@ import {
   AgentTurn,
   connectDB,
   type IPosition,
-} from "@copytrade/shared/lib/database";
+} from "@copytrade/shared/lib/database/index";
 import {
   ExchangeFactory,
   buildExchangeCredentials,
 } from "@copytrade/shared/lib/exchange/ExchangeFactory";
 import type { ExchangeClient } from "@copytrade/shared/lib/exchange/types";
-import { inspectPendingLimitOrder } from "@copytrade/shared/lib/pending-order-sync";
-import { getSignalConfig } from "@copytrade/shared/lib/signal-config";
+import { inspectPendingLimitOrder } from "@copytrade/shared/lib/monitor/pending-order-sync";
+import { getSignalConfig } from "@copytrade/shared/lib/signal/config";
 import {
   logExecutorError,
   logExecutorInfo,
   logExecutorWarn,
   logProcessStep,
-} from "@copytrade/shared/lib/process-log";
-import { ensurePersistedProcessId } from "@copytrade/shared/lib/process-id";
-import { createTradeLog } from "@copytrade/shared/lib/trade-log-store";
+} from "@copytrade/shared/lib/process/log";
+import { ensurePersistedProcessId } from "@copytrade/shared/lib/process/id";
+import { createTradeLog } from "@copytrade/shared/lib/trade-log/store";
 import { agentTools, toolImplementations } from "./tools";
 import { getAgentToolPolicy } from "./policies";
 

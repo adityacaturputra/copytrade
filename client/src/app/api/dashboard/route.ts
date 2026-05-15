@@ -7,9 +7,9 @@ import {
   getTradingMode,
   Position,
   Account,
-} from "@copytrade/shared/lib/database";
-import { getRiskConfig } from "@copytrade/shared/lib/risk";
-import { getSignalConfig } from "@copytrade/shared/lib/signal-config";
+} from "@copytrade/shared/lib/database/index";
+import { getRiskConfig } from "@copytrade/shared/lib/risk/index";
+import { getSignalConfig } from "@copytrade/shared/lib/signal/config";
 
 export const dynamic = "force-dynamic";
 

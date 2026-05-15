@@ -4,7 +4,7 @@ import {
   connectDB,
   disconnectDB,
   type IAccount,
-} from "../../shared/src/lib/database";
+} from "../../shared/src/lib/database/index/index";
 import {
   ExchangeFactory,
   buildExchangeCredentials,

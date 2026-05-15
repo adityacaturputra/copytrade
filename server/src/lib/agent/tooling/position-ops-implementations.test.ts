@@ -29,7 +29,7 @@ const positionOpsMocks = vi.hoisted(() => ({
   fetchMessageContext: vi.fn(),
 }));
 
-vi.mock("@copytrade/shared/lib/database", () => ({
+vi.mock("@copytrade/shared/lib/database/index", () => ({
   Account: {
     findById: positionOpsMocks.accountFindById,
   },
@@ -55,11 +55,11 @@ vi.mock("@copytrade/shared/lib/ai/PositionMonitorContext", () => ({
   buildPositionAnalysisInput: positionOpsMocks.buildPositionAnalysisInput,
 }));
 
-vi.mock("@copytrade/shared/lib/process-log", () => ({
+vi.mock("@copytrade/shared/lib/process/log", () => ({
   logProcessStep: positionOpsMocks.logProcessStep,
 }));
 
-vi.mock("@copytrade/shared/lib/process-id", () => ({
+vi.mock("@copytrade/shared/lib/process/id", () => ({
   ensurePersistedProcessId: positionOpsMocks.ensurePersistedProcessId,
   getResolvedProcessId: positionOpsMocks.getResolvedProcessId,
 }));
@@ -70,7 +70,7 @@ vi.mock("@copytrade/shared/lib/source/DiscordSourceProvider", () => ({
   },
 }));
 
-vi.mock("@copytrade/shared/lib/trade-log-store", () => ({
+vi.mock("@copytrade/shared/lib/trade-log/store", () => ({
   getProcessTradeLogs: positionOpsMocks.getProcessTradeLogs,
 }));
 

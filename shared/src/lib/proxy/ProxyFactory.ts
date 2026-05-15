@@ -11,8 +11,8 @@ import { ProxyConfig, ProxyProviderType, ProxyInfoResult } from "./types";
 import {
   WebshareProvider,
   configureWebshareApiKeyPool,
-} from "./WebshareProvider";
-import { CustomProvider, CustomProxySettings } from "./CustomProvider";
+} from "./webshare/index";
+import { CustomProvider, CustomProxySettings } from "./custom/index";
 
 // ─── DB Schema (inline, follows project pattern) ───────────────────────────
 

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { connectDB, Account } from "@copytrade/shared/lib/database";
+import { connectDB, Account } from "@copytrade/shared/lib/database/index";
 import mongoose from "mongoose";
 import { resetExchangeAccountState } from "@copytrade/shared/lib/exchange/reset-account-state";
 import { verifyActionAuth } from "../_lib/action-auth";

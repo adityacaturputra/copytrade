@@ -2,7 +2,7 @@ import {
   connectDB,
   getOpenPositions,
   Account,
-} from "@copytrade/shared/lib/database";
+} from "@copytrade/shared/lib/database/index";
 import type { ToolExecutor } from "./shared";
 import {
   isPaperExchangeProvider,

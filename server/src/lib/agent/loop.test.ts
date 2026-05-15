@@ -39,7 +39,7 @@ vi.mock("@copytrade/shared/lib/ai/CodexPatunginConfig", () => ({
   getCodexPatunginConfig: loopMocks.getCodexPatunginConfig,
 }));
 
-vi.mock("@copytrade/shared/lib/database", () => ({
+vi.mock("@copytrade/shared/lib/database/index", () => ({
   Account: {
     find: loopMocks.accountFind,
   },

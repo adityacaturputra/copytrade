@@ -6,9 +6,9 @@ import {
   getStats,
   getTradingMode,
   setTradingMode,
-} from "@copytrade/shared/lib/database";
-import { calculateRisk } from "@copytrade/shared/lib/risk-calc";
-import { getRiskConfig } from "@copytrade/shared/lib/risk";
+} from "@copytrade/shared/lib/database/index";
+import { calculateRisk } from "@copytrade/shared/lib/risk/calc";
+import { getRiskConfig } from "@copytrade/shared/lib/risk/index";
 import type { ToolExecutor } from "./shared";
 import { resolveExchangeContext, roundPrice } from "./shared";
 

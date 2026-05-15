@@ -22,20 +22,20 @@ vi.mock("@copytrade/shared/lib/executor", () => ({
 vi.mock("../lib/agent/position-monitor-agent", () => ({
   runPositionMonitorAgent: cronMocks.runPositionMonitor,
 }));
-vi.mock("@copytrade/shared/lib/tp-sl-monitor", () => ({
+vi.mock("@copytrade/shared/lib/monitor/tp-sl", () => ({
   runTpslMonitor: cronMocks.runTpslMonitor,
 }));
-vi.mock("@copytrade/shared/lib/database", () => ({
+vi.mock("@copytrade/shared/lib/database/index", () => ({
   connectDB: cronMocks.connectDB,
 }));
-vi.mock("@copytrade/shared/lib/cron-status", () => ({
+vi.mock("@copytrade/shared/lib/cron/status", () => ({
   tryStart: cronMocks.tryStart,
   updateProgress: cronMocks.updateProgress,
   finishCron: cronMocks.finishCron,
   getCronStatus: cronMocks.getCronStatus,
   getAllCronStatus: cronMocks.getAllCronStatus,
 }));
-vi.mock("@copytrade/shared/lib/trade-log-store", () => ({
+vi.mock("@copytrade/shared/lib/trade-log/store", () => ({
   createTradeLog: cronMocks.createTradeLog,
 }));
 

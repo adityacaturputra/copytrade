@@ -1,11 +1,11 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
-import { BinanceExchange } from "./BinanceExchange";
-import { BybitExchange } from "./BybitExchange";
-import { MetaTraderExchange } from "./MetaTraderExchange";
-import { MexcExchange } from "./MexcExchange";
-import { OkxExchange } from "./OkxExchange";
-import { PaperExchange } from "./PaperExchange";
+import { BinanceExchange } from "./binance/index";
+import { BybitExchange } from "./bybit/index";
+import { MetaTraderExchange } from "./metatrader/index";
+import { MexcExchange } from "./mexc/index";
+import { OkxExchange } from "./okx/index";
+import { PaperExchange } from "./paper/index";
 import {
   exchangeSupportsDirectAlgoCancel,
   getExchangeProviderRuntime,

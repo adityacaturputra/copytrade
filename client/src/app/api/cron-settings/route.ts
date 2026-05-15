@@ -16,8 +16,8 @@ import {
   normalizeCronProvider,
   type CronJobConfig,
   type CronSettingsType,
-} from "@copytrade/shared/lib/cron-settings";
-import type { CronRunStatus } from "@copytrade/shared/lib/cron-status";
+} from "@copytrade/shared/lib/cron/settings";
+import type { CronRunStatus } from "@copytrade/shared/lib/cron/status";
 
 export const dynamic = "force-dynamic";
 

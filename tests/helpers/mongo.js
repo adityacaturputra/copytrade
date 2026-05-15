@@ -8,7 +8,7 @@ exports.clearTestMongo = clearTestMongo;
 exports.stopTestMongo = stopTestMongo;
 const mongoose_1 = __importDefault(require("mongoose"));
 const mongodb_memory_server_1 = require("mongodb-memory-server");
-const database_ts_1 = require("../../shared/src/lib/database.ts");
+const database_ts_1 = require("../../shared/src/lib/database/index/index.ts");
 let mongoServer = null;
 async function startTestMongo() {
     if (!mongoServer) {

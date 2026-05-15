@@ -23,7 +23,7 @@ import {
   type ExchangeProvider,
 } from "@copytrade/shared/lib/exchange/ExchangeFactory";
 import { resetExchangeAccountState } from "@copytrade/shared/lib/exchange/reset-account-state";
-import { Account } from "@copytrade/shared/lib/database";
+import { Account } from "@copytrade/shared/lib/database/index";
 import { loadClientEnv } from "./load-env";
 
 // Load .env

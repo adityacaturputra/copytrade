@@ -9,7 +9,7 @@ const logMocks = vi.hoisted(() => ({
   cleanupTradeLogs: vi.fn(),
 }));
 
-vi.mock("@copytrade/shared/lib/trade-log-store", () => ({
+vi.mock("@copytrade/shared/lib/trade-log/store", () => ({
   createTradeLog: logMocks.createTradeLog,
   listTradeLogs: logMocks.listTradeLogs,
   cleanupTradeLogs: logMocks.cleanupTradeLogs,

@@ -9,7 +9,7 @@ const orphanCleanupMocks = vi.hoisted(() => ({
   createTradeLog: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("@copytrade/shared/lib/database", () => ({
+vi.mock("@copytrade/shared/lib/database/index", () => ({
   Account: {
     find: orphanCleanupMocks.accountFind,
   },
@@ -24,7 +24,7 @@ vi.mock("@copytrade/shared/lib/exchange/ExchangeFactory", () => ({
   },
 }));
 
-vi.mock("@copytrade/shared/lib/trade-log-store", () => ({
+vi.mock("@copytrade/shared/lib/trade-log/store", () => ({
   createTradeLog: orphanCleanupMocks.createTradeLog,
 }));
 
