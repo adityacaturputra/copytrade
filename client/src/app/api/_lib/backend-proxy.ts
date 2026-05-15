@@ -23,6 +23,11 @@ export async function proxyToBackend(
   if (request.headers.get("authorization")) {
     headers.authorization = request.headers.get("authorization") as string;
   }
+  if (request.headers.get("x-action-password")) {
+    headers["x-action-password"] = request.headers.get(
+      "x-action-password",
+    ) as string;
+  }
 
   const body =
     method === "GET" || method === "HEAD" ? undefined : await request.text();
