@@ -68,23 +68,33 @@ export async function closeBybitAllPositions(ctx: BybitCtx): Promise<{ closed: s
 export async function placeBybitConditionalCloseOrder(ctx: BybitCtx, type: "tp" | "sl", symbol: string, triggerPrice: number, side: "BUY" | "SELL", quantity: number): Promise<string> {
   const normalized = ctx.toSymbol(symbol);
   const specs = await ctx.getInstrumentSpecs(normalized);
-  const qty = ctx.clampToStep(quantity, specs.lotSz, specs.qtyDecimals);
-  const price = ctx.clampToStep(triggerPrice, specs.tickSz, specs.priceDecimals);
-  const payload: any = {
-    category: "linear",
-    symbol: normalized,
-    tpslMode: "Full",
-    takeProfit: type === "tp" ? ctx.formatNum(price, specs.priceDecimals) : undefined,
-    stopLoss: type === "sl" ? ctx.formatNum(price, specs.priceDecimals) : undefined,
-    tpTriggerBy: "MarkPrice",
-    slTriggerBy: "MarkPrice",
-    tpOrderType: "Market",
-    slOrderType: "Market",
-  };
   const positions = (await ctx.fetchPositions(normalized)).filter(row => row.symbol === normalized && (row.side === "Buy" || row.side === "Sell") && ctx.parseNumber(row.size) > 0);
   const position = positions.find(p => (side === "BUY" ? "Sell" : "Buy") === p.side);
   if (!position) throw new Error(`No matching ${side === "BUY" ? "SHORT" : "LONG"} position for ${type.toUpperCase()} order on ${normalized}`);
-  payload.positionIdx = position.positionIdx ?? 0;
-  await ctx.signedRequest("POST", "/v5/position/trading-stop", payload);
-  return `position-${type}:${normalized}:${payload.positionIdx}`;
+  const maxQuantity = ctx.parseNumber(position.size);
+  const requestedQty = Math.min(quantity, maxQuantity);
+  const qty = ctx.clampToStep(requestedQty, specs.lotSz, specs.qtyDecimals);
+  if (qty < specs.minSz) {
+    throw new Error(`Conditional ${type.toUpperCase()} quantity too small for ${normalized}: ${qty} < ${specs.minSz}`);
+  }
+  const price = ctx.clampToStep(triggerPrice, specs.tickSz, specs.priceDecimals);
+  const currentPrice =
+    ctx.parseNumber(position.markPrice) ||
+    (await ctx.getTickerPrice(normalized));
+  const payload: any = {
+    category: "linear",
+    symbol: normalized,
+    side: side === "BUY" ? "Buy" : "Sell",
+    orderType: "Market",
+    qty: ctx.formatNum(qty, specs.qtyDecimals),
+    triggerPrice: ctx.formatNum(price, specs.priceDecimals),
+    triggerDirection: price >= currentPrice ? 1 : 2,
+    triggerBy: "MarkPrice",
+    reduceOnly: true,
+    closeOnTrigger: true,
+    positionIdx: position.positionIdx ?? 0,
+    orderLinkId: `ct_${type}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+  };
+  const result = await ctx.signedRequest<any>("POST", "/v5/order/create", payload);
+  return result.orderId || result.orderLinkId || payload.orderLinkId;
 }
