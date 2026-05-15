@@ -185,9 +185,9 @@ export async function getRiskConfig(): Promise<RiskConfig> {
       .lean();
     if (settings) {
       return {
-        riskPerTradePercent: settings.riskPerTradePercent,
+        riskPerTradePercent: settings.riskPerTradePercent ?? settings.maxRiskPerTradePercent ?? 1,
         maxLeverage: settings.maxLeverage,
-        minLeverage: settings.minLeverage,
+        minLeverage: settings.minLeverage ?? 1,
         skipNoSL: settings.skipNoSL ?? true,
         defaultRR: settings.defaultRR ?? 3,
         defaultPositionSize: settings.defaultPositionSize ?? 50,
@@ -249,9 +249,9 @@ export async function setRiskConfig(
     new: true,
   }).lean();
   return {
-    riskPerTradePercent: doc.riskPerTradePercent,
+    riskPerTradePercent: doc.riskPerTradePercent ?? doc.maxRiskPerTradePercent ?? 1,
     maxLeverage: doc.maxLeverage,
-    minLeverage: doc.minLeverage,
+    minLeverage: doc.minLeverage ?? 1,
     skipNoSL: doc.skipNoSL ?? true,
     defaultRR: doc.defaultRR ?? 3,
     defaultPositionSize: doc.defaultPositionSize ?? 50,

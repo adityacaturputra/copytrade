@@ -1,7 +1,7 @@
 import { Position, buildTPTargets } from "../../database";
 import { logExecutorInfo, logExecutorWarn, logProcessStep } from "../../process/log";
 import { autoCalculateTPFromRR, autoCalculateSLFromRR } from "../utils/signal";
-import { executeTrade } from "../trades";
+import { executeTrade } from "../trades/execute-trade";
 import type { SignalExecutionResult } from "../types";
 import type { TradingSignal } from "../../ai/core/types";
 

@@ -18,6 +18,13 @@ import {
   parseJsonResponse,
   parseSignalResponse,
 } from "../core/response-normalizer";
+import {
+  buildBulkUserMessage,
+  buildImageUserContent,
+  collectPositionContextImageUrls,
+  collectUniqueImageUrls,
+  fallbackBulkSignalParsing,
+} from "../core/multimodal";
 
 export class KonektikaAnalyzer implements AISignalAnalyzer {
   private baseURL: string;
@@ -60,16 +67,7 @@ export class KonektikaAnalyzer implements AISignalAnalyzer {
 
     const systemPrompt = buildBulkSignalParserPrompt();
 
-    const userMessage = messages
-      .map((msg) => {
-        let block = `---MESSAGE ${msg.messageId}---\n${msg.content}`;
-        if (msg.imageUrls && msg.imageUrls.length > 0) {
-          block += `\n[Attached Images: ${msg.imageUrls.join(", ")}]`;
-        }
-        block += `\n---END MESSAGE ${msg.messageId}---`;
-        return block;
-      })
-      .join("\n\n");
+    const userMessage = buildBulkUserMessage(messages);
 
     const hasImages = messages.some(
       (msg) => msg.imageUrls && msg.imageUrls.length > 0,
@@ -79,27 +77,10 @@ export class KonektikaAnalyzer implements AISignalAnalyzer {
 
     let response: string;
     if (hasImages) {
-      const userContent: Array<
-        | { type: "text"; text: string }
-        | { type: "image_url"; image_url: { url: string } }
-      > = [];
-
-      userContent.push({ type: "text", text: userMessage });
-
-      const seenUrls = new Set<string>();
-      for (const msg of messages) {
-        if (msg.imageUrls) {
-          for (const url of msg.imageUrls) {
-            if (!seenUrls.has(url)) {
-              seenUrls.add(url);
-              userContent.push({
-                type: "image_url",
-                image_url: { url },
-              });
-            }
-          }
-        }
-      }
+      const userContent = buildImageUserContent(
+        userMessage,
+        collectUniqueImageUrls(messages),
+      );
 
       response = await this.callAPIWithContent(
         systemPrompt,
@@ -119,16 +100,7 @@ export class KonektikaAnalyzer implements AISignalAnalyzer {
       console.warn(
         `Konektika: Bulk parse failed, falling back to individual parsing for ${messages.length} messages`,
       );
-      const fallbackResults: BulkSignalResult[] = [];
-      for (const msg of messages) {
-        try {
-          const signal = await this.parseSignal(msg.content);
-          fallbackResults.push({ messageId: msg.messageId, signal });
-        } catch {
-          fallbackResults.push({ messageId: msg.messageId, signal: null });
-        }
-      }
-      return fallbackResults;
+      return fallbackBulkSignalParsing(messages, (message) => this.parseSignal(message));
     }
 
     return results;
@@ -140,29 +112,14 @@ export class KonektikaAnalyzer implements AISignalAnalyzer {
     const systemPrompt = buildPositionAnalysisPrompt();
     const userMessage = buildPositionAnalysisUserMessage(input);
 
-    const imageUrls = new Set<string>();
-    if (input.discordContextMessages) {
-      for (const msg of input.discordContextMessages) {
-        if (msg.imageUrls) {
-          for (const url of msg.imageUrls) {
-            imageUrls.add(url);
-          }
-        }
-      }
-    }
+    const imageUrls = collectPositionContextImageUrls(input);
 
     let response: string;
-    if (imageUrls.size > 0) {
-      const userContent: Array<
-        | { type: "text"; text: string }
-        | { type: "image_url"; image_url: { url: string } }
-      > = [{ type: "text", text: userMessage }];
-
-      for (const url of imageUrls) {
-        userContent.push({ type: "image_url", image_url: { url } });
-      }
-
-      response = await this.callAPIWithContent(systemPrompt, userContent);
+    if (imageUrls.length > 0) {
+      response = await this.callAPIWithContent(
+        systemPrompt,
+        buildImageUserContent(userMessage, imageUrls),
+      );
     } else {
       response = await this.callAPI(systemPrompt, userMessage);
     }

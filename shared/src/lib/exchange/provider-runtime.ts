@@ -1,9 +1,9 @@
 import { BinanceExchange } from "./binance/index";
-import { BybitExchange } from "./bybit/index";
+import { BybitExchange } from "./bybit/BybitExchange";
 import { type ExchangeCredentials } from "./exchange-credentials";
 import { MetaTraderExchange } from "./metatrader/index";
 import { MexcExchange } from "./mexc/index";
-import { OkxExchange } from "./okx/index";
+import { OkxExchange } from "./okx/OkxExchange";
 import { PaperExchange } from "./paper/index";
 import {
   type ExchangeCredentialField,

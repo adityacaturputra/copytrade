@@ -7,13 +7,11 @@ export {
   summarizeExecutionForDraft,
 } from "./drafts";
 export { autoCalculateTPFromRR } from "./utils/signal";
-export {
-  checkDuplicatePosition,
-  executeTrade,
-  splitQuantityForTPs,
-} from "./trades";
+export { executeTrade } from "./trades/execute-trade";
 export { runSignalCheck } from "./run-signal-check";
 export { executeSignal } from "./execute-signal";
+export { splitQuantityForTPs } from "./trades/split-quantity";
+export { checkDuplicatePosition } from "./trades/duplicate-check";
 export type {
   DraftExecutionOutcome,
   DuplicateCheckResult,

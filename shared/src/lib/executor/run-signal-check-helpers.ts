@@ -4,7 +4,7 @@ import {
   IDraftTrade,
   ProcessedMessage,
 } from "../database/index";
-import { BaseSourceMessage } from "../source/types";
+import { BaseSourceConfig, BaseSourceMessage } from "../source/types";
 import { SourceFactory } from "../source/SourceFactory";
 import {
   createTradeProcessId,
@@ -58,24 +58,29 @@ export async function fetchMessagesForActiveAccounts({
   await logExecutorInfo(`📡 Found ${activeAccounts.length} active accounts, fetching messages...`, { level: "debug" });
 
   for (const account of activeAccounts) {
+    const channelIds = Array.isArray(account.channelIds) ? account.channelIds : [];
     const disabledSet = new Set(account.disabledChannelIds || []);
-    const activeChannelIds = account.channelIds.filter((id: string) => !disabledSet.has(id));
+    const activeChannelIds = channelIds.filter((id: string) => !disabledSet.has(id));
 
     if (activeChannelIds.length === 0) {
       await logExecutorInfo(`⏭️ Account "${account.name}": all channels disabled, skipping`, {
         accountId: account._id.toString(),
         level: "debug",
       });
-      result.sources.push({ name: account.name, channels: account.channelIds.length, healthy: true });
+      result.sources.push({ name: account.name, channels: channelIds.length, healthy: true });
       continue;
     }
 
     try {
-      const provider = SourceFactory.getProvider(account.sourceType);
-      const config = {
+            const sourceType = account.sourceType === "discord" || account.sourceType === "telegram" ? account.sourceType : null;
+      if (!sourceType) {
+        throw new Error(`Unsupported source type for account "${account.name}": ${String(account.sourceType || "unset")}`);
+      }
+      const provider = SourceFactory.getProvider(sourceType);
+      const config: BaseSourceConfig & Record<string, unknown> = {
         _id: account._id.toString(),
         name: account.name,
-        type: account.sourceType,
+        type: sourceType as BaseSourceConfig["type"],
         channelIds: activeChannelIds,
         ...((account.sourceData as Record<string, unknown>) || {}),
       };
@@ -93,16 +98,16 @@ export async function fetchMessagesForActiveAccounts({
 
       allMessages = allMessages.concat(messages);
       await Account.findByIdAndUpdate(account._id, { lastFetchedAt: new Date(), lastError: null });
-      result.sources.push({ name: account.name, channels: account.channelIds.length, healthy: true });
+      result.sources.push({ name: account.name, channels: channelIds.length, healthy: true });
 
       await logExecutorInfo(
-        `📡 Account "${account.name}" (${account.sourceType}): fetched ${messages.length} messages from ${activeChannelIds.length} channels`,
+        `📡 Account "${account.name}" (${sourceType}): fetched ${messages.length} messages from ${activeChannelIds.length} channels`,
         { accountId: account._id.toString(), level: "debug" },
       );
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : "Unknown source error";
       result.errors.push(`Account "${account.name}": ${errMsg}`);
-      result.sources.push({ name: account.name, channels: account.channelIds.length, healthy: false });
+      result.sources.push({ name: account.name, channels: channelIds.length, healthy: false });
       await Account.findByIdAndUpdate(account._id, { lastError: errMsg });
       await logExecutorWarn(`❌ Account "${account.name}" error: ${errMsg}`, {
         accountId: account._id.toString(),

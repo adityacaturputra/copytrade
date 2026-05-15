@@ -108,7 +108,14 @@ export function useSettingsAccounts(check403: (res: Response) => boolean) {
 
     const exchangeProvider = form.tradingPlatform || DEFAULT_ACCOUNT_EXCHANGE_PROVIDER;
     const exchangeConfig = getExchangeProviderConfig(exchangeProvider) || getExchangeProviderConfig(DEFAULT_EXCHANGE_PROVIDER);
-    const exchangeDataPreview = buildExchangeDataPreview(exchangeProvider, form.exchangeValues);
+    const editingAccount = editingId
+      ? accounts.find((account) => account._id === editingId)
+      : null;
+    const exchangeDataPreview = {
+      ...(editingAccount?.exchangeData || {}),
+      ...buildExchangeDataPreview(exchangeProvider, form.exchangeValues),
+      simulated: form.exchangeIsDemo,
+    };
     if (exchangeConfig?.authMode !== "none") {
       const validation = validateExchangeCredentials(exchangeProvider, exchangeDataPreview);
       if (!validation.valid) return setAndStop(setFormError, setSaving, validation.error || "Invalid exchange credentials.");

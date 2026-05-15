@@ -173,7 +173,7 @@ function applyAccountUpdates(
     channelNames?: Record<string, string> | Map<string, string>;
     disabledChannelIds?: string[];
     riskOverrides?: Record<string, unknown> | null;
-    channelConfigs?: Record<string, unknown> | null;
+    channelConfigs?: unknown;
     tradingPlatform?: unknown;
     sourceData?: unknown;
     exchangeData?: unknown;

@@ -30,9 +30,9 @@ export async function getSignalConfig(): Promise<SignalConfigType> {
       .lean();
     if (settings) {
       return {
-        fetchLimit: settings.fetchLimit,
-        timeWindowHours: settings.timeWindowHours,
-        batchSize: settings.batchSize,
+        fetchLimit: settings.fetchLimit ?? DEFAULT_SIGNAL_CONFIG.fetchLimit,
+        timeWindowHours: settings.timeWindowHours ?? DEFAULT_SIGNAL_CONFIG.timeWindowHours,
+        batchSize: settings.batchSize ?? DEFAULT_SIGNAL_CONFIG.batchSize,
         includeImageUrls: settings.includeImageUrls ?? false,
         monitorVisionImages: settings.monitorVisionImages ?? false,
       };
@@ -71,9 +71,9 @@ export async function setSignalConfig(
     new: true,
   }).lean();
   return {
-    fetchLimit: doc.fetchLimit,
-    timeWindowHours: doc.timeWindowHours,
-    batchSize: doc.batchSize,
+    fetchLimit: doc.fetchLimit ?? DEFAULT_SIGNAL_CONFIG.fetchLimit,
+    timeWindowHours: doc.timeWindowHours ?? DEFAULT_SIGNAL_CONFIG.timeWindowHours,
+    batchSize: doc.batchSize ?? DEFAULT_SIGNAL_CONFIG.batchSize,
     includeImageUrls: doc.includeImageUrls ?? false,
     monitorVisionImages: doc.monitorVisionImages ?? false,
   };

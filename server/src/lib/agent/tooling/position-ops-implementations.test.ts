@@ -90,7 +90,7 @@ vi.mock("./shared", () => ({
   toClosingSide: positionOpsMocks.toClosingSide,
 }));
 
-import { positionOpsToolImplementations } from "./position-ops-implementations";
+import { positionOpsToolImplementations } from "./position-ops/index";
 
 function createQuery(result: unknown) {
   const sort = vi.fn();

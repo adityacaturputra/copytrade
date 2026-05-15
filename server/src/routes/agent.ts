@@ -9,7 +9,7 @@ import {
   authenticateAgentRequest,
 } from "../lib/agent/auth";
 import { createAgentSessionId, ensureAgentSession } from "../lib/agent/logging";
-import { runAgentLoopStreaming } from "../lib/agent/loop";
+import { runAgentLoopStreaming } from "../lib/agent/loop/index";
 import { getActionPasswordHeader } from "../lib/action-auth";
 import { AgentTurn } from "@copytrade/shared/lib/database/index";
 

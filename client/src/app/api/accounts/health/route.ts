@@ -29,7 +29,7 @@ export async function POST(req: NextRequest) {
             _id: account._id.toString(),
             name: account.name,
             type: account.sourceType as SourceType,
-            channelIds: account.channelIds,
+            channelIds: account.channelIds || [],
             // Spread sourceData so provider can access credentials
             ...(account.sourceData as Record<string, unknown>),
           };

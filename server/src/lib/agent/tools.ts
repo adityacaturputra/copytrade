@@ -4,7 +4,7 @@ import { accountMarketToolImplementations } from "./tooling/account-market-imple
 import { draftsToolImplementations } from "./tooling/drafts-implementations";
 import { logsSettingsToolImplementations } from "./tooling/logs-settings-implementations";
 import { orderManagementToolImplementations } from "./tooling/order-management-implementations";
-import { positionOpsToolImplementations } from "./tooling/position-ops-implementations";
+import { positionOpsToolImplementations } from "./tooling/position-ops/index";
 import { sourceToolImplementations } from "./tooling/source-implementations";
 import { tradingToolImplementations } from "./tooling/trading-implementations";
 

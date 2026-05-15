@@ -19,10 +19,7 @@ import {
   parseJsonResponse,
   parseSignalResponse,
 } from "../core/response-normalizer";
-
-type OpenAIUserContentPart =
-  | { type: "text"; text: string }
-  | { type: "image_url"; image_url: { url: string } };
+import { buildBulkUserMessage, buildImageUserContent, collectPositionContextImageUrls, collectUniqueImageUrls, type ImageUserContentPart as OpenAIUserContentPart } from "../core/multimodal";
 
 export class CodexPatunginAnalyzer implements AISignalAnalyzer {
   private apiKeys: string[];
@@ -60,16 +57,7 @@ export class CodexPatunginAnalyzer implements AISignalAnalyzer {
     if (messages.length === 0) return [];
 
     const systemPrompt = buildBulkSignalParserPrompt();
-    const userMessage = messages
-      .map((msg) => {
-        let block = `---MESSAGE ${msg.messageId}---\n${msg.content}`;
-        if (msg.imageUrls && msg.imageUrls.length > 0) {
-          block += `\n[Attached Images: ${msg.imageUrls.join(", ")}]`;
-        }
-        block += `\n---END MESSAGE ${msg.messageId}---`;
-        return block;
-      })
-      .join("\n\n");
+    const userMessage = buildBulkUserMessage(messages);
 
     const maxTokens = Math.min(16384, Math.max(2048, messages.length * 512));
 
@@ -79,23 +67,8 @@ export class CodexPatunginAnalyzer implements AISignalAnalyzer {
 
     let response: string;
     if (hasImages) {
-      const userContent: OpenAIUserContentPart[] = [{ type: "text", text: userMessage }];
-      const seenUrls = new Set<string>();
-      for (const msg of messages) {
-        if (msg.imageUrls) {
-          for (const url of msg.imageUrls) {
-            if (seenUrls.has(url)) continue;
-            seenUrls.add(url);
-            userContent.push({ type: "image_url", image_url: { url } });
-          }
-        }
-      }
-
-      response = await this.callAPIWithContent(
-        systemPrompt,
-        userContent,
-        maxTokens,
-      );
+      const userContent: OpenAIUserContentPart[] = buildImageUserContent(userMessage, collectUniqueImageUrls(messages));
+      response = await this.callAPIWithContent(systemPrompt, userContent, maxTokens);
     } else {
       response = await this.callAPI(systemPrompt, userMessage, maxTokens, false);
     }
@@ -109,16 +82,14 @@ export class CodexPatunginAnalyzer implements AISignalAnalyzer {
       console.warn(
         `CodexPatungin: Bulk parse failed, falling back to individual parsing for ${messages.length} messages`,
       );
-      const results: BulkSignalResult[] = [];
-      for (const msg of messages) {
+      return Promise.all(messages.map(async (msg) => {
         try {
           const signal = await this.parseSignal(msg.content);
-          results.push({ messageId: msg.messageId, signal });
+          return { messageId: msg.messageId, signal };
         } catch {
-          results.push({ messageId: msg.messageId, signal: null });
+          return { messageId: msg.messageId, signal: null };
         }
-      }
-      return results;
+      }));
     }
 
     return results;
@@ -128,26 +99,11 @@ export class CodexPatunginAnalyzer implements AISignalAnalyzer {
     const systemPrompt = buildPositionAnalysisPrompt();
     const userMessage = buildPositionAnalysisUserMessage(input);
 
-    const imageUrls = new Set<string>();
-    if (input.discordContextMessages) {
-      for (const msg of input.discordContextMessages) {
-        if (msg.imageUrls) {
-          for (const url of msg.imageUrls) {
-            imageUrls.add(url);
-          }
-        }
-      }
-    }
+    const imageUrls = collectPositionContextImageUrls(input);
 
     let response: string;
-    if (imageUrls.size > 0) {
-      const userContent: OpenAIUserContentPart[] = [{ type: "text", text: userMessage }];
-
-      for (const url of imageUrls) {
-        userContent.push({ type: "image_url", image_url: { url } });
-      }
-
-      response = await this.callAPIWithContent(systemPrompt, userContent);
+    if (imageUrls.length > 0) {
+      response = await this.callAPIWithContent(systemPrompt, buildImageUserContent(userMessage, imageUrls));
     } else {
       response = await this.callAPI(systemPrompt, userMessage, undefined, true);
     }

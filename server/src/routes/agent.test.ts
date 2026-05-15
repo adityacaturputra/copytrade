@@ -20,7 +20,7 @@ vi.mock("../lib/agent/logging", () => ({
   ensureAgentSession: agentRouteMocks.ensureAgentSession,
 }));
 
-vi.mock("../lib/agent/loop", () => ({
+vi.mock("../lib/agent/loop/index", () => ({
   runAgentLoopStreaming: agentRouteMocks.runAgentLoopStreaming,
 }));
 

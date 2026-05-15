@@ -4,7 +4,7 @@ import {
   buildExchangeCredentials,
 } from "../exchange/ExchangeFactory";
 import { ExchangeClient } from "../exchange/types";
-import { splitQuantityForTPs } from "../executor/index";
+import { splitQuantityForTPs } from "../executor";
 import { inspectPendingLimitOrder } from "./pending-order-sync";
 import {
   logExecutorError,
