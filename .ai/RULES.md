@@ -32,6 +32,11 @@
 - Reuse shared types before creating new ones.
 - Update imports immediately when moving files.
 - Keep compatibility wrappers only if truly necessary and temporary.
+- Refactors must be behavior-preserving by default; do not mix file-splitting work with logic changes unless a fix is explicitly required.
+- When splitting large files, prefer small surgical extracts by domain responsibility, then verify after each step before continuing.
+- Avoid broad move-only refactors that change many paths at once without immediate validation.
+- If a file is above the limit, split it into real focused modules until each source/test file is `<= 300` lines.
+- Do not introduce fake wrapper files just to satisfy the line limit.
 
 ## Verification Rules
 - After changes, run relevant builds/typechecks/tests.

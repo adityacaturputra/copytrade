@@ -1,18 +1,16 @@
-import axios, { AxiosInstance } from "axios";
-import CryptoJS from "crypto-js";
-import {
-  ExchangeClient,
-  OrderParams,
-  PositionInfo,
+import type { AxiosInstance } from "axios";
+import type {
   AccountInfo,
-  KlineData,
-  OrderResult,
-  OpenOrderInfo,
   AlgoOrderInfo,
+  ExchangeClient,
   HistoricalOrder,
   InstrumentSpecs,
+  KlineData,
+  OpenOrderInfo,
+  OrderParams,
+  OrderResult,
+  PositionInfo,
 } from "../../types";
-import { getProxyAgent } from "../../../proxy/ProxyFactory";
 import {
   cancelOkxAlgoOrders,
   cancelOkxOrder,
@@ -21,547 +19,87 @@ import {
   getOkxInstrumentSpecs,
   getOkxKlines,
   getOkxOpenOrders,
-  getOkxOrderHistory,
   getOkxOpenPositions,
+  getOkxOrderHistory,
   getOkxTickerPrice,
   placeOkxProtectionOrder,
   setOkxLeverage,
 } from "../helpers";
+import {
+  ensureOkxAccountConfigured,
+  setOkxAccountMode,
+  setOkxPositionMode,
+} from "./account";
+import { createOkxHttpClient } from "./client";
+import { closeAllOkxPositions, closeOkxPosition } from "./close";
+import {
+  type OkxValidatedInstrument,
+  validateOkxInstrument,
+} from "./instruments";
+import { placeOkxOrder, retryOkxOrderAfterAccountFix } from "./orders";
+import { getOkxPositionMode } from "./position-mode";
+import {
+  buildOkxAuthHeaders,
+  buildOkxPayloadError,
+  fromOkxSwapSymbol,
+  isRetryableOkxAccountConfigError,
+  roundOkxQuantityToLotSize,
+  toOkxSwapSymbol,
+} from "./utils";
 
-// ==================== OKX Exchange Adapter ====================
-
-function getOkxBaseUrl(): string {
-  return (
-    process.env.OKX_PROXY_URL ||
-    process.env.OKX_BASE_URL ||
-    "https://www.okx.com"
-  );
-}
-
-/**
- * OKX V5 API — ExchangeClient implementation.
- *
- * Auth docs: https://www.okx.com/docs-v5/en/#rest-api-authentication
- * Trade docs: https://www.okx.com/docs-v5/en/#rest-api-trade
- * Account docs: https://www.okx.com/docs-v5/en/#rest-api-account
- *
- * Env vars used:
- *   OKX_API_KEY, OKX_SECRET_KEY, OKX_PASSPHRASE
- *   OKX_SIMULATED (optional, set to "true" for demo/testnet)
- *   OKX_BASE_URL (optional, e.g. https://aws.okx.com)
- */
 export class OkxExchange implements ExchangeClient {
   readonly name = "okx";
-
-  private apiKey: string;
-  private secretKey: string;
-  private passphrase: string;
-  private simulated: boolean;
+  private static SPECS_CACHE_TTL = 30 * 60 * 1000;
+  private static ACCOUNT_CONFIG_TTL = 60 * 1000;
+  private specsCache = new Map<string, { specs: InstrumentSpecs; ts: number }>();
+  private accountConfigCache?: { posMode: "long_short_mode" | "net_mode"; ts: number };
   private client: AxiosInstance;
 
-  /** Cache instrument specs to avoid repeated API calls */
-  private specsCache = new Map<
-    string,
-    { specs: InstrumentSpecs; ts: number }
-  >();
-  private static SPECS_CACHE_TTL = 30 * 60 * 1000; // 30 minutes
-  private static ACCOUNT_CONFIG_TTL = 60 * 1000; // 1 minute
-  private accountConfigCache?: {
-    posMode: "long_short_mode" | "net_mode";
-    ts: number;
-  };
-
   constructor(
-    apiKey: string,
-    secretKey: string,
-    passphrase: string,
-    simulated: boolean = false,
+    private apiKey: string,
+    private secretKey: string,
+    private passphrase: string,
+    private simulated: boolean = false,
   ) {
-    this.apiKey = apiKey;
-    this.secretKey = secretKey;
-    this.passphrase = passphrase;
-    this.simulated = simulated;
-    this.client = axios.create({
-      baseURL: getOkxBaseUrl(),
-      timeout: 30000,
-      headers: {
-        "Content-Type": "application/json",
+    this.client = createOkxHttpClient();
+  }
+
+  private authHeaders(method: string, path: string, body?: string): Record<string, string> {
+    return buildOkxAuthHeaders({
+      apiKey: this.apiKey,
+      secretKey: this.secretKey,
+      passphrase: this.passphrase,
+      simulated: this.simulated,
+      method,
+      path,
+      body,
+    });
+  }
+
+  private buildPayloadError(message: string, payload?: string | Record<string, string>): Error {
+    return buildOkxPayloadError(message, payload);
+  }
+
+  private isAccountConfigRetryable(code?: string, message?: string): boolean {
+    return isRetryableOkxAccountConfigError(code, message);
+  }
+
+  private async getPositionMode(forceRefresh: boolean = false): Promise<"long_short_mode" | "net_mode"> {
+    return getOkxPositionMode({
+      client: this.client,
+      authHeaders: this.authHeaders.bind(this),
+      forceRefresh,
+      cache: this.accountConfigCache,
+      cacheTtl: OkxExchange.ACCOUNT_CONFIG_TTL,
+      setCache: (cache) => {
+        this.accountConfigCache = cache;
       },
     });
-
-    // ─── Proxy: attach httpsProxyAgent for Webshare static IP ────────
-    this.client.interceptors.request.use(async (config) => {
-      try {
-        const agent = await getProxyAgent();
-        if (agent) {
-          config.httpsAgent = agent;
-          config.httpAgent = agent;
-        }
-      } catch (err) {
-        console.warn(
-          "[OKX] ⚠️ Proxy agent not available, using direct connection:",
-          err instanceof Error ? err.message : err,
-        );
-      }
-      return config;
-    });
-
-    // ─── Error-only request/response logging ──────────────────────────
-    this.client.interceptors.response.use(
-      (response) => {
-        // Check if OKX returned a business-level error (code !== "0")
-        const data = response.data;
-        if (data && data.code !== undefined && data.code !== "0") {
-          const method = (response.config.method || "GET").toUpperCase();
-          console.error(
-            `[OKX] ❌ ${method} ${response.config.url}\n` +
-              `       ➡️  Request body: ${response.config.data || "(no body)"}\n` +
-              `       ⬅️  Response (${response.status}): ${JSON.stringify(data)}`,
-          );
-        }
-        return response;
-      },
-      (error) => {
-        if (axios.isAxiosError(error) && error.response) {
-          const method = (error.config?.method || "GET").toUpperCase();
-          console.error(
-            `[OKX] ❌ ${method} ${error.config?.url} — HTTP ${error.response.status}\n` +
-              `       ➡️  Request body: ${error.config?.data || "(no body)"}\n` +
-              `       ⬅️  Response body: ${JSON.stringify(error.response.data)}`,
-          );
-        }
-        return Promise.reject(error);
-      },
-    );
   }
 
-  // ─── Auth helpers ──────────────────────────────────────────────────
-
-  private sign(
-    timestamp: string,
-    method: string,
-    path: string,
-    body?: string,
-  ): string {
-    const message = timestamp + method + path + (body || "");
-    return CryptoJS.HmacSHA256(message, this.secretKey).toString(
-      CryptoJS.enc.Base64,
-    );
-  }
-
-  private getTimestamp(): string {
-    return new Date().toISOString().replace(/\.\d{3}Z$/, ".000Z");
-  }
-
-  private authHeaders(
-    method: string,
-    path: string,
-    body?: string,
-  ): Record<string, string> {
-    const timestamp = this.getTimestamp();
-    const sign = this.sign(timestamp, method, path, body);
-    const headers: Record<string, string> = {
-      "OK-ACCESS-KEY": this.apiKey,
-      "OK-ACCESS-SIGN": sign,
-      "OK-ACCESS-TIMESTAMP": timestamp,
-      "OK-ACCESS-PASSPHRASE": this.passphrase,
-    };
-    if (this.simulated) {
-      headers["x-simulated-trading"] = "1";
-    }
-    return headers;
-  }
-
-  private formatPayloadForError(payload?: string | Record<string, string>): string {
-    if (!payload) return "";
-    return typeof payload === "string"
-      ? payload
-      : JSON.stringify(payload);
-  }
-
-  private buildPayloadError(
-    message: string,
-    payload?: string | Record<string, string>,
-  ): Error {
-    const payloadText = this.formatPayloadForError(payload);
-    return new Error(
-      payloadText ? `${message} | payload=${payloadText}` : message,
-    );
-  }
-
-  private isAccountConfigRetryable(
-    code?: string,
-    message?: string,
-  ): boolean {
-    if (code === "51010") return true;
-    return code === "51000" && (message || "").toLowerCase().includes("posside");
-  }
-
-  private async getPositionMode(
-    forceRefresh: boolean = false,
-  ): Promise<"long_short_mode" | "net_mode"> {
-    if (
-      !forceRefresh &&
-      this.accountConfigCache &&
-      Date.now() - this.accountConfigCache.ts < OkxExchange.ACCOUNT_CONFIG_TTL
-    ) {
-      return this.accountConfigCache.posMode;
-    }
-
-    const path = "/api/v5/account/config";
-    const headers = this.authHeaders("GET", path);
-
-    try {
-      const response = await this.client.get(path, { headers });
-      const data = response.data;
-      const posMode = data?.data?.[0]?.posMode;
-
-      if (posMode === "long_short_mode" || posMode === "net_mode") {
-        this.accountConfigCache = { posMode, ts: Date.now() };
-        return posMode;
-      }
-    } catch (error) {
-      console.warn(
-        `[OKX] ⚠️ Failed to read account config: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-
-    return this.accountConfigCache?.posMode || "long_short_mode";
-  }
-
-  // ─── Instrument helpers ────────────────────────────────────────────
-
-  /**
-   * Convert standard symbol (e.g. "BTCUSDT") to OKX instrument ID ("BTC-USDT-SWAP").
-   * OKX uses: BASE-QUOTE-SWAP for perpetuals.
-   */
-  private toOkxSymbol(symbol: string): string {
-    // If already in OKX format, return as-is
-    if (symbol.includes("-")) return symbol;
-    // Try to split at USDT, USD, BTC, ETH boundaries
-    const quote = symbol.endsWith("USDT")
-      ? "USDT"
-      : symbol.endsWith("USD")
-        ? "USD"
-        : null;
-    if (quote) {
-      const base = symbol.slice(0, -quote.length);
-      return `${base}-${quote}-SWAP`;
-    }
-    // Fallback: assume USDT perpetual
-    return `${symbol}-USDT-SWAP`;
-  }
-
-  /** Convert OKX instId back to standard symbol like "BTCUSDT" */
-  private fromOkxSymbol(instId: string): string {
-    return instId.replace(/-/g, "").replace("SWAP", "");
-  }
-
-  /**
-   * Validate that an instrument exists on OKX and get its details.
-   * Returns the instrument info or throws if not found.
-   *
-   * Docs: https://www.okx.com/docs-v5/en/#rest-api-public-data-get-instruments
-   */
-  async validateInstrument(symbol: string): Promise<{
-    instId: string;
-    baseCcy: string;
-    quoteCcy: string;
-    ctVal: string;
-    ctValCcy: string;
-    ctMult: string;
-    ctType: string;
-    lotSz: string;
-    minSz: string;
-    tickSz: string;
-    state: string;
-    instType: string;
-  }> {
-    const instId = this.toOkxSymbol(symbol);
-    const path = `/api/v5/public/instruments?instType=SWAP&instId=${instId}`;
-
-    console.log(`[OKX] 🔍 Validating instrument: ${instId}...`);
-
-    try {
-      const response = await this.client.get(path);
-      const data = response.data;
-
-      if (data.code === "0" && data.data?.[0]) {
-        const inst = data.data[0];
-        console.log(
-          `[OKX] ✅ Instrument validated: ${instId} (state=${inst.state}, ctVal=${inst.ctVal}, lotSz=${inst.lotSz}, minSz=${inst.minSz})`,
-        );
-        return inst;
-      }
-
-      // Instrument not found — try to suggest alternatives
-      console.warn(
-        `[OKX] ⚠️ Instrument ${instId} not found. Searching for alternatives...`,
-      );
-
-      // Search by underlying
-      const baseCcy = instId.split("-")[0];
-      const searchPath = `/api/v5/public/instruments?instType=SWAP`;
-      const searchResp = await this.client.get(searchPath);
-      const searchData = searchResp.data;
-
-      if (searchData.code === "0" && searchData.data) {
-        const matches = searchData.data.filter(
-          (i: { baseCcy: string; quoteCcy: string; state: string }) =>
-            i.baseCcy === baseCcy && i.state === "live",
-        );
-        if (matches.length > 0) {
-          const suggestions = matches
-            .map(
-              (m: { instId: string; quoteCcy: string }) =>
-                `${m.instId} (${m.quoteCcy})`,
-            )
-            .join(", ");
-          throw new Error(
-            `Instrument "${instId}" not found. Did you mean one of: ${suggestions}?`,
-          );
-        }
-      }
-
-      throw new Error(
-        `Instrument "${instId}" not found on OKX. No alternatives available for ${baseCcy}.`,
-      );
-    } catch (error) {
-      if (error instanceof Error && error.message.includes("not found")) {
-        throw error;
-      }
-      const errMsg = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed to validate instrument ${instId}: ${errMsg}`);
-    }
-  }
-
-  // ─── Account Configuration ──────────────────────────────────────────
-
-  /**
-   * Set OKX account mode.
-   * 1 = Simple (cash), 2 = Single-currency margin, 3 = Multi-currency margin, 4 = Portfolio margin
-   * Futures/swap trading requires mode 2+.
-   *
-   * Docs: https://www.okx.com/docs-v5/en/#rest-api-account-set-account-mode
-   */
-  async setAccountMode(
-    accountMode: "1" | "2" | "3" | "4" = "2",
-  ): Promise<void> {
-    const path = "/api/v5/account/set-account-mode";
-    const body = JSON.stringify({ acctMode: accountMode });
-    const headers = this.authHeaders("POST", path, body);
-
-    console.log(
-      `[OKX] Setting account mode to ${accountMode} (${accountMode === "2" ? "Single-currency margin" : accountMode === "3" ? "Multi-currency margin" : "mode " + accountMode})...`,
-    );
-
-    try {
-      const response = await this.client.post(path, body, { headers });
-      const data = response.data;
-
-      if (data.code === "0") {
-        console.log(`[OKX] ✅ Account mode set to ${accountMode}`);
-        return;
-      }
-
-      console.error(
-        `[OKX] ❌ Failed to set account mode: code=${data.code}, msg=${data.msg}`,
-      );
-      throw new Error(
-        `Failed to set OKX account mode: ${data.msg || "Unknown error"} (code: ${data.code})`,
-      );
-    } catch (error) {
-      if (axios.isAxiosError(error) && error.response?.status === 404) {
-        console.warn(
-          `[OKX] ⚠️ set-account-mode endpoint returned 404 — this is normal for simulated trading or when account mode is already correct`,
-        );
-        throw new Error(
-          "set-account-mode not available (simulated trading or already configured)",
-        );
-      }
-      throw error;
-    }
-  }
-
-  /**
-   * Set position mode for an instrument.
-   * "long_short_mode" = hedged (supports posSide: long/short)
-   * "net_mode" = net position (no posSide needed)
-   *
-   * Docs: https://www.okx.com/docs-v5/en/#rest-api-account-set-position-mode
-   */
-  async setPositionMode(
-    symbol: string,
-    positionMode: "long_short_mode" | "net_mode" = "long_short_mode",
-  ): Promise<void> {
-    const path = "/api/v5/account/set-position-mode";
-    const body = JSON.stringify({ posMode: positionMode });
-    const headers = this.authHeaders("POST", path, body);
-
-    console.log(`[OKX] Setting position mode to "${positionMode}"...`);
-
-    const response = await this.client.post(path, body, { headers });
-    const data = response.data;
-
-    if (data.code === "0") {
-      console.log(`[OKX] ✅ Position mode set to ${positionMode}`);
-      this.accountConfigCache = { posMode: positionMode, ts: Date.now() };
-    } else {
-      console.error(
-        `[OKX] ❌ Failed to set position mode: code=${data.code}, msg=${data.msg}`,
-      );
-      throw new Error(
-        `Failed to set OKX position mode: ${data.msg || "Unknown error"} (code: ${data.code})`,
-      );
-    }
-  }
-
-  /**
-   * Ensure the account is configured correctly for futures/swap trading.
-   * Sets account mode to Single-currency margin and position mode to long_short_mode.
-   */
-  async ensureAccountConfigured(symbol: string): Promise<void> {
-    // Try to set account mode (may fail gracefully for simulated trading)
-    try {
-      await this.setAccountMode("2");
-    } catch (error) {
-      const errMsg = error instanceof Error ? error.message : String(error);
-      console.warn(
-        `[OKX] ⚠️ Could not set account mode (may already be correct): ${errMsg}`,
-      );
-    }
-
-    // Try to set position mode to long_short_mode
-    try {
-      await this.setPositionMode(symbol, "long_short_mode");
-    } catch (error) {
-      const errMsg = error instanceof Error ? error.message : String(error);
-      console.warn(
-        `[OKX] ⚠️ Could not set position mode (may already be correct): ${errMsg}`,
-      );
-    }
-  }
-
-  // ─── Account ────────────────────────────────────────────────────────
-
-  async getAccountInfo(): Promise<AccountInfo> {
-    return getOkxAccountInfo({
-      client: this.client,
-      authHeaders: this.authHeaders.bind(this),
-      toOkxSymbol: this.toOkxSymbol.bind(this),
-      fromOkxSymbol: this.fromOkxSymbol.bind(this),
-      getPositionMode: this.getPositionMode.bind(this),
-      specsCache: this.specsCache,
-      specsCacheTtl: OkxExchange.SPECS_CACHE_TTL,
-    });
-  }
-
-  // ─── Market Data ────────────────────────────────────────────────────
-
-  async getTickerPrice(symbol: string): Promise<number> {
-    return getOkxTickerPrice({
-      client: this.client,
-      authHeaders: this.authHeaders.bind(this),
-      toOkxSymbol: this.toOkxSymbol.bind(this),
-      fromOkxSymbol: this.fromOkxSymbol.bind(this),
-      getPositionMode: this.getPositionMode.bind(this),
-      specsCache: this.specsCache,
-      specsCacheTtl: OkxExchange.SPECS_CACHE_TTL,
-    }, symbol);
-  }
-
-  async getKlines(
-    symbol: string,
-    interval: string = "1H",
-    limit: number = 24,
-  ): Promise<KlineData[]> {
-    return getOkxKlines({
-      client: this.client,
-      authHeaders: this.authHeaders.bind(this),
-      toOkxSymbol: this.toOkxSymbol.bind(this),
-      fromOkxSymbol: this.fromOkxSymbol.bind(this),
-      getPositionMode: this.getPositionMode.bind(this),
-      specsCache: this.specsCache,
-      specsCacheTtl: OkxExchange.SPECS_CACHE_TTL,
-    }, symbol, interval, limit);
-  }
-
-  // ─── Positions ──────────────────────────────────────────────────────
-
-  async getOpenPositions(): Promise<PositionInfo[]> {
-    return getOkxOpenPositions({
-      client: this.client,
-      authHeaders: this.authHeaders.bind(this),
-      toOkxSymbol: this.toOkxSymbol.bind(this),
-      fromOkxSymbol: this.fromOkxSymbol.bind(this),
-      getPositionMode: this.getPositionMode.bind(this),
-      specsCache: this.specsCache,
-      specsCacheTtl: OkxExchange.SPECS_CACHE_TTL,
-    });
-  }
-
-  // ─── Leverage ───────────────────────────────────────────────────────
-
-  /**
-   * Set leverage for a symbol.
-   *
-   * IMPORTANT: When account is in long_short_mode (hedged), OKX requires
-   * posSide parameter. We set leverage for BOTH long and short sides.
-   *
-   * Docs: https://www.okx.com/docs-v5/en/#rest-api-account-set-leverage
-   */
-  async setLeverage(
-    symbol: string,
-    leverage: number,
-    marginType: "isolated" | "cross" = "isolated",
-    side?: "BUY" | "SELL",
-  ): Promise<number> {
-    return setOkxLeverage(this.getHelperContext(), symbol, leverage, marginType, side);
-  }
-
-  // ─── Orders ─────────────────────────────────────────────────────────
-
-  /**
-   * Place an order on OKX.
-   *
-   * Flow:
-   *   1. Validate the instrument exists on OKX
-   *   2. Set leverage for the position side
-   *   3. Place the order
-   *   4. Auto-retry with account fix if the exchange reports account/posSide config errors
-   *
-   * Docs: https://www.okx.com/docs-v5/en/#rest-api-trade-place-order
-   */
-  /**
-   * Round a quantity to the nearest lot size.
-   * OKX requires sz to be a multiple of lotSz and >= minSz.
-   */
-  private roundToLotSize(
-    quantity: number,
-    lotSz: string,
-    minSz: string,
-  ): number {
-    const lot = parseFloat(lotSz);
-    const min = parseFloat(minSz);
-    if (lot <= 0) return quantity;
-
-    // Round down to nearest lot size
-    let rounded = Math.floor(quantity / lot) * lot;
-
-    // Handle floating point precision (e.g. 0.01 * 1 = 0.010000000000000002)
-    const decimals = lotSz.includes(".") ? lotSz.split(".")[1].length : 0;
-    rounded = parseFloat(rounded.toFixed(decimals));
-
-    // Enforce minimum size
-    if (rounded < min) {
-      console.warn(
-        `[OKX] ⚠️ Rounded quantity ${rounded} is below minSz ${min}, using minSz`,
-      );
-      rounded = min;
-    }
-
-    return rounded;
-  }
+  private toOkxSymbol(symbol: string): string { return toOkxSwapSymbol(symbol); }
+  private fromOkxSymbol(instId: string): string { return fromOkxSwapSymbol(instId); }
+  private roundToLotSize(quantity: number, lotSz: string, minSz: string): number { return roundOkxQuantityToLotSize(quantity, lotSz, minSz); }
 
   private getHelperContext() {
     return {
@@ -575,467 +113,93 @@ export class OkxExchange implements ExchangeClient {
     };
   }
 
-  async placeOrder(orderParams: OrderParams): Promise<OrderResult> {
-    const instId = this.toOkxSymbol(orderParams.symbol);
-    const isBuy = orderParams.side === "BUY";
-    const positionMode = await this.getPositionMode();
-    const posSide =
-      positionMode === "long_short_mode" ? (isBuy ? "long" : "short") : undefined;
-
-    // Step 1: Validate instrument and get lot size info
-    let instrumentInfo: Awaited<ReturnType<typeof this.validateInstrument>>;
-    try {
-      instrumentInfo = await this.validateInstrument(orderParams.symbol);
-    } catch (validationError) {
-      const errMsg =
-        validationError instanceof Error
-          ? validationError.message
-          : String(validationError);
-      console.error(`[OKX] ❌ Instrument validation failed: ${errMsg}`);
-      throw validationError;
-    }
-
-    // Step 2: Convert quantity from base currency to contracts
-    // OKX swap contracts use sz = number of contracts, not base currency amount
-    // Each contract = ctVal base currency (e.g., 0.01 BTC for BTC-USDT-SWAP)
-    const ctVal = parseFloat(instrumentInfo.ctVal || "1");
-    const contracts = orderParams.quantity / ctVal;
-
-    // Step 3: Round contracts to lot size
-    const roundedQty = this.roundToLotSize(
-      contracts,
-      instrumentInfo.lotSz,
-      instrumentInfo.minSz,
-    );
-
-    if (contracts !== roundedQty) {
-      console.log(
-        `[OKX] 🔢 Quantity: ${orderParams.quantity} base → ${contracts.toFixed(4)} contracts → ${roundedQty} contracts (ctVal=${ctVal}, lotSz=${instrumentInfo.lotSz}, minSz=${instrumentInfo.minSz})`,
-      );
-    }
-
-    if (roundedQty <= 0) {
-      throw new Error(
-        `Order quantity too small: ${orderParams.quantity} base → ${contracts.toFixed(6)} contracts → ${roundedQty} after lot size rounding (ctVal=${ctVal}, lotSz=${instrumentInfo.lotSz}, minSz=${instrumentInfo.minSz})`,
-      );
-    }
-
-    // Step 4: Set leverage (with posSide for long_short_mode)
-    if (orderParams.leverage) {
-      await this.setLeverage(
-        orderParams.symbol,
-        orderParams.leverage,
-        "isolated",
-        orderParams.side,
-      );
-    }
-
-    // Step 5: Build and place order
-    const orderBody: Record<string, string> = {
-      instId,
-      tdMode: "isolated",
-      side: isBuy ? "buy" : "sell",
-      ordType: orderParams.type === "LIMIT" ? "limit" : "market",
-      sz: String(roundedQty),
-    };
-    if (posSide) {
-      orderBody.posSide = posSide;
-    }
-
-    if (orderParams.type === "LIMIT" && orderParams.price) {
-      orderBody.px = String(orderParams.price);
-    }
-
-    const body = JSON.stringify(orderBody);
-    const path = "/api/v5/trade/order";
-    const headers = this.authHeaders("POST", path, body);
-
-    console.log(
-      `[OKX] 📤 Placing order: ${isBuy ? "BUY" : "SELL"} ${orderParams.quantity} ${instId}${posSide ? ` (posSide=${posSide})` : ` (posMode=${positionMode})`}...`,
-    );
-
-    let response;
-    try {
-      response = await this.client.post(path, body, { headers });
-    } catch (axiosError) {
-      // Axios-level error (network, 4xx, 5xx)
-      const errMsg =
-        axiosError instanceof Error ? axiosError.message : String(axiosError);
-      console.error(`[OKX] ❌ Order request failed: ${errMsg}`);
-
-      if (axios.isAxiosError(axiosError) && axiosError.response?.data) {
-        const errorData = axiosError.response.data;
-        console.error(
-          `[OKX] 📄 Response body:`,
-          JSON.stringify(errorData, null, 2),
-        );
-
-        // Retry account/position configuration errors once.
-        const sCode = errorData?.data?.[0]?.sCode;
-        const sMsg = errorData?.data?.[0]?.sMsg;
-        if (
-          this.isAccountConfigRetryable(sCode, sMsg) ||
-          this.isAccountConfigRetryable(errorData?.code, errorData?.msg)
-        ) {
-          return await this.handle51010AndRetry(orderBody, orderParams, path);
-        }
-      }
-      throw this.buildPayloadError(
-        `OKX order request failed: ${errMsg}`,
-        orderBody,
-      );
-    }
-
-    const data = response.data;
-
-    // Retry account/position configuration errors once.
-    if (
-      this.isAccountConfigRetryable(
-        data.data?.[0]?.sCode,
-        data.data?.[0]?.sMsg,
-      )
-    ) {
-      console.warn(
-        `[OKX] ⚠️ Detected account configuration error in order response — attempting auto-fix`,
-      );
-      return await this.handle51010AndRetry(orderBody, orderParams, path);
-    }
-
-    if (data.code === "0" && data.data?.[0]) {
-      const result = data.data[0];
-      if (result.sCode === "0") {
-        const price =
-          orderParams.price || (await this.getTickerPrice(orderParams.symbol));
-        console.log(
-          `[OKX] ✅ Order placed: orderId=${result.ordId}, price=${price}`,
-        );
-        return {
-          orderId: result.ordId,
-          price,
-          quantity: roundedQty,
-          status: "submitted",
-        };
-      }
-
-      console.error(
-        `[OKX] ❌ Order rejected: sCode=${result.sCode}, sMsg=${result.sMsg}`,
-      );
-      throw this.buildPayloadError(
-        `OKX order rejected: [${result.sCode}] ${result.sMsg}`,
-        orderBody,
-      );
-    }
-
-    // Even when top-level code !== "0", check data[0] for specific error
-    const specificError = data.data?.[0];
-    if (specificError?.sMsg) {
-      console.error(
-        `[OKX] ❌ Failed to place order: sCode=${specificError.sCode}, sMsg=${specificError.sMsg}`,
-      );
-      throw this.buildPayloadError(
-        `OKX order failed: [${specificError.sCode}] ${specificError.sMsg}`,
-        orderBody,
-      );
-    }
-
-    console.error(
-      `[OKX] ❌ Failed to place order: code=${data.code}, msg=${data.msg}`,
-    );
-    throw this.buildPayloadError(
-      `Failed to place OKX order: [${data.code}] ${data.msg || "Unknown error"}`,
-      orderBody,
-    );
+  async validateInstrument(symbol: string): Promise<OkxValidatedInstrument> {
+    return validateOkxInstrument(this.client, symbol, this.toOkxSymbol.bind(this));
   }
 
-  /**
-   * Auto-fix account configuration and retry the order.
-   */
-  private async handle51010AndRetry(
-    orderBody: Record<string, string>,
-    orderParams: OrderParams,
-    path: string,
-  ): Promise<OrderResult> {
-    console.warn(
-      `[OKX] ⚠️ Account/position mode incompatible. Auto-fixing account configuration...`,
-    );
-    await this.ensureAccountConfigured(orderParams.symbol);
-
-    // Re-set leverage with posSide after account fix
-    if (orderParams.leverage) {
-      await this.setLeverage(
-        orderParams.symbol,
-        orderParams.leverage,
-        "isolated",
-        orderParams.side,
-      );
-    }
-
-    // Retry the order
-    console.log(`[OKX] 🔄 Retrying order after account fix...`);
-    const retryBody = JSON.stringify(orderBody);
-    const retryHeaders = this.authHeaders("POST", path, retryBody);
-
-    try {
-      const retryResponse = await this.client.post(path, retryBody, {
-        headers: retryHeaders,
-      });
-      const retryData = retryResponse.data;
-
-      if (
-        retryData.code === "0" &&
-        retryData.data?.[0] &&
-        retryData.data[0].sCode === "0"
-      ) {
-        const retryResult = retryData.data[0];
-        const price =
-          orderParams.price || (await this.getTickerPrice(orderParams.symbol));
-        console.log(
-          `[OKX] ✅ Order succeeded after auto-fix: orderId=${retryResult.ordId}`,
-        );
-        return {
-          orderId: retryResult.ordId,
-          price,
-          quantity: orderParams.quantity,
-          status: "submitted",
-        };
-      }
-
-      // Retry also failed — log full details
-      console.error(
-        `[OKX] ❌ Order still failed after auto-fix:`,
-        JSON.stringify(retryData, null, 2),
-      );
-      const retryErrMsg =
-        retryData.data?.[0]?.sMsg || retryData.msg || "Unknown error";
-      const retryErrCode = retryData.data?.[0]?.sCode || retryData.code;
-      throw this.buildPayloadError(
-        `OKX order failed after auto-fix: [${retryErrCode}] ${retryErrMsg}`,
-        retryBody,
-      );
-    } catch (retryError) {
-      if (axios.isAxiosError(retryError) && retryError.response?.data) {
-        console.error(
-          `[OKX] ❌ Retry request failed with status ${retryError.response.status}:`,
-          JSON.stringify(retryError.response.data, null, 2),
-        );
-      }
-      const retryErrMsg =
-        retryError instanceof Error ? retryError.message : String(retryError);
-      throw this.buildPayloadError(
-        `OKX order retry request failed: ${retryErrMsg}`,
-        retryBody,
-      );
-    }
+  async setAccountMode(accountMode: "1" | "2" | "3" | "4" = "2"): Promise<void> {
+    return setOkxAccountMode({ client: this.client, authHeaders: this.authHeaders.bind(this), accountMode });
   }
 
-  async closePosition(
-    symbol: string,
-    positionId?: string,
-    quantity?: number,
-  ): Promise<void> {
-    const instId = this.toOkxSymbol(symbol);
-    const positionMode = await this.getPositionMode();
-
-    // First get the position to know the side and margin mode
-    const positions = await this.getOpenPositions();
-    const pos = positions.find(
-      (p) => p.symbol === symbol || p.positionId === positionId,
-    );
-
-    if (!pos) {
-      throw new Error(`No open position found for ${symbol}`);
-    }
-
-    const posSide =
-      positionMode === "long_short_mode"
-        ? pos.side === "LONG"
-          ? "long"
-          : "short"
-        : undefined;
-    const mgnMode = pos.marginType || "isolated";
-
-    // Try close-position endpoint first
-    const closePayload: Record<string, string> = {
-      instId,
-      mgnMode,
-      type: "market",
-      sz: String(quantity || pos.quantity),
-      side: pos.side === "LONG" ? "sell" : "buy",
-      tdMode: mgnMode,
-    };
-    if (posSide) {
-      closePayload.posSide = posSide;
-    }
-    const closeBody = JSON.stringify(closePayload);
-
-    const closePath = "/api/v5/trade/close-position";
-    const closeHeaders = this.authHeaders("POST", closePath, closeBody);
-
-    console.log(
-      `[OKX] 📤 Closing position: ${instId}${posSide ? ` ${posSide}` : ""} (${mgnMode}) qty=${quantity || pos.quantity}...`,
-    );
-
-    try {
-      const response = await this.client.post(closePath, closeBody, {
-        headers: closeHeaders,
-      });
-      const data = response.data;
-
-      if (data.code === "0" && data.data?.[0]?.sCode === "0") {
-        console.log(`[OKX] ✅ Position closed: ${instId}`);
-        return;
-      }
-
-      console.warn(
-        `[OKX] ⚠️ close-position failed (${mgnMode}): code=${data.code}, msg=${data.msg}. Trying opposite order...`,
-      );
-    } catch (error) {
-      const errMsg = error instanceof Error ? error.message : String(error);
-      console.warn(
-        `[OKX] ⚠️ close-position request failed: ${errMsg}. Trying opposite order...`,
-      );
-    }
-
-    // Fallback: place opposite order
-    const fallbackPayload: Record<string, string> = {
-      instId,
-      tdMode: mgnMode,
-      side: pos.side === "LONG" ? "sell" : "buy",
-      ordType: "market",
-      sz: String(quantity || pos.quantity),
-      reduceOnly: "true",
-    };
-    if (posSide) {
-      fallbackPayload.posSide = posSide;
-    }
-    const fallbackBody = JSON.stringify(fallbackPayload);
-
-    const orderPath = "/api/v5/trade/order";
-    const fallbackHeaders = this.authHeaders("POST", orderPath, fallbackBody);
-
-    console.log(
-      `[OKX] 📤 Placing opposite order to close: ${instId} (${mgnMode})...`,
-    );
-
-    const fallbackResp = await this.client.post(orderPath, fallbackBody, {
-      headers: fallbackHeaders,
+  async setPositionMode(_symbol: string, positionMode: "long_short_mode" | "net_mode" = "long_short_mode"): Promise<void> {
+    return setOkxPositionMode({
+      client: this.client,
+      authHeaders: this.authHeaders.bind(this),
+      positionMode,
+      setCachedMode: (mode) => {
+        this.accountConfigCache = { posMode: mode, ts: Date.now() };
+      },
     });
+  }
 
-    const fallbackData = fallbackResp.data;
-    if (fallbackData.code !== "0" || fallbackData.data?.[0]?.sCode !== "0") {
-      console.error(
-        `[OKX] ❌ Failed to close position:`,
-        JSON.stringify(fallbackData, null, 2),
-      );
-      throw new Error(
-        `Failed to close OKX position: ${fallbackData.msg || fallbackData.data?.[0]?.sMsg || "Unknown error"}`,
-      );
-    }
+  async ensureAccountConfigured(symbol: string): Promise<void> {
+    return ensureOkxAccountConfigured({
+      symbol,
+      setAccountMode: this.setAccountMode.bind(this),
+      setPositionMode: this.setPositionMode.bind(this),
+    });
+  }
 
-    console.log(`[OKX] ✅ Position closed via opposite order: ${instId}`);
+  async getAccountInfo(): Promise<AccountInfo> { return getOkxAccountInfo(this.getHelperContext()); }
+  async getTickerPrice(symbol: string): Promise<number> { return getOkxTickerPrice(this.getHelperContext(), symbol); }
+  async getKlines(symbol: string, interval: string = "1H", limit: number = 24): Promise<KlineData[]> { return getOkxKlines(this.getHelperContext(), symbol, interval, limit); }
+  async getOpenPositions(): Promise<PositionInfo[]> { return getOkxOpenPositions(this.getHelperContext()); }
+  async setLeverage(symbol: string, leverage: number, marginType: "isolated" | "cross" = "isolated", side?: "BUY" | "SELL"): Promise<number> { return setOkxLeverage(this.getHelperContext(), symbol, leverage, marginType, side); }
+
+  async placeOrder(orderParams: OrderParams): Promise<OrderResult> {
+    return placeOkxOrder({
+      client: this.client,
+      orderParams,
+      authHeaders: this.authHeaders.bind(this),
+      isAccountConfigRetryable: this.isAccountConfigRetryable.bind(this),
+      buildPayloadError: this.buildPayloadError.bind(this),
+      toOkxSymbol: this.toOkxSymbol.bind(this),
+      getPositionMode: this.getPositionMode.bind(this),
+      validateInstrument: this.validateInstrument.bind(this),
+      roundToLotSize: this.roundToLotSize.bind(this),
+      setLeverage: this.setLeverage.bind(this),
+      getTickerPrice: this.getTickerPrice.bind(this),
+      handleAccountConfigRetry: this.handle51010AndRetry.bind(this),
+    });
+  }
+
+  private async handle51010AndRetry(orderBody: Record<string, string>, orderParams: OrderParams, path: string): Promise<OrderResult> {
+    return retryOkxOrderAfterAccountFix({
+      client: this.client,
+      orderBody,
+      orderParams,
+      path,
+      authHeaders: this.authHeaders.bind(this),
+      buildPayloadError: this.buildPayloadError.bind(this),
+      ensureAccountConfigured: this.ensureAccountConfigured.bind(this),
+      setLeverage: this.setLeverage.bind(this),
+      getTickerPrice: this.getTickerPrice.bind(this),
+    });
+  }
+
+  async closePosition(symbol: string, positionId?: string, quantity?: number): Promise<void> {
+    return closeOkxPosition({
+      client: this.client,
+      symbol,
+      positionId,
+      quantity,
+      authHeaders: this.authHeaders.bind(this),
+      toOkxSymbol: this.toOkxSymbol.bind(this),
+      getPositionMode: this.getPositionMode.bind(this),
+      getOpenPositions: this.getOpenPositions.bind(this),
+    });
   }
 
   async closeAllPositions(): Promise<{ closed: string[]; errors: string[] }> {
-    const closed: string[] = [];
-    const errors: string[] = [];
-
-    try {
-      const positions = await this.getOpenPositions();
-
-      for (const pos of positions) {
-        try {
-          await this.closePosition(pos.symbol, pos.positionId, pos.quantity);
-          closed.push(pos.symbol);
-        } catch (error) {
-          errors.push(
-            `${pos.symbol}: ${error instanceof Error ? error.message : "Unknown error"}`,
-          );
-        }
-      }
-    } catch (error) {
-      errors.push(
-        `Failed to fetch positions: ${error instanceof Error ? error.message : "Unknown error"}`,
-      );
-    }
-
-    return { closed, errors };
+    return closeAllOkxPositions({ getOpenPositions: this.getOpenPositions.bind(this), closePosition: this.closePosition.bind(this) });
   }
 
-  // ─── Stop Loss / Take Profit ────────────────────────────────────────
-
-  async placeStopLoss(
-    symbol: string,
-    triggerPrice: number,
-    executePrice: number,
-    side: "BUY" | "SELL",
-    quantity: number,
-  ): Promise<string> {
-    return placeOkxProtectionOrder({
-      client: this.client,
-      authHeaders: this.authHeaders.bind(this),
-      toOkxSymbol: this.toOkxSymbol.bind(this),
-      fromOkxSymbol: this.fromOkxSymbol.bind(this),
-      getPositionMode: this.getPositionMode.bind(this),
-      specsCache: this.specsCache,
-      specsCacheTtl: OkxExchange.SPECS_CACHE_TTL,
-    }, "sl", symbol, triggerPrice, executePrice, side, quantity);
-  }
-
-  async placeTakeProfit(
-    symbol: string,
-    triggerPrice: number,
-    executePrice: number,
-    side: "BUY" | "SELL",
-    quantity: number,
-  ): Promise<string> {
-    return placeOkxProtectionOrder({
-      client: this.client,
-      authHeaders: this.authHeaders.bind(this),
-      toOkxSymbol: this.toOkxSymbol.bind(this),
-      fromOkxSymbol: this.fromOkxSymbol.bind(this),
-      getPositionMode: this.getPositionMode.bind(this),
-      specsCache: this.specsCache,
-      specsCacheTtl: OkxExchange.SPECS_CACHE_TTL,
-    }, "tp", symbol, triggerPrice, executePrice, side, quantity);
-  }
-
-  // ─── Order Management ───────────────────────────────────────────────
-
-  async getOpenOrders(symbol?: string): Promise<OpenOrderInfo[]> {
-    return getOkxOpenOrders(this.getHelperContext(), symbol);
-  }
-
-  async cancelOrder(orderId: string, symbol: string): Promise<boolean> {
-    return cancelOkxOrder(this.getHelperContext(), orderId, symbol);
-  }
-
-  async getAlgoOrders(symbol?: string): Promise<AlgoOrderInfo[]> {
-    return getOkxAlgoOrders(this.getHelperContext(), symbol);
-  }
-
-  async cancelAlgoOrders(
-    symbol: string,
-  ): Promise<{ cancelled: string[]; errors: string[] }> {
-    return cancelOkxAlgoOrders(this.getHelperContext(), symbol);
-  }
-
-  async getOrderHistory(
-    symbol?: string,
-    limit: number = 20,
-  ): Promise<HistoricalOrder[]> {
-    return getOkxOrderHistory(this.getHelperContext(), symbol, limit);
-  }
-
-  // ─── Instrument Specs ────────────────────────────────────────────────
-
-  /**
-   * Get instrument specifications (lot size, contract value, tick size, etc.).
-   * Results are cached for 30 minutes to avoid repeated API calls.
-   *
-   * OKX API: GET /api/v5/public/instruments?instType=SWAP&instId=XXX
-   * Docs: https://www.okx.com/docs-v5/en/#rest-api-public-data-get-instruments
-   */
-  async getInstrumentSpecs(symbol: string): Promise<InstrumentSpecs> {
-    return getOkxInstrumentSpecs(this.getHelperContext(), symbol);
-  }
+  async placeStopLoss(symbol: string, triggerPrice: number, executePrice: number, side: "BUY" | "SELL", quantity: number): Promise<string> { return placeOkxProtectionOrder(this.getHelperContext(), "sl", symbol, triggerPrice, executePrice, side, quantity); }
+  async placeTakeProfit(symbol: string, triggerPrice: number, executePrice: number, side: "BUY" | "SELL", quantity: number): Promise<string> { return placeOkxProtectionOrder(this.getHelperContext(), "tp", symbol, triggerPrice, executePrice, side, quantity); }
+  async getOpenOrders(symbol?: string): Promise<OpenOrderInfo[]> { return getOkxOpenOrders(this.getHelperContext(), symbol); }
+  async cancelOrder(orderId: string, symbol: string): Promise<boolean> { return cancelOkxOrder(this.getHelperContext(), orderId, symbol); }
+  async getAlgoOrders(symbol?: string): Promise<AlgoOrderInfo[]> { return getOkxAlgoOrders(this.getHelperContext(), symbol); }
+  async cancelAlgoOrders(symbol: string): Promise<{ cancelled: string[]; errors: string[] }> { return cancelOkxAlgoOrders(this.getHelperContext(), symbol); }
+  async getOrderHistory(symbol?: string, limit: number = 20): Promise<HistoricalOrder[]> { return getOkxOrderHistory(this.getHelperContext(), symbol, limit); }
+  async getInstrumentSpecs(symbol: string): Promise<InstrumentSpecs> { return getOkxInstrumentSpecs(this.getHelperContext(), symbol); }
 }
