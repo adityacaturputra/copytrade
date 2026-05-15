@@ -132,6 +132,7 @@ type BybitCreateOrderResult = {
 
 type BybitAccountInfoResult = {
   unifiedMarginStatus?: number | string;
+  marginMode?: string;
 };
 
 const BYBIT_LINEAR_CATEGORY = "linear";
@@ -175,7 +176,11 @@ export class BybitExchange implements ExchangeClient {
     string,
     { specs: InstrumentSpecs; ts: number }
   >();
-  private accountInfoCache?: { unifiedMarginStatus: number; ts: number };
+  private accountInfoCache?: {
+    unifiedMarginStatus: number;
+    marginMode: string | null;
+    ts: number;
+  };
 
   constructor(apiKey: string, secretKey: string, simulated: boolean = false) {
     this.apiKey = apiKey.trim();
@@ -456,10 +461,16 @@ export class BybitExchange implements ExchangeClient {
     return rows;
   }
 
-  private async getUnifiedMarginStatus(): Promise<number> {
+  private async getAccountMarginContext(): Promise<{
+    unifiedMarginStatus: number;
+    marginMode: string | null;
+  }> {
     const cached = this.accountInfoCache;
     if (cached && Date.now() - cached.ts < ACCOUNT_INFO_CACHE_TTL) {
-      return cached.unifiedMarginStatus;
+      return {
+        unifiedMarginStatus: cached.unifiedMarginStatus,
+        marginMode: cached.marginMode,
+      };
     }
 
     const result = await this.signedRequest<BybitAccountInfoResult>(
@@ -467,17 +478,43 @@ export class BybitExchange implements ExchangeClient {
       "/v5/account/info",
     );
     const unifiedMarginStatus = this.parseNumber(result.unifiedMarginStatus, 0);
+    const marginMode =
+      typeof result.marginMode === "string" && result.marginMode.trim()
+        ? result.marginMode.trim().toUpperCase()
+        : null;
 
     this.accountInfoCache = {
       unifiedMarginStatus,
+      marginMode,
       ts: Date.now(),
     };
 
-    return unifiedMarginStatus;
+    return { unifiedMarginStatus, marginMode };
+  }
+
+  private async getUnifiedMarginStatus(): Promise<number> {
+    return (await this.getAccountMarginContext()).unifiedMarginStatus;
   }
 
   private async isUnifiedLinearAccount(): Promise<boolean> {
     return (await this.getUnifiedMarginStatus()) >= 3;
+  }
+
+  private async resolvePositionMarginType(
+    row: BybitPositionRow,
+  ): Promise<"isolated" | "cross"> {
+    if (row.tradeMode === 1) return "isolated";
+    if (row.tradeMode === 0) {
+      const { unifiedMarginStatus, marginMode } =
+        await this.getAccountMarginContext();
+      if (unifiedMarginStatus >= 3) {
+        return marginMode === "ISOLATED_MARGIN" ? "isolated" : "cross";
+      }
+      return "cross";
+    }
+
+    const { marginMode } = await this.getAccountMarginContext();
+    return marginMode === "ISOLATED_MARGIN" ? "isolated" : "cross";
   }
 
   private async fetchRealtimeOrders(
@@ -813,20 +850,20 @@ export class BybitExchange implements ExchangeClient {
 
   async getOpenPositions(): Promise<PositionInfo[]> {
     const rows = await this.fetchPositions();
-
-    return rows
+    const positions = await Promise.all(
+      rows
       .filter(
         (row) =>
           Boolean(row.symbol) &&
           (row.side === "Buy" || row.side === "Sell") &&
           this.parseNumber(row.size) > 0,
       )
-      .map((row) => ({
+      .map(async (row) => ({
         symbol: String(row.symbol),
         positionId: `${row.symbol}:${row.positionIdx ?? 0}`,
         side: row.side === "Buy" ? ("LONG" as const) : ("SHORT" as const),
         leverage: Math.max(1, this.parseNumber(row.leverage, 1)),
-        marginType: row.tradeMode === 1 ? "isolated" : "cross",
+        marginType: await this.resolvePositionMarginType(row),
         entryPrice: this.parseNumber(row.avgPrice),
         quantity: this.parseNumber(row.size),
         margin:
@@ -836,7 +873,10 @@ export class BybitExchange implements ExchangeClient {
         liquidationPrice: this.parseNumber(row.liqPrice),
         markPrice: this.parseNumber(row.markPrice),
         raw: row,
-      }));
+      })),
+    );
+
+    return positions;
   }
 
   async placeOrder(orderParams: OrderParams): Promise<OrderResult> {
