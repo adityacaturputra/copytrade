@@ -9,6 +9,15 @@ export function ProxyTelemetryPanel({
   proxyIpCsvCopied: boolean;
   handleCopyProxyIpCsv: () => void | Promise<void>;
 }) {
+  const ipList = Array.isArray(proxyProviderInfo?.ipList)
+    ? proxyProviderInfo.ipList
+    : [];
+  const telemetry = proxyProviderInfo?.telemetry;
+  const addedIps = Array.isArray(telemetry?.addedIps) ? telemetry.addedIps : [];
+  const removedIps = Array.isArray(telemetry?.removedIps)
+    ? telemetry.removedIps
+    : [];
+
   return (
     <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-3 space-y-3">
       <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -18,7 +27,7 @@ export function ProxyTelemetryPanel({
         <button
           type="button"
           onClick={() => void handleCopyProxyIpCsv()}
-          disabled={!proxyProviderInfo.ipList.length}
+          disabled={!ipList.length}
           className="text-[11px] bg-slate-700 hover:bg-slate-600 disabled:opacity-50 px-2 py-1 rounded text-slate-200 transition"
         >
           {proxyIpCsvCopied ? "✅ Copied CSV" : "📋 Copy CSV"}
@@ -26,7 +35,7 @@ export function ProxyTelemetryPanel({
       </div>
 
       <div className="flex flex-wrap gap-1">
-        {proxyProviderInfo.ipList.map((ip) => (
+        {ipList.map((ip) => (
           <span key={ip} className="text-xs font-mono bg-slate-700 px-1.5 py-0.5 rounded text-slate-300">
             {ip}
           </span>
@@ -36,24 +45,24 @@ export function ProxyTelemetryPanel({
         Copy CSV format: <span className="font-mono">ip1,ip2,ip3</span>
       </p>
 
-      {proxyProviderInfo.telemetry && (
+      {telemetry && (
         <div className="pt-3 border-t border-slate-700 space-y-2">
           <p className="text-xs text-slate-400">
             IP changes since last snapshot
-            {proxyProviderInfo.telemetry.snapshotUpdatedAt
-              ? ` (${new Date(proxyProviderInfo.telemetry.snapshotUpdatedAt).toLocaleString()})`
+            {telemetry.snapshotUpdatedAt
+              ? ` (${new Date(telemetry.snapshotUpdatedAt).toLocaleString()})`
               : ""}
           </p>
           <TelemetryList
             title="Added"
             tone="emerald"
-            items={proxyProviderInfo.telemetry.addedIps || []}
+            items={addedIps}
             prefix="+"
           />
           <TelemetryList
             title="Removed"
             tone="amber"
-            items={proxyProviderInfo.telemetry.removedIps || []}
+            items={removedIps}
             prefix="-"
           />
         </div>
