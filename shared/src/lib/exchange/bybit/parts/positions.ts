@@ -73,7 +73,7 @@ export async function placeBybitConditionalCloseOrder(ctx: BybitCtx, type: "tp" 
   const payload: any = {
     category: "linear",
     symbol: normalized,
-    tpSlMode: "Full",
+    tpslMode: "Full",
     takeProfit: type === "tp" ? ctx.formatNum(price, specs.priceDecimals) : undefined,
     stopLoss: type === "sl" ? ctx.formatNum(price, specs.priceDecimals) : undefined,
     tpTriggerBy: "MarkPrice",
