@@ -4,7 +4,7 @@ import {
   Response,
   type Router as ExpressRouter,
 } from "express";
-import { runSignalCheck } from "@copytrade/shared/lib/executor";
+import { runSignalCheck } from "@copytrade/shared/lib/executor/index";
 import { runTpslMonitor } from "@copytrade/shared/lib/monitor/tp-sl";
 import { connectDB } from "@copytrade/shared/lib/database/index";
 import {

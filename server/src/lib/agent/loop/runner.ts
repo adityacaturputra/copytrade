@@ -1,5 +1,6 @@
 import { buildSystemPrompt } from "../prompt";
 import { resolveProviderConfig } from "../providers";
+import { normalizeAIProvider } from "@copytrade/shared/lib/ai/core/provider-registry";
 import type { AgentChatMessage } from "../message-helpers";
 import {
   getErrorMessage,
@@ -127,7 +128,7 @@ export async function* runAgentLoopStreamingImpl(
       sessionId: input.sessionId,
       processId,
       role: input.role,
-      provider: input.provider || process.env.AI_PROVIDER || "glm",
+      provider: normalizeAIProvider(input.provider || process.env.AI_PROVIDER),
       userMessage: input.userMessage,
       history,
       messages,

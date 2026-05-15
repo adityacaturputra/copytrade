@@ -5,6 +5,7 @@ import {
   type PendingToolCall,
 } from "../message-helpers";
 import { getApprovalRequest, throwIfAborted } from "./helpers";
+import { normalizeAIProvider } from "@copytrade/shared/lib/ai/core/provider-registry";
 import type {
   AgentApprovalRequest,
   AgentStep,
@@ -50,7 +51,7 @@ async function* executeAgentRun(
   let pendingToolCalls = [...initialPendingToolCalls];
   let toolTraces = [...initialToolTraces];
   let decision = input.decision;
-  const resolvedProvider = providerName || input.provider || "glm";
+  const resolvedProvider = normalizeAIProvider(providerName || input.provider);
   const buildApprovalRequest = getApprovalRequest({
     sessionId: input.sessionId,
     processId: input.processId!,

@@ -1,8 +1,9 @@
 import mongoose from "mongoose";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { AIFactory, type AIProvider } from "../../shared/src/lib/ai/core/factory";
-import { connectDB, disconnectDB } from "../../shared/src/lib/database/index/index/index";
-import type { BulkSignalResult } from "../../shared/src/lib/ai/types";
+import { AIFactory } from "../../shared/src/lib/ai/core/factory";
+import type { AIProvider } from "../../shared/src/lib/ai/core/provider-registry";
+import { connectDB, disconnectDB } from "../../shared/src/lib/database/index";
+import type { BulkSignalResult } from "../../shared/src/lib/ai/core/types";
 import {
   canRunLiveDbTest,
   isLiveIntegrationEnabled,

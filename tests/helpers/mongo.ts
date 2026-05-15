@@ -3,8 +3,7 @@ import { MongoMemoryServer } from "mongodb-memory-server";
 import {
   connectDB,
   disconnectDB,
-  resetDBConnectionState,
-} from "../../shared/src/lib/database/index/index.ts";
+  } from "../../shared/src/lib/database/index";
 
 let mongoServer: MongoMemoryServer | null = null;
 
@@ -16,8 +15,7 @@ export async function startTestMongo(): Promise<string> {
   const uri = mongoServer.getUri("copytrade-test");
   process.env.MONGODB_URI = uri;
   await disconnectDB();
-  resetDBConnectionState();
-  await connectDB();
+    await connectDB();
   return uri;
 }
 
@@ -31,8 +29,7 @@ export async function clearTestMongo(): Promise<void> {
 
 export async function stopTestMongo(): Promise<void> {
   await disconnectDB();
-  resetDBConnectionState();
-
+  
   if (mongoServer) {
     await mongoServer.stop();
     mongoServer = null;

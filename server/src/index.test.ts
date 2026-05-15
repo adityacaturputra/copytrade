@@ -15,7 +15,7 @@ test("server index creates and exports the app instance", async () => {
     startServer,
   }));
 
-  const mod = await import("./index");
+  const mod = await import("./index.js");
 
   assert.strictEqual(mod.default, app);
   assert.strictEqual(mod.bootServer(), app);

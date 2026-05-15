@@ -16,7 +16,7 @@ const cronMocks = vi.hoisted(() => ({
   createTradeLog: vi.fn(),
 }));
 
-vi.mock("@copytrade/shared/lib/executor", () => ({
+vi.mock("@copytrade/shared/lib/executor/index", () => ({
   runSignalCheck: cronMocks.runSignalCheck,
 }));
 vi.mock("../lib/agent/position-monitor-agent", () => ({

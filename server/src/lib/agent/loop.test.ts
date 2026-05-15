@@ -717,7 +717,7 @@ test("runAgentLoopStreaming records explicit approval rejections before continui
     events.some(
       (event) =>
         event.type === "step" &&
-        String(event.step?.content).includes('"approvalRejected":true'),
+        String((event.step as { content?: unknown } | undefined)?.content).includes('"approvalRejected":true'),
     ),
     true,
   );

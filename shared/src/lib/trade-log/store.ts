@@ -95,7 +95,6 @@ async function fetchRemoteLogs<T>(
       "Content-Type": "application/json",
       ...(init?.headers || {}),
     },
-    cache: "no-store",
   });
 
   const payload = (await response.json()) as {

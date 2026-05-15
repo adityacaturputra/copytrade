@@ -32,7 +32,7 @@ vi.mock("@copytrade/shared/lib/database/index", () => ({
   },
 }));
 
-vi.mock("@copytrade/shared/lib/executor", () => ({
+vi.mock("@copytrade/shared/lib/executor/index", () => ({
   analyzeMessagesWithAI: draftRouteMocks.analyzeMessagesWithAI,
   createDraft: draftRouteMocks.createDraft,
   executeSignal: draftRouteMocks.executeSignal,

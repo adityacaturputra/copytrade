@@ -285,7 +285,7 @@ test("app cron scheduler handles conflicts, failures, in-flight ticks, and singl
   const scheduler = createAppCronScheduler({
     baseUrl: "http://127.0.0.1:3001/",
     fetchImpl: fetchImpl as unknown as typeof fetch,
-    getSettings,
+    getSettings: getSettings as unknown as () => Promise<import("@copytrade/shared/lib/cron/settings").CronSettingsType>,
     pollIntervalMs: 1234,
     timezone: "Asia/Jakarta",
     now: () => currentTime,
@@ -338,7 +338,7 @@ test("app cron scheduler handles conflicts, failures, in-flight ticks, and singl
   const first = startAppCronScheduler({
     baseUrl: "http://127.0.0.1:3001",
     fetchImpl: vi.fn() as unknown as typeof fetch,
-    getSettings,
+    getSettings: getSettings as unknown as () => Promise<import("@copytrade/shared/lib/cron/settings").CronSettingsType>,
     setIntervalImpl: vi.fn(
       () => "singleton" as unknown as NodeJS.Timeout,
     ) as typeof setInterval,
@@ -348,7 +348,7 @@ test("app cron scheduler handles conflicts, failures, in-flight ticks, and singl
   const second = startAppCronScheduler({
     baseUrl: "http://127.0.0.1:3001",
     fetchImpl: vi.fn() as unknown as typeof fetch,
-    getSettings,
+    getSettings: getSettings as unknown as () => Promise<import("@copytrade/shared/lib/cron/settings").CronSettingsType>,
     setIntervalImpl: vi.fn(
       () => "other" as unknown as NodeJS.Timeout,
     ) as typeof setInterval,
@@ -411,7 +411,7 @@ test("app cron scheduler tolerates missing zoned date parts defaults", async () 
     () =>
       ({
         formatToParts: () => [{ type: "weekday", value: "??" }],
-      }) as Intl.DateTimeFormat,
+      }) as unknown as typeof Intl.DateTimeFormat,
   ) as unknown as typeof Intl.DateTimeFormat;
 
   try {
@@ -450,7 +450,7 @@ test("app cron scheduler falls back to Sunday when weekday is missing", async ()
     () =>
       ({
         formatToParts: () => [],
-      }) as Intl.DateTimeFormat,
+      }) as unknown as typeof Intl.DateTimeFormat,
   ) as unknown as typeof Intl.DateTimeFormat;
 
   try {

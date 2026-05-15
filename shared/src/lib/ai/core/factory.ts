@@ -6,20 +6,11 @@ import {
   PositionAnalysisInput,
   TradingSignal,
 } from "./types";
-import { GLMAnalyzer } from "../glm/analyzer";
-import { KimiAnalyzer } from "../kimi/analyzer";
-import { OpenAIAnalyzer } from "../openai/analyzer";
-import { CodexPatunginAnalyzer } from "../codex-patungin/analyzer";
-import { KonektikaAnalyzer } from "../konektika/analyzer";
-import { hasCodexPatunginCredentials } from "../codex-patungin/config";
-
-export type AIProvider =
-  | "glm"
-  | "kimi"
-  | "openai"
-  | "codex"
-  | "patungin"
-  | "konektika";
+import {
+  AIProvider,
+  buildAIProviderChain,
+  getAIProviderConfig,
+} from "./provider-registry";
 
 /**
  * Fallback-aware AI Signal Analyzer.
@@ -151,61 +142,6 @@ class FallbackAISignalAnalyzer implements AISignalAnalyzer {
   }
 }
 
-/**
- * Parse comma-separated fallback providers from env.
- * e.g. AI_PROVIDER_FALLBACK="patungin,glm,kimi"
- */
-function parseFallbackProviders(): AIProvider[] {
-  const raw = process.env.AI_PROVIDER_FALLBACK;
-  if (!raw || !raw.trim()) return [];
-
-  const validProviders: AIProvider[] = [
-    "glm",
-    "kimi",
-    "openai",
-    "codex",
-    "patungin",
-    "konektika",
-  ];
-
-  return raw
-    .split(",")
-    .map((s) => s.trim().toLowerCase() as AIProvider)
-    .filter((p) => validProviders.includes(p));
-}
-
-function getDefaultProvider(): AIProvider {
-  if (hasCodexPatunginCredentials()) return "patungin";
-  return "glm";
-}
-
-/**
- * Build the provider chain: [primary, ...fallbacks (deduplicated)]
- */
-function buildProviderChain(): AIProvider[] {
-  const primary =
-    (process.env.AI_PROVIDER as AIProvider) || getDefaultProvider();
-
-  // Normalize codex → patungin
-  const normalizedPrimary =
-    primary === "codex" ? ("patungin" as AIProvider) : primary;
-
-  const fallbacks = parseFallbackProviders();
-
-  const seen = new Set<string>([normalizedPrimary]);
-  const chain: AIProvider[] = [normalizedPrimary];
-
-  for (const fb of fallbacks) {
-    const normalized = fb === "codex" ? ("patungin" as AIProvider) : fb;
-    if (!seen.has(normalized)) {
-      seen.add(normalized);
-      chain.push(normalized);
-    }
-  }
-
-  return chain;
-}
-
 export class AIFactory {
   private static instance: AISignalAnalyzer | null = null;
 
@@ -214,11 +150,9 @@ export class AIFactory {
       return AIFactory.instance;
     }
 
-    // Check if fallback is configured
-    const fallbackProviders = parseFallbackProviders();
+    const chain = buildAIProviderChain(provider || process.env.AI_PROVIDER);
 
-    if (fallbackProviders.length > 0) {
-      const chain = buildProviderChain();
+    if (chain.length > 1) {
       const analyzers = chain
         .map((p) => {
           try {
@@ -253,33 +187,13 @@ export class AIFactory {
     }
 
     // Single provider mode (backward compatible)
-    const selectedProvider =
-      provider ||
-      (process.env.AI_PROVIDER as AIProvider) ||
-      getDefaultProvider();
-
-    const analyzer = AIFactory.createAnalyzer(selectedProvider);
+    const analyzer = AIFactory.createAnalyzer(chain[0]);
     AIFactory.instance = analyzer;
     return analyzer;
   }
 
   private static createAnalyzer(provider: AIProvider): AISignalAnalyzer {
-    switch (provider) {
-      case "kimi":
-        return new KimiAnalyzer();
-      case "openai":
-        return new OpenAIAnalyzer();
-      case "codex":
-      case "patungin":
-        return new CodexPatunginAnalyzer();
-      case "konektika":
-        return new KonektikaAnalyzer();
-      case "glm":
-        return new GLMAnalyzer();
-      default:
-        console.warn(`Unknown AI provider: ${provider}, falling back to GLM`);
-        return new GLMAnalyzer();
-    }
+    return getAIProviderConfig(provider).createAnalyzer();
   }
 
   static reset(): void {

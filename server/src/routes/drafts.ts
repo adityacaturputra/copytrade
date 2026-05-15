@@ -9,14 +9,14 @@ import {
   DraftTrade,
   ProcessedMessage,
 } from "@copytrade/shared/lib/database/index";
-import type { TradingSignal } from "@copytrade/shared/lib/ai/types";
+import type { TradingSignal } from "@copytrade/shared/lib/ai/core/types";
 import {
   analyzeMessagesWithAI,
   createDraft,
   executeSignal,
   refreshDraftFromSignal,
   resolveDraftWithExecution,
-} from "@copytrade/shared/lib/executor";
+} from "@copytrade/shared/lib/executor/index";
 import {
   createTradeProcessId,
   logProcessStep,

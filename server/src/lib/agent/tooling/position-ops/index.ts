@@ -5,7 +5,7 @@ import {
   ProcessedMessage,
 } from "@copytrade/shared/lib/database/index";
 import { logProcessStep } from "@copytrade/shared/lib/process/log";
-import { DiscordSourceProvider } from "@copytrade/shared/lib/source/DiscordSourceProvider";
+import { DiscordSourceProvider } from "@copytrade/shared/lib/source/discord/index";
 import { SourceType } from "@copytrade/shared/lib/enums/index";
 import { getProcessTradeLogs } from "@copytrade/shared/lib/trade-log/store";
 import type { ToolExecutor } from "../shared";

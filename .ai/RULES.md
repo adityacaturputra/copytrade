@@ -19,6 +19,9 @@
 - Prefer thin `index.ts` entrypoints and focused child modules.
 - Co-locate tests with their domain folders.
 - Remove temp/scratch/generated source artifacts from `src/` unless intentionally required.
+- Do not scatter provider identity/config strings across multiple files when a domain has pluggable providers.
+- For AI providers, keep provider metadata owned by the analyzer class or a single analyzer registry, then make factories/resolvers consume that one source of truth.
+- Avoid repeated provider-specific `if/else` chains for base URLs, env keys, models, or aliases in multiple layers.
 
 ## Shared Library Layout Target
 - Use domain folders in `shared/src/lib` such as `cron/`, `database/`, `enums/`, `executor/`, `exchange/`, `proxy/`, `source/`, `risk/`, `process/`, `signal/`, `monitor/`, `trade-log/`, `ai/`.

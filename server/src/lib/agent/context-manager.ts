@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import { getCodexPatunginConfig } from "@copytrade/shared/lib/ai/CodexPatunginConfig";
+import { getAIProviderConfig, normalizeAIProvider } from "@copytrade/shared/lib/ai/core/provider-registry";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -346,40 +346,11 @@ function resolveProviderForSummarizer(provider: string): {
   model: string;
   headers?: Record<string, string>;
 } {
-  const key = provider.toLowerCase().trim();
-  const codexCfg = getCodexPatunginConfig();
-
-  if (key === "kimi") {
-    return {
-      apiKey: process.env.ANTHROPIC_API_KEY || "",
-      baseURL:
-        process.env.ANTHROPIC_BASE_URL || "https://api.kimi.com/coding/",
-      model: process.env.ANTHROPIC_MODEL || "kimi-latest",
-    };
-  }
-
-  if (key === "openai") {
-    return {
-      apiKey: process.env.OPENAI_API_KEY || "",
-      baseURL: process.env.OPENAI_BASE_URL || "https://api.openai.com/v1",
-      model: process.env.OPENAI_MODEL || "gpt-4o-mini",
-    };
-  }
-
-  if (key === "codex" || key === "patungin") {
-    return {
-      apiKey: codexCfg.apiKey,
-      baseURL: codexCfg.baseURL,
-      model: codexCfg.model,
-      headers: codexCfg.headers,
-    };
-  }
-
-  // Default: GLM
+  const config = getAIProviderConfig(normalizeAIProvider(provider));
   return {
-    apiKey: process.env.GLM_API_KEY || "",
-    baseURL:
-      process.env.GLM_BASE_URL || "https://api.z.ai/api/coding/paas/v4",
-    model: process.env.GLM_MODEL || "glm-4-flash",
+    apiKey: config.getApiKeys()[0] || "",
+    baseURL: config.getBaseURL() || "",
+    model: config.getModel(),
+    headers: config.getHeaders?.(),
   };
 }

@@ -8,7 +8,6 @@ import {
   it,
   vi,
 } from "vitest";
-// @ts-ignore -- test helper outside server/src rootDir
 import {
   startTestMongo,
   clearTestMongo,
@@ -20,10 +19,10 @@ const { executeSignalMock, logProcessStepMock } = vi.hoisted(() => ({
   logProcessStepMock: vi.fn(),
 }));
 
-vi.mock("@copytrade/shared/lib/executor", async () => {
+vi.mock("@copytrade/shared/lib/executor/index", async () => {
   const actual = await vi.importActual<
-    typeof import("@copytrade/shared/lib/executor")
-  >("@copytrade/shared/lib/executor");
+    typeof import("@copytrade/shared/lib/executor/index")
+  >("@copytrade/shared/lib/executor/index");
 
   return {
     ...actual,

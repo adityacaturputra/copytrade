@@ -1,6 +1,6 @@
 import { Position } from "@copytrade/shared/lib/database/index";
-import { AIFactory } from "@copytrade/shared/lib/ai/AIFactory";
-import { buildPositionAnalysisInput } from "@copytrade/shared/lib/ai/PositionMonitorContext";
+import { AIFactory } from "@copytrade/shared/lib/ai/core/factory";
+import { buildPositionAnalysisInput } from "@copytrade/shared/lib/ai/position-monitor/context";
 import { logProcessStep } from "@copytrade/shared/lib/process/log";
 import { ensurePersistedProcessId, getResolvedProcessId } from "@copytrade/shared/lib/process/id";
 import { findPositionRecord, getLivePositionSnapshot } from "../../shared";

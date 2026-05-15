@@ -3,6 +3,7 @@ import {
   AgentTurn,
   type IPosition,
 } from "@copytrade/shared/lib/database/index";
+import { supportsVisionForProvider } from "@copytrade/shared/lib/ai/core/provider-registry";
 import { logProcessStep } from "@copytrade/shared/lib/process/log";
 import { ensurePersistedProcessId } from "@copytrade/shared/lib/process/id";
 import { agentTools, toolImplementations } from "../tools";
@@ -16,14 +17,6 @@ import {
 import { createPositionMonitorChatCompletion } from "./provider";
 
 const MAX_AGENT_ITERATIONS = 10;
-const VISION_CAPABLE_PROVIDERS = new Set([
-  "openai",
-  "kimi",
-  "codex",
-  "patungin",
-  "konektika",
-  "glm",
-]);
 
 type PendingToolCall = {
   id: string;
@@ -144,7 +137,7 @@ async function runInternalPositionAgent(input: {
         messages.push({ role: "tool", tool_call_id: toolCall.id, content: result });
 
         const imageUrls = extractImageUrlsFromToolResult(toolCall.name, result);
-        if (imageUrls.length > 0 && input.visionImagesEnabled && VISION_CAPABLE_PROVIDERS.has(usedProvider)) {
+        if (imageUrls.length > 0 && input.visionImagesEnabled && supportsVisionForProvider(usedProvider)) {
           console.log(`[PositionMonitor]   🖼️ Injecting ${imageUrls.length} image(s) from Discord for vision analysis`);
           messages.push({
             role: "user",
