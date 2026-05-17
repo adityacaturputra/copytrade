@@ -96,6 +96,36 @@ export function RiskSettingsCard({
             }))
           }
         />
+        <div className="sm:col-span-2 lg:col-span-1">
+          <label className="block text-xs text-slate-400 mb-1">
+            Full TP Count Auto-Raise
+          </label>
+          <label className="flex items-center gap-2 h-[42px] px-3 bg-slate-800 border border-slate-600 rounded-lg text-sm text-white">
+            <input
+              type="checkbox"
+              checked={riskConfig.autoRaiseTpCountEnabled}
+              onChange={(e) =>
+                setRiskConfigState((prev) => ({
+                  ...prev,
+                  autoRaiseTpCountEnabled: e.target.checked,
+                }))
+              }
+              className="rounded border-slate-500 bg-slate-900 text-primary-500 focus:ring-primary-500"
+            />
+            <span>Allow auto-raise to fit all TP legs</span>
+          </label>
+        </div>
+        <NumberField
+          label="TP Auto-Raise Max Margin (USDT)"
+          value={riskConfig.autoRaiseTpCountMaxMarginUsdt}
+          inputProps={{ step: "0.01", min: "0" }}
+          onChange={(value) =>
+            setRiskConfigState((prev) => ({
+              ...prev,
+              autoRaiseTpCountMaxMarginUsdt: value,
+            }))
+          }
+        />
       </div>
       <div className="flex items-center gap-2 mt-4">
         <input

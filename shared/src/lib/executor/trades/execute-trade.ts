@@ -4,6 +4,7 @@ import { splitQuantityForTPs } from "./split-quantity";
 import {
   applyTradeRiskManagement,
   enforceExchangeMinimums,
+  enforceTpCountFeasibility,
   resolveTradeExchange,
 } from "./helpers";
 import type { ExecuteTradeInput } from "../types";
@@ -55,7 +56,8 @@ export async function executeTrade(
 
   const exchange = await resolveTradeExchange(runtime);
   const riskSizing = await applyTradeRiskManagement(exchange, runtime);
-  const finalSizing = await enforceExchangeMinimums(exchange, runtime, riskSizing);
+  const minOrderSizing = await enforceExchangeMinimums(exchange, runtime, riskSizing);
+  const finalSizing = await enforceTpCountFeasibility(exchange, runtime, minOrderSizing);
 
   await logExecutorInfo(
     `${lp}🔄 Placing ${orderType} ${action} order: symbol=${symbol}, qty=${finalSizing.orderQuantity}, leverage=${finalSizing.orderLeverage}${orderType === "LIMIT" ? `, price=${entryPrice}` : ""}`,

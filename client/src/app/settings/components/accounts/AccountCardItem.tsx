@@ -73,6 +73,11 @@ export function AccountCardItem({
                 Account Min Auto-Raise: {account.riskOverrides.autoRaiseMinOrderEnabled ? `ON${account.riskOverrides.autoRaiseMinOrderMaxMarginUsdt !== undefined ? ` ≤ $${account.riskOverrides.autoRaiseMinOrderMaxMarginUsdt}` : ""}` : "OFF"}
               </span>
             ) : null}
+            {account.riskOverrides?.autoRaiseTpCountEnabled !== undefined ? (
+              <span className="text-xs px-2 py-1 rounded border border-cyan-700/40 bg-cyan-900/20 text-cyan-300">
+                Account TP Auto-Raise: {account.riskOverrides.autoRaiseTpCountEnabled ? `ON${account.riskOverrides.autoRaiseTpCountMaxMarginUsdt !== undefined ? ` ≤ $${account.riskOverrides.autoRaiseTpCountMaxMarginUsdt}` : ""}` : "OFF"}
+              </span>
+            ) : null}
             {(account.channelIds || []).map((channelId) => {
               const isDisabled = (account.disabledChannelIds || []).includes(channelId);
               const name = account.channelNames?.[channelId] || channelId;
@@ -94,6 +99,11 @@ export function AccountCardItem({
                     ? overrides.autoRaiseMinOrderEnabled
                       ? ` • min≤$${overrides.autoRaiseMinOrderMaxMarginUsdt ?? "?"}`
                       : " • min off"
+                    : ""}
+                  {overrides?.autoRaiseTpCountEnabled !== undefined
+                    ? overrides.autoRaiseTpCountEnabled
+                      ? ` • tp≤$${overrides.autoRaiseTpCountMaxMarginUsdt ?? "?"}`
+                      : " • tp off"
                     : ""}
                 </button>
               );

@@ -69,6 +69,8 @@ test("getRiskConfig returns DB-backed settings and falls back to defaults on fai
     maxPositions: 7,
     autoRaiseMinOrderEnabled: true,
     autoRaiseMinOrderMaxMarginUsdt: 25,
+    autoRaiseTpCountEnabled: false,
+    autoRaiseTpCountMaxMarginUsdt: 0,
   });
 
   const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -86,6 +88,8 @@ test("getRiskConfig returns DB-backed settings and falls back to defaults on fai
     maxPositions: 5,
     autoRaiseMinOrderEnabled: false,
     autoRaiseMinOrderMaxMarginUsdt: 0,
+    autoRaiseTpCountEnabled: false,
+    autoRaiseTpCountMaxMarginUsdt: 0,
   });
   assert.equal(warnSpy.mock.calls.length, 1);
 
@@ -132,6 +136,8 @@ test("setRiskConfig persists provided fields and normalizes missing optional val
     maxPositions: 5,
     autoRaiseMinOrderEnabled: false,
     autoRaiseMinOrderMaxMarginUsdt: 0,
+    autoRaiseTpCountEnabled: false,
+    autoRaiseTpCountMaxMarginUsdt: 0,
   });
 });
 
@@ -146,9 +152,11 @@ test("setRiskConfig persists all remaining override fields", async () => {
       defaultPositionSize: 125,
       defaultLeverage: 7,
       maxPositions: 9,
-      autoRaiseMinOrderEnabled: true,
-      autoRaiseMinOrderMaxMarginUsdt: 6,
-    }),
+        autoRaiseMinOrderEnabled: true,
+        autoRaiseMinOrderMaxMarginUsdt: 6,
+        autoRaiseTpCountEnabled: false,
+        autoRaiseTpCountMaxMarginUsdt: 0,
+      }),
   });
 
   const config = await setRiskConfig({
@@ -160,6 +168,8 @@ test("setRiskConfig persists all remaining override fields", async () => {
     maxPositions: 9,
     autoRaiseMinOrderEnabled: true,
     autoRaiseMinOrderMaxMarginUsdt: 6,
+    autoRaiseTpCountEnabled: false,
+    autoRaiseTpCountMaxMarginUsdt: 0,
   });
 
   assert.deepEqual(riskMocks.riskFindOneAndUpdate.mock.calls.at(-1), [
@@ -173,6 +183,8 @@ test("setRiskConfig persists all remaining override fields", async () => {
       maxPositions: 9,
       autoRaiseMinOrderEnabled: true,
       autoRaiseMinOrderMaxMarginUsdt: 6,
+      autoRaiseTpCountEnabled: false,
+      autoRaiseTpCountMaxMarginUsdt: 0,
     },
     { upsert: true, new: true },
   ]);
@@ -200,6 +212,8 @@ test("resolveEffectiveRiskConfig merges global, account, and channel overrides",
         maxPositions: 5,
         autoRaiseMinOrderEnabled: false,
         autoRaiseMinOrderMaxMarginUsdt: 0,
+        autoRaiseTpCountEnabled: false,
+        autoRaiseTpCountMaxMarginUsdt: 0,
       }),
     }),
   });
@@ -221,6 +235,8 @@ test("resolveEffectiveRiskConfig merges global, account, and channel overrides",
                 maxPositions: 2,
                 autoRaiseMinOrderEnabled: true,
                 autoRaiseMinOrderMaxMarginUsdt: 4.2,
+                autoRaiseTpCountEnabled: true,
+                autoRaiseTpCountMaxMarginUsdt: 6.5,
               },
             },
           },
@@ -240,11 +256,15 @@ test("resolveEffectiveRiskConfig merges global, account, and channel overrides",
   assert.equal(merged.maxPositions, 2);
   assert.equal(merged.autoRaiseMinOrderEnabled, true);
   assert.equal(merged.autoRaiseMinOrderMaxMarginUsdt, 4.2);
+  assert.equal(merged.autoRaiseTpCountEnabled, true);
+  assert.equal(merged.autoRaiseTpCountMaxMarginUsdt, 6.5);
   assert.equal(merged.sources.riskPerTradePercent, "account");
   assert.equal(merged.sources.defaultLeverage, "source_chat");
   assert.equal(merged.sources.maxPositions, "source_chat");
   assert.equal(merged.sources.autoRaiseMinOrderEnabled, "source_chat");
   assert.equal(merged.sources.autoRaiseMinOrderMaxMarginUsdt, "source_chat");
+  assert.equal(merged.sources.autoRaiseTpCountEnabled, "source_chat");
+  assert.equal(merged.sources.autoRaiseTpCountMaxMarginUsdt, "source_chat");
 });
 
 test("resolveEffectiveRiskConfig returns global config when no accountId is provided", async () => {

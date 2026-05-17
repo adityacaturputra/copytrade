@@ -33,6 +33,12 @@ function buildBaseForm(account: AccountData): AccountFormData {
       autoRaiseMinOrderMaxMarginUsdt: formatOptionalNumber(
         account.channelConfigs?.[channelId]?.riskOverrides?.autoRaiseMinOrderMaxMarginUsdt,
       ),
+      autoRaiseTpCountMode: toAutoRaiseOverrideMode(
+        account.channelConfigs?.[channelId]?.riskOverrides?.autoRaiseTpCountEnabled,
+      ),
+      autoRaiseTpCountMaxMarginUsdt: formatOptionalNumber(
+        account.channelConfigs?.[channelId]?.riskOverrides?.autoRaiseTpCountMaxMarginUsdt,
+      ),
     })),
     accountRiskPerTradePercent: formatOptionalNumber(
       account.riskOverrides?.riskPerTradePercent,
@@ -42,6 +48,12 @@ function buildBaseForm(account: AccountData): AccountFormData {
     ),
     accountAutoRaiseMinOrderMaxMarginUsdt: formatOptionalNumber(
       account.riskOverrides?.autoRaiseMinOrderMaxMarginUsdt,
+    ),
+    accountAutoRaiseTpCountMode: toAutoRaiseOverrideMode(
+      account.riskOverrides?.autoRaiseTpCountEnabled,
+    ),
+    accountAutoRaiseTpCountMaxMarginUsdt: formatOptionalNumber(
+      account.riskOverrides?.autoRaiseTpCountMaxMarginUsdt,
     ),
     tradingPlatform: resolveAccountFormTradingPlatform(account.tradingPlatform),
     exchangeValues: buildExchangeFormValues(account.exchangeData),

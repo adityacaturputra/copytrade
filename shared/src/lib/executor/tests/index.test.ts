@@ -215,6 +215,8 @@ beforeEach(() => {
     skipNoSL: false,
     autoRaiseMinOrderEnabled: false,
     autoRaiseMinOrderMaxMarginUsdt: 0,
+    autoRaiseTpCountEnabled: false,
+    autoRaiseTpCountMaxMarginUsdt: 0,
   });
   executorMocks.sanitizeLeverage.mockImplementation((value) => {
     if (typeof value === "number") return value;
@@ -1100,6 +1102,8 @@ test("executeTrade auto-raises quantity to the exchange minimum when enabled wit
     skipNoSL: false,
     autoRaiseMinOrderEnabled: true,
     autoRaiseMinOrderMaxMarginUsdt: 0.5,
+    autoRaiseTpCountEnabled: false,
+    autoRaiseTpCountMaxMarginUsdt: 0,
   });
   executorMocks.positionCreate.mockImplementation(async (payload) => ({
     _id: { toString: () => "raised-min-pos" },
@@ -1127,7 +1131,83 @@ test("executeTrade auto-raises quantity to the exchange minimum when enabled wit
     executorMocks.logExecutorInfo.mock.calls.some(
       (call) =>
         String(call[0]).includes("Auto-raised qty for exchange minimum") &&
-        call[1]?.action === "console_min_order_auto_raised",
+        call[1]?.action === "console_auto_raise_min_order",
+    ),
+  );
+});
+
+test("executeTrade auto-raises quantity to support all TP legs when enabled within the configured margin cap", async () => {
+  const exchange = {
+    name: "paper",
+    getAccountInfo: vi
+      .fn()
+      .mockResolvedValue({ availableBalance: 10, totalBalance: 10 }),
+    setLeverage: vi.fn().mockResolvedValue(52),
+    placeOrder: vi.fn().mockResolvedValue({
+      orderId: "tp-count-raised",
+      price: 78062,
+      quantity: 0.003,
+    }),
+    getInstrumentSpecs: vi.fn().mockResolvedValue({
+      lotSz: 0.001,
+      minSz: 0.001,
+      minNotional: 5,
+      qtyDecimals: 3,
+      ctVal: 1,
+      ctValCcy: "BTC",
+      tickSz: 0.1,
+      priceDecimals: 1,
+    }),
+    placeTakeProfit: vi.fn().mockResolvedValue("tp-id"),
+    placeStopLoss: vi.fn().mockResolvedValue("sl-id"),
+  };
+  executorMocks.getPaperClient.mockReturnValue(exchange);
+  executorMocks.calculateRiskBasedPosition.mockResolvedValue({
+    applied: true,
+    quantity: 0.000769218758133,
+    leverage: 52,
+    accountBalance: 10,
+    marginUsdt: 0.56,
+    slDistancePercent: 0.009,
+    notionalSize: 60.05,
+  });
+  executorMocks.resolveEffectiveRiskConfig.mockResolvedValue({
+    defaultLeverage: 10,
+    defaultPositionSize: 1,
+    defaultRR: 2,
+    maxPositions: 0,
+    skipNoSL: false,
+    autoRaiseMinOrderEnabled: false,
+    autoRaiseMinOrderMaxMarginUsdt: 0,
+    autoRaiseTpCountEnabled: true,
+    autoRaiseTpCountMaxMarginUsdt: 5,
+  });
+  executorMocks.positionCreate.mockImplementation(async (payload) => ({
+    _id: { toString: () => "raised-tp-pos" },
+    side: payload.side,
+    ...payload,
+  }));
+
+  const position = await executeTrade({
+    symbol: "BTCUSDT",
+    action: "BUY",
+    entryPrice: 78062,
+    stopLoss: 77447,
+    takeProfitTargets: [78661, 79631, 80652],
+    leverage: 10,
+    quantity: 1,
+    orderType: "MARKET",
+    channelId: "chan-tp-raise",
+    signalData: "{}",
+  } as never);
+
+  assert.equal(exchange.placeOrder.mock.calls[0]?.[0].quantity, 0.003);
+  assert.equal(position.margin?.toFixed(2), "4.50");
+  assert.ok(
+    executorMocks.logExecutorInfo.mock.calls.some(
+      (call) =>
+        String(call[0]).includes("Auto-raised qty for TP count") &&
+        call[1]?.action === "console_auto_raise_tp_count",
     ),
   );
 });

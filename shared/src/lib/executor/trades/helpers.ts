@@ -196,3 +196,65 @@ export async function enforceExchangeMinimums(
 
   return { ...sizing, orderQuantity, orderLeverage, plannedMarginUsdt: requiredMargin };
 }
+
+export async function enforceTpCountFeasibility(
+  exchange: Awaited<ReturnType<typeof resolveTradeExchange>>,
+  runtime: TradeRuntime,
+  sizing: Awaited<ReturnType<typeof applyTradeRiskManagement>>,
+) {
+  let { orderQuantity, orderLeverage } = sizing;
+  const entryPrice = runtime.entryPrice || 0;
+  const requestedTpCount = runtime.takeProfitTargets?.length || 0;
+
+  if (!entryPrice || entryPrice <= 0 || requestedTpCount <= 1) {
+    return { ...sizing, orderQuantity, orderLeverage };
+  }
+
+  const specs = await exchange.getInstrumentSpecs(runtime.symbol);
+  const minExecutableTpQty = Math.max(specs.lotSz || 0, 0);
+  const requiredTotalQty = requestedTpCount * minExecutableTpQty;
+  if (!minExecutableTpQty || orderQuantity >= requiredTotalQty) {
+    return { ...sizing, orderQuantity, orderLeverage };
+  }
+
+  const effectiveRiskConfig = await resolveEffectiveRiskConfig({
+    accountId: runtime.accountId,
+    channelId: runtime.channelId,
+  });
+  if (!effectiveRiskConfig.autoRaiseTpCountEnabled) {
+    return { ...sizing, orderQuantity, orderLeverage };
+  }
+
+  const requiredQty = roundUpToStep(
+    requiredTotalQty,
+    specs.lotSz,
+    specs.qtyDecimals,
+  );
+  const requiredMargin = (requiredQty * entryPrice) / orderLeverage;
+  const autoRaiseCap = effectiveRiskConfig.autoRaiseTpCountMaxMarginUsdt;
+
+  if (!autoRaiseCap || requiredMargin > autoRaiseCap) {
+    return { ...sizing, orderQuantity, orderLeverage };
+  }
+  if (
+    sizing.riskAccountBalance !== undefined &&
+    Number.isFinite(sizing.riskAccountBalance) &&
+    requiredMargin > sizing.riskAccountBalance
+  ) {
+    return { ...sizing, orderQuantity, orderLeverage };
+  }
+
+  const originalQuantity = orderQuantity;
+  orderQuantity = requiredQty;
+  await logExecutorInfo(
+    `${runtime.logPrefix}📏 Auto-raised qty for TP count: qty=${originalQuantity.toFixed(specs.qtyDecimals)} → ${orderQuantity.toFixed(specs.qtyDecimals)}, tpCount=${requestedTpCount}, minPerTp=${minExecutableTpQty.toFixed(specs.qtyDecimals)}, margin=$${formatUsd(requiredMargin)} at ${orderLeverage}x`,
+    {
+      accountId: runtime.accountId,
+      processId: runtime.processId,
+      symbol: runtime.symbol,
+      action: "console_auto_raise_tp_count",
+    },
+  );
+
+  return { ...sizing, orderQuantity, orderLeverage, plannedMarginUsdt: requiredMargin };
+}

@@ -88,6 +88,9 @@ export function useSettingsAccounts(check403: (res: Response) => boolean) {
       if (channel.autoRaiseMinOrderMode !== "inherit") channelRiskOverrides.autoRaiseMinOrderEnabled = channel.autoRaiseMinOrderMode === "enabled";
       const channelAutoRaiseCap = parseOptionalNonNegativeNumber(channel.autoRaiseMinOrderMaxMarginUsdt);
       if (channelAutoRaiseCap !== null) channelRiskOverrides.autoRaiseMinOrderMaxMarginUsdt = channelAutoRaiseCap;
+      if (channel.autoRaiseTpCountMode !== "inherit") channelRiskOverrides.autoRaiseTpCountEnabled = channel.autoRaiseTpCountMode === "enabled";
+      const channelTpRaiseCap = parseOptionalNonNegativeNumber(channel.autoRaiseTpCountMaxMarginUsdt);
+      if (channelTpRaiseCap !== null) channelRiskOverrides.autoRaiseTpCountMaxMarginUsdt = channelTpRaiseCap;
       if (Object.keys(channelRiskOverrides).length > 0) channelConfigs[channel.id.trim()] = { riskOverrides: channelRiskOverrides };
     }
 
@@ -96,6 +99,9 @@ export function useSettingsAccounts(check403: (res: Response) => boolean) {
     if (accountRiskPerTradePercent !== null) accountRiskOverrides.riskPerTradePercent = accountRiskPerTradePercent;
     if (form.accountAutoRaiseMinOrderMode !== "inherit") accountRiskOverrides.autoRaiseMinOrderEnabled = form.accountAutoRaiseMinOrderMode === "enabled";
     if (accountAutoRaiseCap !== null) accountRiskOverrides.autoRaiseMinOrderMaxMarginUsdt = accountAutoRaiseCap;
+    if (form.accountAutoRaiseTpCountMode !== "inherit") accountRiskOverrides.autoRaiseTpCountEnabled = form.accountAutoRaiseTpCountMode === "enabled";
+    const accountTpRaiseCap = parseOptionalNonNegativeNumber(form.accountAutoRaiseTpCountMaxMarginUsdt);
+    if (accountTpRaiseCap !== null) accountRiskOverrides.autoRaiseTpCountMaxMarginUsdt = accountTpRaiseCap;
 
     if (!form.name.trim()) return setAndStop(setFormError, setSaving, "Account name is required.");
     if (channelIdsArray.length === 0) return setAndStop(setFormError, setSaving, "At least one channel is required.");
@@ -103,6 +109,9 @@ export function useSettingsAccounts(check403: (res: Response) => boolean) {
     if (form.accountAutoRaiseMinOrderMode === "enabled" && accountAutoRaiseCap !== null && accountAutoRaiseCap <= 0) return setAndStop(setFormError, setSaving, "Account auto-raise max margin override must be greater than 0 when enabled.");
     const invalidChannelAutoRaise = validChannels.find((channel) => channel.autoRaiseMinOrderMode === "enabled" && channel.autoRaiseMinOrderMaxMarginUsdt.trim() && parseOptionalNonNegativeNumber(channel.autoRaiseMinOrderMaxMarginUsdt) === 0);
     if (invalidChannelAutoRaise) return setAndStop(setFormError, setSaving, `Channel auto-raise max margin override for ${invalidChannelAutoRaise.id || "selected chat"} must be greater than 0 when enabled.`);
+    if (form.accountAutoRaiseTpCountMode === "enabled" && accountTpRaiseCap !== null && accountTpRaiseCap <= 0) return setAndStop(setFormError, setSaving, "Account TP auto-raise max margin override must be greater than 0 when enabled.");
+    const invalidChannelTpAutoRaise = validChannels.find((channel) => channel.autoRaiseTpCountMode === "enabled" && channel.autoRaiseTpCountMaxMarginUsdt.trim() && parseOptionalNonNegativeNumber(channel.autoRaiseTpCountMaxMarginUsdt) === 0);
+    if (invalidChannelTpAutoRaise) return setAndStop(setFormError, setSaving, `Channel TP auto-raise max margin override for ${invalidChannelTpAutoRaise.id || "selected chat"} must be greater than 0 when enabled.`);
     const invalidChannelRisk = validChannels.find((channel) => channel.riskPerTradePercent.trim() && parseOptionalPositiveNumber(channel.riskPerTradePercent) === null);
     if (invalidChannelRisk) return setAndStop(setFormError, setSaving, `Channel Risk Per Trade override for ${invalidChannelRisk.id || "selected chat"} must be a positive number.`);
 

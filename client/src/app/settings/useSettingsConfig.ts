@@ -68,6 +68,11 @@ export function useSettingsConfig(check403: (res: Response) => boolean) {
       setRiskSaving(false);
       return;
     }
+    if (riskConfig.autoRaiseTpCountEnabled && riskConfig.autoRaiseTpCountMaxMarginUsdt <= 0) {
+      setRiskError("TP auto-raise max margin must be greater than 0 when the global setting is enabled.");
+      setRiskSaving(false);
+      return;
+    }
     try {
       const res = await fetch("/api/settings", { method: "POST", headers: withActionPassword({ "Content-Type": "application/json" }), body: JSON.stringify({ risk: riskConfig }) });
       if (check403(res)) {

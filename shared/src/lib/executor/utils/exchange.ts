@@ -16,7 +16,12 @@ export function roundUpToStep(
     return Number(value.toFixed(Math.max(0, decimals)));
   }
 
-  const units = Math.ceil((value + Number.EPSILON) / step);
+  const ratio = value / step;
+  const roundedRatio = Math.round(ratio);
+  const units =
+    Math.abs(ratio - roundedRatio) <= 1e-9
+      ? roundedRatio
+      : Math.ceil(ratio - 1e-12);
   return Number((units * step).toFixed(Math.max(0, decimals)));
 }
 

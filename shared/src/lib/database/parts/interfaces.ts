@@ -149,6 +149,8 @@ export interface IRiskSettings extends Document {
   trailingStopMode?: boolean;
   autoRaiseMinOrderEnabled?: boolean;
   autoRaiseMinOrderMaxMarginUsdt?: number;
+  autoRaiseTpCountEnabled?: boolean;
+  autoRaiseTpCountMaxMarginUsdt?: number;
 }
 
 export interface ISignalConfig extends Document {

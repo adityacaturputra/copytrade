@@ -138,7 +138,9 @@ export const RiskSettingsSchema = new Schema({
   allowManualEntry: { type: Boolean, default: false },
   trailingStopMode: { type: Boolean, default: false },
   autoRaiseMinOrderEnabled: { type: Boolean, default: false },
-  autoRaiseMinOrderMaxMarginUsdt: { type: Number, default: 0 }
+  autoRaiseMinOrderMaxMarginUsdt: { type: Number, default: 0 },
+  autoRaiseTpCountEnabled: { type: Boolean, default: false },
+  autoRaiseTpCountMaxMarginUsdt: { type: Number, default: 0 }
 }, { strict: false });
 
 export const SignalConfigSchema = new Schema({

@@ -21,7 +21,7 @@ import { setBybitLeverage } from "./parts/leverage";
 import { getBybitTickerPrice, getBybitKlines, getBybitInstrumentSpecs } from "./parts/market";
 import { placeBybitOrder, cancelBybitOrder, getBybitOpenOrders, getBybitAlgoOrders, cancelBybitAlgoOrders, getBybitOrderHistory } from "./parts/orders";
 import { fetchBybitPositions, mapBybitOpenPositions, closeBybitPosition, closeBybitAllPositions, placeBybitConditionalCloseOrder } from "./parts/positions";
-import { bybitRequest } from "./parts/request";
+import { bybitPublicRequest, bybitRequest } from "./parts/request";
 import { BybitCtx } from "./parts/types";
 
 const BYBIT_RECV_WINDOW = "10000";
@@ -83,9 +83,7 @@ export class BybitExchange implements ExchangeClient {
   }
 
   async publicRequest<T>(p: string, params?: any): Promise<T> {
-    const r = await this.client.get(p, { params });
-    if (r.data.retCode !== 0) throw new Error(r.data.retMsg || "Bybit error");
-    return r.data.result;
+    return bybitPublicRequest(this.getHelperContext(), p, params);
   }
   async signedRequest<T>(m: "GET" | "POST", p: string, params?: any): Promise<T> { return bybitRequest(this.getHelperContext(), m, p, params); }
 

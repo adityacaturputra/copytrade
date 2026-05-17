@@ -61,6 +61,35 @@ export function ChannelsSection({
               }))
             }
           />
+          <div>
+            <label className="block text-sm text-slate-400 mb-1">Account TP Auto-Raise</label>
+            <select
+              value={form.accountAutoRaiseTpCountMode}
+              onChange={(e) =>
+                setForm((prev) => ({
+                  ...prev,
+                  accountAutoRaiseTpCountMode: e.target.value as AutoRaiseOverrideMode,
+                }))
+              }
+              className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
+            >
+              <option value="inherit">Use inherited</option>
+              <option value="enabled">Enabled</option>
+              <option value="disabled">Disabled</option>
+            </select>
+          </div>
+          <InputField
+            label="Account TP Auto-Raise Max Margin (USDT)"
+            type="number"
+            value={form.accountAutoRaiseTpCountMaxMarginUsdt}
+            placeholder="Leave empty to use inherited TP cap"
+            onChange={(value) =>
+              setForm((prev) => ({
+                ...prev,
+                accountAutoRaiseTpCountMaxMarginUsdt: value,
+              }))
+            }
+          />
         </div>
         <p className="text-xs text-slate-500 mt-2">
           Override account berlaku di atas global. Channel tertentu tetap bisa override lagi, termasuk saat account di-set disabled dan channel di-set enabled.
@@ -69,7 +98,11 @@ export function ChannelsSection({
 
       <div className="space-y-2">
         {form.channels.map((channel, index) => (
-          <div key={index} className="grid grid-cols-1 md:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_190px_180px_220px_auto] gap-2">
+          <div
+            key={index}
+            className="rounded-lg border border-slate-700 bg-slate-900/30 p-3"
+          >
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
             <InputField
               value={channel.id}
               placeholder={form.sourceType === "telegram" ? "@channel_username or -100xxx" : "Channel ID"}
@@ -87,6 +120,8 @@ export function ChannelsSection({
               placeholder="Channel RPT override %"
               onChange={(value) => updateChannel(index, { riskPerTradePercent: value })}
             />
+            </div>
+            <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,220px)_minmax(0,220px)_auto]">
             <select
               value={channel.autoRaiseMinOrderMode}
               onChange={(e) =>
@@ -94,19 +129,42 @@ export function ChannelsSection({
                   autoRaiseMinOrderMode: e.target.value as AutoRaiseOverrideMode,
                 })
               }
-              className="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
+              className="min-w-0 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
             >
               <option value="inherit">Auto-raise inherit</option>
               <option value="enabled">Enabled</option>
               <option value="disabled">Disabled</option>
             </select>
-            <div className="flex gap-2">
+            <select
+              value={channel.autoRaiseTpCountMode}
+              onChange={(e) =>
+                updateChannel(index, {
+                  autoRaiseTpCountMode: e.target.value as AutoRaiseOverrideMode,
+                })
+              }
+              className="min-w-0 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
+            >
+              <option value="inherit">TP auto-raise inherit</option>
+              <option value="enabled">Enabled</option>
+              <option value="disabled">Disabled</option>
+            </select>
+            <div className="min-w-0">
               <InputField
                 type="number"
                 value={channel.autoRaiseMinOrderMaxMarginUsdt}
                 placeholder="Auto-raise cap USDT"
                 onChange={(value) =>
                   updateChannel(index, { autoRaiseMinOrderMaxMarginUsdt: value })
+                }
+              />
+            </div>
+            <div className="flex min-w-0 gap-2">
+              <InputField
+                type="number"
+                value={channel.autoRaiseTpCountMaxMarginUsdt}
+                placeholder="TP auto-raise cap USDT"
+                onChange={(value) =>
+                  updateChannel(index, { autoRaiseTpCountMaxMarginUsdt: value })
                 }
               />
               {form.channels.length > 1 && (
@@ -125,6 +183,7 @@ export function ChannelsSection({
               )}
             </div>
           </div>
+          </div>
         ))}
 
         <button
@@ -140,6 +199,8 @@ export function ChannelsSection({
                   riskPerTradePercent: "",
                   autoRaiseMinOrderMode: "inherit",
                   autoRaiseMinOrderMaxMarginUsdt: "",
+                  autoRaiseTpCountMode: "inherit",
+                  autoRaiseTpCountMaxMarginUsdt: "",
                 },
               ],
             }))
@@ -175,14 +236,14 @@ function InputField({
   className?: string;
 }) {
   return (
-    <div>
+    <div className={className}>
       {label && <label className="block text-sm text-slate-400 mb-1">{label}</label>}
       <input
         type={type}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className={`w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none ${className}`}
+        className="w-full min-w-0 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-primary-500 focus:outline-none"
       />
     </div>
   );

@@ -18,6 +18,8 @@ export interface RiskConfig {
   maxPositions: number; // default 5 — max concurrent open positions (0 = unlimited)
   autoRaiseMinOrderEnabled: boolean; // allow auto-raising margin to meet exchange minimums
   autoRaiseMinOrderMaxMarginUsdt: number; // max margin in USDT allowed for auto-raise
+  autoRaiseTpCountEnabled: boolean; // allow auto-raising margin to support all TP legs
+  autoRaiseTpCountMaxMarginUsdt: number; // max margin in USDT allowed for TP-count auto-raise
 }
 
 export interface RiskCalculation {
@@ -53,6 +55,8 @@ export interface EffectiveRiskConfig extends RiskConfig {
     maxPositions: "global" | "account" | "source_chat";
     autoRaiseMinOrderEnabled: "global" | "account" | "source_chat";
     autoRaiseMinOrderMaxMarginUsdt: "global" | "account" | "source_chat";
+    autoRaiseTpCountEnabled: "global" | "account" | "source_chat";
+    autoRaiseTpCountMaxMarginUsdt: "global" | "account" | "source_chat";
   };
 }
 
@@ -69,6 +73,8 @@ const DEFAULT_RISK_CONFIG: RiskConfig = {
   maxPositions: 5,
   autoRaiseMinOrderEnabled: false,
   autoRaiseMinOrderMaxMarginUsdt: 0,
+  autoRaiseTpCountEnabled: false,
+  autoRaiseTpCountMaxMarginUsdt: 0,
 };
 
 type RiskConfigField = keyof RiskConfig;
@@ -84,6 +90,8 @@ const RISK_CONFIG_FIELDS: RiskConfigField[] = [
   "maxPositions",
   "autoRaiseMinOrderEnabled",
   "autoRaiseMinOrderMaxMarginUsdt",
+  "autoRaiseTpCountEnabled",
+  "autoRaiseTpCountMaxMarginUsdt",
 ];
 
 function toRiskOverrideConfig(value: unknown): RiskOverrideConfig {
@@ -104,7 +112,9 @@ function toRiskOverrideConfig(value: unknown): RiskOverrideConfig {
 
     if (
       typeof fieldValue === "boolean" &&
-      (field === "skipNoSL" || field === "autoRaiseMinOrderEnabled")
+      (field === "skipNoSL" ||
+        field === "autoRaiseMinOrderEnabled" ||
+        field === "autoRaiseTpCountEnabled")
     ) {
       overrides[field] = fieldValue as never;
     }
@@ -158,6 +168,8 @@ export function mergeRiskConfigOverrides(
     maxPositions: "global",
     autoRaiseMinOrderEnabled: "global",
     autoRaiseMinOrderMaxMarginUsdt: "global",
+    autoRaiseTpCountEnabled: "global",
+    autoRaiseTpCountMaxMarginUsdt: "global",
   };
 
   for (const field of RISK_CONFIG_FIELDS) {
@@ -197,6 +209,10 @@ export async function getRiskConfig(): Promise<RiskConfig> {
           settings.autoRaiseMinOrderEnabled ?? false,
         autoRaiseMinOrderMaxMarginUsdt:
           settings.autoRaiseMinOrderMaxMarginUsdt ?? 0,
+        autoRaiseTpCountEnabled:
+          settings.autoRaiseTpCountEnabled ?? false,
+        autoRaiseTpCountMaxMarginUsdt:
+          settings.autoRaiseTpCountMaxMarginUsdt ?? 0,
       };
     }
   } catch (err) {
@@ -244,6 +260,13 @@ export async function setRiskConfig(
     update.autoRaiseMinOrderMaxMarginUsdt =
       config.autoRaiseMinOrderMaxMarginUsdt;
   }
+  if (config.autoRaiseTpCountEnabled !== undefined) {
+    update.autoRaiseTpCountEnabled = config.autoRaiseTpCountEnabled;
+  }
+  if (config.autoRaiseTpCountMaxMarginUsdt !== undefined) {
+    update.autoRaiseTpCountMaxMarginUsdt =
+      config.autoRaiseTpCountMaxMarginUsdt;
+  }
   const doc = await RiskSettingsModel.findOneAndUpdate({}, update, {
     upsert: true,
     new: true,
@@ -259,6 +282,8 @@ export async function setRiskConfig(
     maxPositions: doc.maxPositions ?? 5,
     autoRaiseMinOrderEnabled: doc.autoRaiseMinOrderEnabled ?? false,
     autoRaiseMinOrderMaxMarginUsdt: doc.autoRaiseMinOrderMaxMarginUsdt ?? 0,
+    autoRaiseTpCountEnabled: doc.autoRaiseTpCountEnabled ?? false,
+    autoRaiseTpCountMaxMarginUsdt: doc.autoRaiseTpCountMaxMarginUsdt ?? 0,
   };
 }
 

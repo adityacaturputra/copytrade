@@ -23,6 +23,8 @@ export interface AccountData {
     riskPerTradePercent?: number;
     autoRaiseMinOrderEnabled?: boolean;
     autoRaiseMinOrderMaxMarginUsdt?: number;
+    autoRaiseTpCountEnabled?: boolean;
+    autoRaiseTpCountMaxMarginUsdt?: number;
     [key: string]: unknown;
   } | null;
   channelConfigs?: Record<
@@ -32,6 +34,8 @@ export interface AccountData {
         riskPerTradePercent?: number;
         autoRaiseMinOrderEnabled?: boolean;
         autoRaiseMinOrderMaxMarginUsdt?: number;
+        autoRaiseTpCountEnabled?: boolean;
+        autoRaiseTpCountMaxMarginUsdt?: number;
         [key: string]: unknown;
       };
       [key: string]: unknown;
@@ -60,6 +64,8 @@ export interface ChannelEntry {
   riskPerTradePercent: string;
   autoRaiseMinOrderMode: AutoRaiseOverrideMode;
   autoRaiseMinOrderMaxMarginUsdt: string;
+  autoRaiseTpCountMode: AutoRaiseOverrideMode;
+  autoRaiseTpCountMaxMarginUsdt: string;
 }
 
 export interface AccountFormData {
@@ -78,6 +84,8 @@ export interface AccountFormData {
   accountRiskPerTradePercent: string;
   accountAutoRaiseMinOrderMode: AutoRaiseOverrideMode;
   accountAutoRaiseMinOrderMaxMarginUsdt: string;
+  accountAutoRaiseTpCountMode: AutoRaiseOverrideMode;
+  accountAutoRaiseTpCountMaxMarginUsdt: string;
   // Exchange
   tradingPlatform: string;
   exchangeValues: ExchangeFormValues;
@@ -100,11 +108,15 @@ export const emptyForm: AccountFormData = {
       riskPerTradePercent: "",
       autoRaiseMinOrderMode: "inherit",
       autoRaiseMinOrderMaxMarginUsdt: "",
+      autoRaiseTpCountMode: "inherit",
+      autoRaiseTpCountMaxMarginUsdt: "",
     },
   ],
   accountRiskPerTradePercent: "",
   accountAutoRaiseMinOrderMode: "inherit",
   accountAutoRaiseMinOrderMaxMarginUsdt: "",
+  accountAutoRaiseTpCountMode: "inherit",
+  accountAutoRaiseTpCountMaxMarginUsdt: "",
   tradingPlatform: DEFAULT_ACCOUNT_EXCHANGE_PROVIDER,
   exchangeValues: createEmptyExchangeFormValues(),
   exchangeIsDemo: false,
@@ -120,6 +132,8 @@ export function createEmptyAccountForm(): AccountFormData {
         riskPerTradePercent: "",
         autoRaiseMinOrderMode: "inherit",
         autoRaiseMinOrderMaxMarginUsdt: "",
+        autoRaiseTpCountMode: "inherit",
+        autoRaiseTpCountMaxMarginUsdt: "",
       },
     ],
     exchangeValues: createEmptyExchangeFormValues(),
@@ -137,6 +151,8 @@ export interface RiskConfig {
   maxPositions: number;
   autoRaiseMinOrderEnabled: boolean;
   autoRaiseMinOrderMaxMarginUsdt: number;
+  autoRaiseTpCountEnabled: boolean;
+  autoRaiseTpCountMaxMarginUsdt: number;
 }
 
 export const defaultRiskConfig: RiskConfig = {
@@ -150,6 +166,8 @@ export const defaultRiskConfig: RiskConfig = {
   maxPositions: 5,
   autoRaiseMinOrderEnabled: false,
   autoRaiseMinOrderMaxMarginUsdt: 0,
+  autoRaiseTpCountEnabled: false,
+  autoRaiseTpCountMaxMarginUsdt: 0,
 };
 
 export interface SignalConfigType {
