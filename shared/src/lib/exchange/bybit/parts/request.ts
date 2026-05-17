@@ -24,6 +24,7 @@ export async function bybitRequest(ctx: BybitCtx, method: "GET" | "POST", path: 
       return response.data.result;
     } catch (error) {
       if (attempt >= COUNTRY_BLOCK_MAX_RETRIES) throw error;
+      const errorText = extractBybitErrorText(error);
       if (axios.isAxiosError(error) && error.response?.status === 403) {
         const dataText = JSON.stringify(error.response?.data || "").toLowerCase();
         if (dataText.includes("cloudfront") || dataText.includes("block access")) {
@@ -35,7 +36,25 @@ export async function bybitRequest(ctx: BybitCtx, method: "GET" | "POST", path: 
           continue;
         }
       }
+      if (errorText.includes("cloudfront") || errorText.includes("block access")) {
+        await markCurrentProxyCountryBlocked();
+        continue;
+      }
+      if (errorText.includes("unmatched") || errorText.includes("ip whitelist") || errorText.includes("bound ip")) {
+        await markCurrentProxyIpBlocked();
+        continue;
+      }
       throw error;
     }
   }
+}
+
+function extractBybitErrorText(error: unknown): string {
+  if (axios.isAxiosError(error)) {
+    return `${error.message} ${JSON.stringify(error.response?.data || "")}`.toLowerCase();
+  }
+  if (error instanceof Error) {
+    return error.message.toLowerCase();
+  }
+  return String(error || "").toLowerCase();
 }
