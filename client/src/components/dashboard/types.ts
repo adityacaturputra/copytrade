@@ -255,6 +255,7 @@ export function formatPositionTakeProfitTargets(
 export interface DraftTrade {
   _id: string;
   processId?: string;
+  accountId?: string;
   messageId: string;
   channelId: string;
   messageUrl: string;
@@ -277,6 +278,7 @@ export interface DraftTrade {
   sourceTimestamp?: string;
   createdAt: string;
   resolvedAt?: string;
+  instrumentLotSize?: number | null;
 }
 
 export type DraftAction = "accept" | "reject" | "redraft" | "reanalyze";

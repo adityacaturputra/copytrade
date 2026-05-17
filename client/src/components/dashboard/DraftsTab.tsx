@@ -69,9 +69,22 @@ export function DraftsTab({
 
   if (loading && drafts.length === 0) {
     return (
-      <div className="text-center py-8 text-slate-400">
-        <div className="spinner mx-auto mb-3" />
-        <p>Loading drafts...</p>
+      <div className="space-y-4 min-h-[520px]">
+        <div className="flex items-center justify-between">
+          <div className="h-5 w-32 rounded bg-slate-800/80 animate-pulse" />
+          <div className="h-8 w-24 rounded-lg bg-slate-800/80 animate-pulse" />
+        </div>
+        {Array.from({ length: 3 }).map((_, index) => (
+          <div key={index} className="rounded-lg border border-slate-700/70 bg-slate-900/40 p-4 animate-pulse">
+            <div className="flex items-center gap-2">
+              <div className="h-4 w-4 rounded bg-slate-800/80" />
+              <div className="h-5 w-12 rounded-full bg-slate-800/80" />
+              <div className="h-5 w-20 rounded bg-slate-800/80" />
+            </div>
+            <div className="mt-3 h-4 w-48 rounded bg-slate-800/70" />
+            <div className="mt-2 h-20 rounded-lg bg-slate-800/60" />
+          </div>
+        ))}
       </div>
     );
   }

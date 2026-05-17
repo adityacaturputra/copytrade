@@ -4,7 +4,6 @@ import {
   DashboardAccountSummary,
   DashboardCronStatus,
   DashboardFilters,
-  DashboardStats,
   DashboardTabs,
 } from "./sections";
 import { DashboardHeader } from "./header";
@@ -143,8 +142,6 @@ export function DashboardPageView() {
               expandedCron={expandedCron}
               onToggle={setExpandedCron}
             />
-
-            <DashboardStats stats={stats} />
 
             <div className="card">
               <DashboardFilters

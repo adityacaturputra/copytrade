@@ -6,10 +6,15 @@ import {
 } from "express";
 import {
   connectDB,
+  Account,
   DraftTrade,
   ProcessedMessage,
 } from "@copytrade/shared/lib/database/index";
 import type { TradingSignal } from "@copytrade/shared/lib/ai/core/types";
+import {
+  ExchangeFactory,
+  buildExchangeCredentials,
+} from "@copytrade/shared/lib/exchange/ExchangeFactory";
 import {
   analyzeMessagesWithAI,
   createDraft,
@@ -55,10 +60,72 @@ router.get("/", async (req: Request, res: Response) => {
       DraftTrade.countDocuments(filter),
     ]);
 
+    const accountIds = [
+      ...new Set(
+        drafts
+          .map((draft) => draft.accountId?.toString())
+          .filter((value): value is string => Boolean(value)),
+      ),
+    ];
+    const accounts = accountIds.length
+      ? await Account.find({ _id: { $in: accountIds } }).lean()
+      : [];
+    const accountMap = new Map(
+      accounts.map((account) => [account._id.toString(), account]),
+    );
+    const specsCache = new Map<string, number | null>();
+
+    const draftsWithSpecs = await Promise.all(
+      drafts.map(async (draft) => {
+        const accountIdValue = draft.accountId?.toString();
+        if (!accountIdValue) {
+          return { ...draft, instrumentLotSize: null };
+        }
+
+        const cacheKey = `${accountIdValue}:${draft.symbol}`;
+        if (specsCache.has(cacheKey)) {
+          return {
+            ...draft,
+            instrumentLotSize: specsCache.get(cacheKey) ?? null,
+          };
+        }
+
+        const account = accountMap.get(accountIdValue);
+        if (!account?.exchangeData) {
+          specsCache.set(cacheKey, null);
+          return { ...draft, instrumentLotSize: null };
+        }
+
+        try {
+          const creds = buildExchangeCredentials(
+            account.tradingPlatform,
+            (account.exchangeData as Record<string, unknown>) || {},
+          );
+          if (!creds) {
+            specsCache.set(cacheKey, null);
+            return { ...draft, instrumentLotSize: null };
+          }
+
+          const exchange = ExchangeFactory.getClientForAccount(creds);
+          const specs = await exchange.getInstrumentSpecs(draft.symbol);
+          const lotSize =
+            typeof specs.lotSz === "number" && Number.isFinite(specs.lotSz)
+              ? specs.lotSz
+              : null;
+
+          specsCache.set(cacheKey, lotSize);
+          return { ...draft, instrumentLotSize: lotSize };
+        } catch {
+          specsCache.set(cacheKey, null);
+          return { ...draft, instrumentLotSize: null };
+        }
+      }),
+    );
+
     res.json({
       success: true,
       data: {
-        drafts,
+        drafts: draftsWithSpecs,
         page,
         limit,
         totalCount,

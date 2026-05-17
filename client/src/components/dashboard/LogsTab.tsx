@@ -212,9 +212,18 @@ export function LogsTab({
       {/* Terminal Log View */}
       <div className="flex flex-col-reverse h-[600px] overflow-y-auto bg-[#0D1117] rounded-lg border border-slate-800 p-3 font-mono text-[11px] leading-relaxed relative">
         {loading && logs.length === 0 ? (
-          <div className="flex-1 flex flex-col items-center justify-center text-slate-500 py-8">
-            <div className="spinner mx-auto mb-3" />
-            <p>Loading terminal...</p>
+          <div className="flex-1 flex flex-col justify-start gap-2 py-2">
+            {Array.from({ length: 12 }).map((_, index) => (
+              <div
+                key={index}
+                className="grid grid-cols-[120px_50px_120px_1fr] gap-3 items-center rounded px-2 py-1.5 animate-pulse"
+              >
+                <div className="h-3 rounded bg-slate-800/80" />
+                <div className="h-3 rounded bg-slate-800/70" />
+                <div className="h-3 rounded bg-slate-800/70" />
+                <div className="h-3 rounded bg-slate-800/60" />
+              </div>
+            ))}
           </div>
         ) : !loading && totalCount === 0 ? (
           <div className="flex-1 flex flex-col items-center justify-center text-slate-500 py-8">
