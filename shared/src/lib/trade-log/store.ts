@@ -1,87 +1,9 @@
-import { mkdir, appendFile, readFile, stat, writeFile, rm } from "fs/promises";
-import path from "path";
-import { randomUUID } from "crypto";
-import mongoose from "mongoose";
-
-export interface TradeLogRecord {
-  _id: string;
-  accountId?: string | null;
-  processId?: string | null;
-  type: string;
-  action: string;
-  symbol?: string | null;
-  details?: string | null;
-  level?: string | null;
-  result?: string | null;
-  error?: string | null;
-  createdAt: string;
-}
-
-export interface TradeLogCreateInput {
-  accountId?: string | null;
-  processId?: string | null;
-  type: string;
-  action: string;
-  symbol?: string | null;
-  details?: string | null;
-  level?: string | null;
-  result?: string | null;
-  error?: string | null;
-  createdAt?: string | Date;
-}
-
-export interface TradeLogListOptions {
-  page?: number;
-  limit?: number;
-  accountId?: string | null;
-  processId?: string | null;
-  symbol?: string | null;
-  levels?: string[] | null;
-  hideCronNoise?: boolean;
-  order?: "asc" | "desc";
-}
-
-export interface TradeLogListResult {
-  logs: TradeLogRecord[];
-  totalCount: number;
-  page: number;
-  limit: number;
-  totalPages: number;
-}
-
-export interface TradeLogCleanupOptions {
-  mode: "noisy-json" | "retention";
-  keepDays?: number;
-}
-
-export interface TradeLogCleanupResult {
-  mode: "noisy-json" | "retention";
-  keepDays?: number;
-  scannedCount: number;
-  deletedCount: number;
-  remainingCount: number;
-  deletedFileCount: number;
-  deletedMongoCount: number;
-}
-
-type LogStorageMode = "file" | "mongo" | "dual";
-
-function isBackendRuntime() {
-  return process.env.COPYTRADE_RUNTIME === "backend";
-}
-
-function shouldUseRemoteBackendApi() {
-  if (isBackendRuntime()) return false;
-  if (!resolveRemoteBackendBaseUrl()) return false;
-
-  return Boolean(process.env.NEXT_RUNTIME || process.env.VERCEL);
-}
-
-function resolveRemoteBackendBaseUrl() {
-  const rawUrl = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL;
-  const trimmed = String(rawUrl || "").trim();
-  return trimmed ? trimmed.replace(/\/+$/, "") : null;
-}
+import { applyLogFilters, dedupeLogs, isHiddenByDefaultTradeLog, isNoisyTradeLog, sortLogs, shouldHideCronNoise } from "./filters";
+import { getAllLogsFilePath, getProcessLogFilePath, resolveRemoteBackendBaseUrl, resolveStorageMode, shouldReadMongoLegacy, shouldUseRemoteBackendApi, shouldWriteFile, shouldWriteMongo } from "./config";
+import { ensureLogDirs, fileExists, readGlobalFileLogs, readJsonLinesFile, readProcessFileLogs, rewriteAllFileLogs, writeLogToFiles } from "./file-store";
+import { normalizeTradeLogRecord } from "./normalize";
+import { isMongoReady, loadDatabaseModule, readAllMongoLogs, readAllMongoLogsWithIds, readMongoLogsByProcess, writeLogToMongo } from "./mongo-store";
+import type { LogStorageMode, TradeLogCleanupOptions, TradeLogCleanupResult, TradeLogCreateInput, TradeLogListOptions, TradeLogListResult, TradeLogRecord } from "./types";
 
 async function fetchRemoteLogs<T>(
   pathname: string,
@@ -110,416 +32,6 @@ async function fetchRemoteLogs<T>(
   return (payload.data as T) ?? (payload as unknown as T);
 }
 
-function resolveStorageMode(): LogStorageMode {
-  const rawMode = String(process.env.PROCESS_LOG_STORAGE || "file")
-    .trim()
-    .toLowerCase();
-
-  if (rawMode === "mongo" || rawMode === "dual" || rawMode === "file") {
-    return rawMode;
-  }
-
-  return "file";
-}
-
-function shouldWriteFile() {
-  const mode = resolveStorageMode();
-  return mode === "file" || mode === "dual";
-}
-
-function shouldWriteMongo() {
-  const mode = resolveStorageMode();
-  return mode === "mongo" || mode === "dual";
-}
-
-function shouldReadMongoLegacy() {
-  return String(process.env.PROCESS_LOG_INCLUDE_MONGO_LEGACY ?? "true")
-    .trim()
-    .toLowerCase() !== "false";
-}
-
-function getLogBaseDir() {
-  return process.env.PROCESS_LOG_DIR?.trim()
-    ? path.resolve(process.env.PROCESS_LOG_DIR)
-    : path.join(process.cwd(), "data", "process-logs");
-}
-
-function getAllLogsFilePath() {
-  return path.join(getLogBaseDir(), "all.jsonl");
-}
-
-function sanitizeFileName(value: string) {
-  return value.replace(/[^a-zA-Z0-9._-]/g, "_");
-}
-
-function getProcessLogFilePath(processId: string) {
-  return path.join(
-    getLogBaseDir(),
-    "processes",
-    `${sanitizeFileName(processId)}.jsonl`,
-  );
-}
-
-async function ensureLogDirs() {
-  const baseDir = getLogBaseDir();
-  await mkdir(baseDir, { recursive: true });
-  await mkdir(path.join(baseDir, "processes"), { recursive: true });
-}
-
-function normalizeCreatedAt(value?: string | Date) {
-  if (!value) return new Date().toISOString();
-  const date = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
-}
-
-function normalizeTradeLogRecord(
-  input: TradeLogCreateInput & { _id?: string },
-): TradeLogRecord {
-  return {
-    _id: input._id || `tlog_${Date.now()}_${randomUUID().replace(/-/g, "").slice(0, 12)}`,
-    accountId: input.accountId || null,
-    processId: input.processId || null,
-    type: input.type,
-    action: input.action,
-    symbol: input.symbol || null,
-    details: input.details || null,
-    level: input.level || input.result || null,
-    result: input.result || null,
-    error: input.error || null,
-    createdAt: normalizeCreatedAt(input.createdAt),
-  };
-}
-
-function parseJsonLines(content: string): TradeLogRecord[] {
-  if (!content.trim()) return [];
-
-  return content
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      try {
-        return JSON.parse(line) as TradeLogRecord;
-      } catch {
-        return null;
-      }
-    })
-    .filter((item): item is TradeLogRecord => Boolean(item));
-}
-
-async function readJsonLinesFile(filePath: string): Promise<TradeLogRecord[]> {
-  try {
-    const content = await readFile(filePath, "utf8");
-    return parseJsonLines(content);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
-    }
-    throw error;
-  }
-}
-
-async function fileExists(filePath: string) {
-  try {
-    await stat(filePath);
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return false;
-    }
-    throw error;
-  }
-}
-
-async function writeLogToFiles(record: TradeLogRecord) {
-  await ensureLogDirs();
-
-  const serialized = `${JSON.stringify(record)}\n`;
-  await appendFile(getAllLogsFilePath(), serialized, "utf8");
-
-  if (record.processId) {
-    await appendFile(getProcessLogFilePath(record.processId), serialized, "utf8");
-  }
-}
-
-async function writeLogToMongo(record: TradeLogRecord) {
-  const { TradeLog } = await loadDatabaseModule();
-
-  await TradeLog.create({
-    accountId: record.accountId || null,
-    processId: record.processId || null,
-    type: record.type,
-    action: record.action,
-    symbol: record.symbol || null,
-    details: record.details || null,
-    level: record.level || null,
-    result: record.result || null,
-    error: record.error || null,
-    createdAt: new Date(record.createdAt),
-  });
-}
-
-function isMongoReady() {
-  return mongoose.connection.readyState === 1;
-}
-
-async function loadDatabaseModule(): Promise<typeof import("../database/index")> {
-  return require("../database/index") as typeof import("../database/index");
-}
-
-function normalizeMongoRecord(record: Record<string, unknown>): TradeLogRecord {
-  const mongoId =
-    typeof record._id === "string"
-      ? record._id
-      : record._id && typeof (record._id as { toString?: () => string }).toString === "function"
-        ? (record._id as { toString: () => string }).toString()
-        : `mongo_${randomUUID().replace(/-/g, "")}`;
-
-  const createdAt =
-    record.createdAt instanceof Date
-      ? record.createdAt.toISOString()
-      : record.createdAt
-        ? new Date(String(record.createdAt)).toISOString()
-        : new Date().toISOString();
-
-  return {
-    _id: mongoId,
-    accountId:
-      typeof record.accountId === "string" ? record.accountId : record.accountId == null ? null : String(record.accountId),
-    processId:
-      typeof record.processId === "string" ? record.processId : record.processId == null ? null : String(record.processId),
-    type: String(record.type || ""),
-    action: String(record.action || ""),
-    symbol:
-      typeof record.symbol === "string" ? record.symbol : record.symbol == null ? null : String(record.symbol),
-    details:
-      typeof record.details === "string" ? record.details : record.details == null ? null : String(record.details),
-    level:
-      typeof record.level === "string" ? record.level : record.level == null ? null : String(record.level),
-    result:
-      typeof record.result === "string" ? record.result : record.result == null ? null : String(record.result),
-    error:
-      typeof record.error === "string" ? record.error : record.error == null ? null : String(record.error),
-    createdAt,
-  };
-}
-
-async function readMongoLogsByProcess(
-  processId: string,
-  limit?: number,
-  order: "asc" | "desc" = "asc",
-): Promise<TradeLogRecord[]> {
-  if (!shouldReadMongoLegacy() || !isMongoReady()) return [];
-
-  const { TradeLog } = await loadDatabaseModule();
-  try {
-    const logs = await TradeLog.find({ processId })
-      .sort({ createdAt: order === "asc" ? 1 : -1 })
-      .limit(limit || 1000)
-      .lean()
-      .exec();
-
-    return logs.map((item: unknown) =>
-      normalizeMongoRecord(item as Record<string, unknown>),
-    );
-  } catch (error) {
-    console.warn(
-      `[TradeLogStore] Failed to read Mongo process logs for ${processId}: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
-    return [];
-  }
-}
-
-async function readAllMongoLogs(): Promise<TradeLogRecord[]> {
-  if (!shouldReadMongoLegacy() || !isMongoReady()) return [];
-
-  const { TradeLog } = await loadDatabaseModule();
-  try {
-    const logs = await TradeLog.find().sort({ createdAt: 1 }).lean().exec();
-    return logs.map((item: unknown) =>
-      normalizeMongoRecord(item as Record<string, unknown>),
-    );
-  } catch (error) {
-    console.warn(
-      `[TradeLogStore] Failed to read Mongo logs: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
-    return [];
-  }
-}
-
-function dedupeLogs(logs: TradeLogRecord[]) {
-  const seen = new Set<string>();
-  const deduped: TradeLogRecord[] = [];
-
-  for (const log of logs) {
-    const key = [
-      log.accountId || "",
-      log.processId || "",
-      log.type,
-      log.action,
-      log.symbol || "",
-      log.details || "",
-      log.level || "",
-      log.result || "",
-      log.error || "",
-      log.createdAt,
-    ].join("|");
-
-    if (seen.has(key)) continue;
-    seen.add(key);
-    deduped.push(log);
-  }
-
-  return deduped;
-}
-
-function shouldHideCronNoise(log: TradeLogRecord) {
-  return log.type === "cron" && /(_start|_end)$/.test(log.action);
-}
-
-function looksLikeStructuredJson(value: string | null | undefined) {
-  if (typeof value !== "string") return false;
-
-  const trimmed = value.trim();
-  if (
-    !trimmed ||
-    !(
-      (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
-      (trimmed.startsWith("[") && trimmed.endsWith("]"))
-    )
-  ) {
-    return false;
-  }
-
-  try {
-    const parsed = JSON.parse(trimmed);
-    return typeof parsed === "object" && parsed !== null;
-  } catch {
-    return false;
-  }
-}
-
-export function isNoisyTradeLog(log: TradeLogRecord) {
-  return (
-    shouldHideCronNoise(log) ||
-    looksLikeStructuredJson(log.details) ||
-    looksLikeStructuredJson(log.result) ||
-    looksLikeStructuredJson(log.error)
-  );
-}
-
-export function isHiddenByDefaultTradeLog(log: TradeLogRecord) {
-  return log.level === "debug" || shouldHideCronNoise(log);
-}
-
-function applyLogFilters(
-  logs: TradeLogRecord[],
-  options: TradeLogListOptions = {},
-) {
-  return logs.filter((log) => {
-    if (options.accountId && options.accountId !== "all" && log.accountId !== options.accountId) {
-      return false;
-    }
-
-    if (options.processId && log.processId !== options.processId) {
-      return false;
-    }
-
-    if (options.symbol && log.symbol !== options.symbol) {
-      return false;
-    }
-
-    if (options.levels?.length) {
-      const matchLevel = (log.level || log.result || "").toLowerCase();
-      if (!options.levels.map(l => l.toLowerCase()).includes(matchLevel)) {
-        return false;
-      }
-    }
-
-    if (options.hideCronNoise && isHiddenByDefaultTradeLog(log)) {
-      return false;
-    }
-
-    return true;
-  });
-}
-
-function sortLogs(logs: TradeLogRecord[], order: "asc" | "desc" = "desc") {
-  return [...logs].sort((left, right) => {
-    const leftTime = new Date(left.createdAt).getTime();
-    const rightTime = new Date(right.createdAt).getTime();
-    return order === "asc" ? leftTime - rightTime : rightTime - leftTime;
-  });
-}
-
-async function readGlobalFileLogs() {
-  return readJsonLinesFile(getAllLogsFilePath());
-}
-
-async function readProcessFileLogs(processId: string) {
-  const filePath = getProcessLogFilePath(processId);
-  if (!(await fileExists(filePath))) return [];
-  return readJsonLinesFile(filePath);
-}
-
-async function rewriteAllFileLogs(records: TradeLogRecord[]) {
-  await ensureLogDirs();
-
-  const allLogsContent = records.map((record) => JSON.stringify(record)).join("\n");
-  await writeFile(
-    getAllLogsFilePath(),
-    allLogsContent ? `${allLogsContent}\n` : "",
-    "utf8",
-  );
-
-  const processesDir = path.join(getLogBaseDir(), "processes");
-  await rm(processesDir, { recursive: true, force: true });
-  await mkdir(processesDir, { recursive: true });
-
-  const processLogs = new Map<string, string[]>();
-  for (const record of records) {
-    if (!record.processId) continue;
-    const serialized = JSON.stringify(record);
-    const existing = processLogs.get(record.processId) || [];
-    existing.push(serialized);
-    processLogs.set(record.processId, existing);
-  }
-
-  for (const [processId, serializedLogs] of processLogs.entries()) {
-    await writeFile(
-      getProcessLogFilePath(processId),
-      `${serializedLogs.join("\n")}\n`,
-      "utf8",
-    );
-  }
-}
-
-async function readAllMongoLogsWithIds(): Promise<
-  Array<{ rawId: unknown; record: TradeLogRecord }>
-> {
-  if (!shouldReadMongoLegacy() || !isMongoReady()) return [];
-
-  const { TradeLog } = await loadDatabaseModule();
-  try {
-    const logs = await TradeLog.find().sort({ createdAt: 1 }).lean().exec();
-    return logs.map((item: unknown) => ({
-      rawId: (item as Record<string, unknown>)._id,
-      record: normalizeMongoRecord(item as Record<string, unknown>),
-    }));
-  } catch (error) {
-    console.warn(
-      `[TradeLogStore] Failed to read Mongo logs: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
-    return [];
-  }
-}
-
 export async function createTradeLog(
   input: TradeLogCreateInput,
 ): Promise<TradeLogRecord> {
@@ -531,6 +43,7 @@ export async function createTradeLog(
   }
 
   const record = normalizeTradeLogRecord(input);
+  if (record.level == null) { delete (record as { level?: string | null }).level; }
   let fileWriteError: Error | null = null;
   let mongoWriteError: Error | null = null;
 
@@ -600,7 +113,15 @@ export async function getProcessTradeLogs(options: {
     return response.logs;
   }
 
-  const fileLogs = await readProcessFileLogs(options.processId);
+  const processFilePath = getProcessLogFilePath(options.processId);
+  let fileLogs: TradeLogRecord[] = [];
+  try {
+    const exists = await fileExists(processFilePath);
+    fileLogs = exists ? await readJsonLinesFile(processFilePath) : [];
+  } catch (error) {
+    const code = (error as { code?: string })?.code;
+    if (code !== "ENOENT") throw error;
+  }
   const mongoLogs =
     shouldWriteMongo() || shouldReadMongoLegacy()
       ? await readMongoLogsByProcess(
@@ -629,7 +150,7 @@ export async function listTradeLogs(
       order: options.order || "desc",
     });
 
-    if (options.accountId) params.set("accountId", options.accountId);
+    if (options.accountId && options.accountId !== "all") params.set("accountId", options.accountId);
     if (options.processId) params.set("processId", options.processId);
     if (options.symbol) params.set("symbol", options.symbol);
     if (options.levels?.length) params.set("levels", options.levels.join(","));
@@ -641,12 +162,19 @@ export async function listTradeLogs(
   const limit = Math.max(1, Math.min(500, options.limit || 50));
   const order = options.order || "desc";
 
-  const fileLogs = await readGlobalFileLogs();
+  let fileLogs: TradeLogRecord[] = [];
+  try {
+    fileLogs = await readGlobalFileLogs();
+  } catch (error) {
+    const code = (error as { code?: string })?.code;
+    if (code !== "ENOENT") throw error;
+  }
   const mongoLogs =
     shouldWriteMongo() || shouldReadMongoLegacy() ? await readAllMongoLogs() : [];
+  const normalizedOptions = options.accountId === "all" ? { ...options, accountId: undefined } : options;
   const filtered = applyLogFilters(
     dedupeLogs([...fileLogs, ...mongoLogs]),
-    options,
+    normalizedOptions,
   );
   const sorted = sortLogs(filtered, order);
 
@@ -664,15 +192,6 @@ export async function listTradeLogs(
 }
 
 export async function countTradeLogs() {
-  if (shouldUseRemoteBackendApi()) {
-    const result = await listTradeLogs({
-      page: 1,
-      limit: 1,
-      hideCronNoise: false,
-    });
-    return result.totalCount;
-  }
-
   const result = await listTradeLogs({
     page: 1,
     limit: 1,
@@ -682,16 +201,6 @@ export async function countTradeLogs() {
 }
 
 export async function getRecentTradeLogs(limit: number = 50) {
-  if (shouldUseRemoteBackendApi()) {
-    const result = await listTradeLogs({
-      page: 1,
-      limit,
-      hideCronNoise: false,
-      order: "desc",
-    });
-    return result.logs;
-  }
-
   const result = await listTradeLogs({
     page: 1,
     limit,
@@ -725,14 +234,20 @@ export async function cleanupTradeLogs(
     return new Date(log.createdAt).getTime() >= (retentionCutoff as number);
   };
 
-  const fileLogs = await readGlobalFileLogs();
+  let fileLogs: TradeLogRecord[] = [];
+  try {
+    fileLogs = await readGlobalFileLogs();
+  } catch (error) {
+    const code = (error as { code?: string })?.code;
+    if (code !== "ENOENT") throw error;
+  }
   const mongoLogsWithIds =
     shouldWriteMongo() || shouldReadMongoLegacy()
       ? await readAllMongoLogsWithIds()
       : [];
   const allLogs = dedupeLogs([
     ...fileLogs,
-    ...mongoLogsWithIds.map(({ record }) => record),
+    ...mongoLogsWithIds.map(({ record }: { record: TradeLogRecord }) => record),
   ]);
   const scannedCount = allLogs.length;
 
@@ -750,8 +265,8 @@ export async function cleanupTradeLogs(
     if (isMongoReady()) {
       const { TradeLog } = await loadDatabaseModule();
       const mongoIdsToDelete = mongoLogsWithIds
-        .filter(({ record }) => !shouldKeepLog(record))
-        .map(({ rawId }) => rawId);
+        .filter(({ record }: { record: TradeLogRecord }) => !shouldKeepLog(record))
+        .map(({ rawId }: { rawId: unknown }) => rawId);
 
       deletedMongoCount = mongoIdsToDelete.length;
       if (mongoIdsToDelete.length > 0) {
@@ -775,3 +290,5 @@ export async function cleanupTradeLogs(
     deletedMongoCount,
   };
 }
+
+export { isHiddenByDefaultTradeLog, isNoisyTradeLog };

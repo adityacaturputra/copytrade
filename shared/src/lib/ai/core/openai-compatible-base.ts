@@ -241,8 +241,7 @@ export abstract class OpenAICompatibleAnalyzerBase
           };
         }
 
-        const data = await response.json() as any;
-        return data.choices?.[0]?.message?.content || "";
+        return await this.parseCompletionResponse(response);
       } catch (error: unknown) {
         lastError = error as Error;
         const err = error as { status?: number; message?: string };
@@ -272,5 +271,12 @@ export abstract class OpenAICompatibleAnalyzerBase
     throw new Error(
       `All ${this.providerName} API keys failed. Last error: ${lastError?.message || "Unknown error"}`,
     );
+  }
+
+  protected async parseCompletionResponse(response: Response): Promise<string> {
+    const data = await response.json() as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    return data.choices?.[0]?.message?.content || "";
   }
 }

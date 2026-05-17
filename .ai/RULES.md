@@ -11,6 +11,9 @@
 - Process lifecycle uses `processId` end-to-end for tracing.
 - Draft lifecycle: `pending` → `accepted` / `rejected` / `expired`.
 - Trading flow: source → AI analysis → draft/execute → exchange position.
+- Trade logging is a first-class subsystem under `shared/src/lib/trade-log/`.
+- Trade/process logs must preserve `processId` tracing so draft, executor, monitor, and agent flows can be correlated in UI and debugging.
+- Logging/storage refactors are sensitive because they affect dashboard logs, per-process logs, cleanup APIs, Mongo legacy reads, and optional remote backend proxy mode.
 
 ## Structure Rules
 - Folder-first organization. Group related files into domain folders.
@@ -19,6 +22,7 @@
 - Prefer thin `index.ts` entrypoints and focused child modules.
 - Co-locate tests with their domain folders.
 - Remove temp/scratch/generated source artifacts from `src/` unless intentionally required.
+- Put ad-hoc debug, scratch, and one-off local test files in `.temp/`, not in the repo root.
 - Do not scatter provider identity/config strings across multiple files when a domain has pluggable providers.
 - For AI providers, keep provider metadata owned by the analyzer class or a single analyzer registry, then make factories/resolvers consume that one source of truth.
 - Avoid repeated provider-specific `if/else` chains for base URLs, env keys, models, or aliases in multiple layers.
@@ -37,6 +41,18 @@
 - Avoid broad move-only refactors that change many paths at once without immediate validation.
 - If a file is above the limit, split it into real focused modules until each source/test file is `<= 300` lines.
 - Do not introduce fake wrapper files just to satisfy the line limit.
+- For mixed-runtime shared modules used by both `shared` build and Next.js app routes, avoid import patterns that only satisfy one resolver. Prefer patterns compatible with both `Node16` build output and Next bundler resolution.
+- If a helper is referenced by tests/mocks, preserve that seam unless the tests are updated in the same change.
+
+## Trade Log Notes
+- `shared/src/lib/trade-log/store.ts` is the orchestration layer; keep child modules focused on file storage, Mongo access, filtering, normalization, config, or summaries.
+- Supported log storage modes include file, mongo, dual, and remote-backend proxy behavior.
+- `processId` must remain available across create/list/process-log retrieval flows.
+- Cleanup behavior must preserve both file and Mongo deletion semantics and support retention/noisy-json modes.
+- Legacy Mongo reads are still important for compatibility; do not remove them accidentally during refactors.
+- Any trade-log refactor should be verified with:
+  - `pnpm --filter @copytrade/shared build`
+  - `pnpm --filter @copytrade/shared exec vitest run src/lib/trade-log/store.test.ts src/lib/process/log.test.ts`
 
 ## Verification Rules
 - After changes, run relevant builds/typechecks/tests.
