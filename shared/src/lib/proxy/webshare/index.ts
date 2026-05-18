@@ -89,6 +89,7 @@ let lastSelectedProxyMeta: {
 let activeWebshareKeyIndex = 0;
 let providerInfoCache: { value: ProxyInfoResult; ts: number } | null = null;
 const WEBHARE_PROXY_IP_COOLDOWN_MS = 60 * 60 * 1000;
+let lastRotationLogByAffinity = new Map<string, { message: string; ts: number }>();
 
 function normalizeIndex(index: number, total: number): number {
   if (total <= 0) return 0;
@@ -103,15 +104,30 @@ function maskApiKey(key: string): string {
 }
 
 function isUsageLimitedResponse(status: number, text: string): boolean {
+  const normalized = String(text || "").toLowerCase();
   return (
     status === 402 ||
     status === 429 ||
     status === 401 ||
-    status === 403 ||
+    (status === 403 &&
+      /rate.?limit|usage|quota|bandwidth limit reached|upgrade to continue using the proxy|forbidden|proxy/i.test(
+        normalized,
+      )) ||
     /rate.?limit|usage|quota|bandwidth limit reached|upgrade to continue using the proxy/i.test(
-      text,
+      normalized,
     )
   );
+}
+
+function logRotationEvent(affinityKey: string | undefined, message: string): void {
+  const key = getAffinityLabel(affinityKey);
+  const previous = lastRotationLogByAffinity.get(key);
+  const now = Date.now();
+  if (previous && previous.message === message && now - previous.ts < 10_000) {
+    return;
+  }
+  lastRotationLogByAffinity.set(key, { message, ts: now });
+  console.warn(message);
 }
 
 function isIpCoolingDown(affinity: AffinityState, ip: string): boolean {
@@ -221,18 +237,20 @@ export class WebshareProvider implements IProxyProvider {
     return proxies;
   }
 
-  async rotateApiKey(): Promise<boolean> {
+  async rotateApiKey(affinityKey?: string): Promise<boolean> {
     const pool = await resolveWebshareApiKeyPool();
     const apiKeys = (pool.keys || []).map((k) => k.trim()).filter(Boolean);
     if (apiKeys.length <= 1) {
-      console.warn(
+      logRotationEvent(
+        affinityKey,
         "[WebshareProxy] Rotation skipped: only one Webshare API key is configured.",
       );
       return false;
     }
     const nextIndex = normalizeIndex(activeWebshareKeyIndex + 1, apiKeys.length);
 
-    console.warn(
+    logRotationEvent(
+      affinityKey,
       `[WebshareProxy] Rotating API key ${activeWebshareKeyIndex + 1} -> ${nextIndex + 1}`,
     );
 
@@ -248,7 +266,10 @@ export class WebshareProvider implements IProxyProvider {
     return true;
   }
 
-  async tryRotateApiKeyForError(error: unknown): Promise<boolean> {
+  async tryRotateApiKeyForError(
+    error: unknown,
+    affinityKey?: string,
+  ): Promise<boolean> {
     const status =
       typeof error === "object" && error && "status" in error
         ? Number((error as { status?: unknown }).status)
@@ -264,10 +285,11 @@ export class WebshareProvider implements IProxyProvider {
       typeof status === "number" &&
       isUsageLimitedResponse(status, responseBody)
     ) {
-      console.warn(
+      logRotationEvent(
+        affinityKey,
         `[WebshareProxy] Usage-limited proxy error detected (status=${status}). Trying API key rotation...`,
       );
-      return this.rotateApiKey();
+      return this.rotateApiKey(affinityKey);
     }
 
     return false;
