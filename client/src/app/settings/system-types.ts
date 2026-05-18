@@ -59,10 +59,13 @@ export interface ProxyProviderInfo {
     valid: boolean;
   }[];
   ipList: string[];
+  ipListsByKey?: string[][];
+  allIpList?: string[];
   total: number;
   validCount: number;
   telemetry?: {
     snapshotUpdatedAt?: string;
+    cacheExpiresAt?: string;
     previousIps?: string[];
     currentIps?: string[];
     addedIps?: string[];

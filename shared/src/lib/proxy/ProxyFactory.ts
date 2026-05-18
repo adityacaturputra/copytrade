@@ -35,6 +35,7 @@ interface IProxyIpSnapshot extends Document {
   provider: ProxyProviderType;
   previousIps: string[];
   currentIps: string[];
+  payload?: Record<string, unknown>;
   updatedAt: Date;
 }
 
@@ -71,6 +72,7 @@ const ProxyIpSnapshotSchema = new Schema<IProxyIpSnapshot>(
     },
     previousIps: { type: [String], default: [] },
     currentIps: { type: [String], default: [] },
+    payload: { type: Schema.Types.Mixed, default: null },
   },
   { timestamps: { createdAt: false, updatedAt: true } },
 );
@@ -315,13 +317,15 @@ export async function getProvider() {
  * Convenience: Get proxy agent for the active provider.
  * Returns null if proxy is disabled or no provider available.
  */
-export async function getProxyAgent(): Promise<HttpsProxyAgent<string> | null> {
+export async function getProxyAgent(
+  affinityKey?: string,
+): Promise<HttpsProxyAgent<string> | null> {
   const provider = await getProvider();
   if (!provider) return null;
-  return provider.getProxyAgent();
+  return provider.getProxyAgent(affinityKey);
 }
 
-export async function getCurrentProxyMeta(): Promise<{
+export async function getCurrentProxyMeta(affinityKey?: string): Promise<{
   provider: string;
   ip?: string;
   countryCode?: string;
@@ -331,7 +335,7 @@ export async function getCurrentProxyMeta(): Promise<{
   if (!provider) return null;
 
   if (provider instanceof WebshareProvider) {
-    const meta = provider.getLastSelectedProxyMeta();
+    const meta = provider.getLastSelectedProxyMeta(affinityKey);
     return {
       provider: provider.name,
       ip: meta?.ip,
@@ -343,37 +347,57 @@ export async function getCurrentProxyMeta(): Promise<{
   return { provider: provider.name };
 }
 
-export async function markCurrentProxyCountryBlocked(): Promise<void> {
+export async function markCurrentProxyCountryBlocked(
+  affinityKey?: string,
+): Promise<void> {
   const provider = await getProvider();
   if (!provider) return;
   if (!(provider instanceof WebshareProvider)) return;
 
-  const meta = provider.getLastSelectedProxyMeta();
+  const meta = provider.getLastSelectedProxyMeta(affinityKey);
   if (!meta?.countryCode) return;
-  provider.markCountryBlocked(meta.countryCode);
+  provider.markCountryBlocked(meta.countryCode, affinityKey);
 }
 
-export async function markCurrentProxySuccessful(): Promise<void> {
+export async function markCurrentProxySuccessful(
+  affinityKey?: string,
+): Promise<void> {
   const provider = await getProvider();
   if (!provider) return;
   if (!(provider instanceof WebshareProvider)) return;
-  provider.markCurrentProxySuccessful();
+  provider.markCurrentProxySuccessful(affinityKey);
 }
 
-export async function markCurrentProxyIpBlocked(): Promise<void> {
+export async function markCurrentProxyIpBlocked(
+  affinityKey?: string,
+): Promise<void> {
   const provider = await getProvider();
   if (!provider) return;
   if (!(provider instanceof WebshareProvider)) return;
 
-  const meta = provider.getLastSelectedProxyMeta();
+  const meta = provider.getLastSelectedProxyMeta(affinityKey);
   if (!meta?.ip) return;
-  provider.markIpBlocked(meta.ip);
+  provider.markIpBlocked(meta.ip, affinityKey);
+}
+
+export async function rotateCurrentProxyCredentialForError(
+  error: unknown,
+  affinityKey?: string,
+): Promise<boolean> {
+  const provider = await getProvider();
+  if (!provider) return false;
+  if (!(provider instanceof WebshareProvider)) return false;
+  return provider.tryRotateApiKeyForError(error);
 }
 
 /**
  * Get proxy info for the settings page from the current provider.
  */
-export async function getProxyInfo(): Promise<ProxyInfoResult> {
+const PROXY_INFO_CACHE_TTL_MS = 60 * 60 * 1000;
+
+export async function getProxyInfo(options?: {
+  forceRefresh?: boolean;
+}): Promise<ProxyInfoResult> {
   const config = await getProxyConfig();
 
   if (!config.enabled) {
@@ -389,6 +413,49 @@ export async function getProxyInfo(): Promise<ProxyInfoResult> {
 
   if (!provider) {
     return { success: false, error: "No proxy provider configured" };
+  }
+
+  const forceRefresh = options?.forceRefresh === true;
+
+  if (config.provider === "webshare" && !forceRefresh) {
+    const snapshot = await ProxyIpSnapshot.findOne({ provider: "webshare" })
+      .lean()
+      .catch(() => null);
+    const snapshotAge = snapshot?.updatedAt
+      ? Date.now() - new Date(snapshot.updatedAt).getTime()
+      : Number.POSITIVE_INFINITY;
+
+    if (
+      snapshot?.payload &&
+      snapshotAge < PROXY_INFO_CACHE_TTL_MS
+    ) {
+      const payload = snapshot.payload as unknown as ProxyInfoResult;
+      return {
+        ...payload,
+        providerName: provider.name,
+        telemetry: {
+          ...(payload.telemetry || {}),
+          snapshotUpdatedAt: snapshot.updatedAt
+            ? new Date(snapshot.updatedAt).toISOString()
+            : undefined,
+          cacheExpiresAt: new Date(
+            new Date(snapshot.updatedAt).getTime() + PROXY_INFO_CACHE_TTL_MS,
+          ).toISOString(),
+          previousIps: snapshot.previousIps || [],
+          currentIps: snapshot.currentIps || [],
+          addedIps:
+            payload.telemetry?.addedIps ||
+            (snapshot.currentIps || []).filter(
+              (ip) => !(snapshot.previousIps || []).includes(ip),
+            ),
+          removedIps:
+            payload.telemetry?.removedIps ||
+            (snapshot.previousIps || []).filter(
+              (ip) => !(snapshot.currentIps || []).includes(ip),
+            ),
+        },
+      };
+    }
   }
 
   const info = await provider.getProxyInfo();
@@ -408,6 +475,10 @@ export async function getProxyInfo(): Promise<ProxyInfoResult> {
         provider: "webshare",
         previousIps,
         currentIps,
+        payload: {
+          ...info,
+          providerName: provider.name,
+        },
       },
       { upsert: true, new: true },
     ).catch(() => null);
@@ -419,6 +490,7 @@ export async function getProxyInfo(): Promise<ProxyInfoResult> {
         snapshotUpdatedAt: snapshot?.updatedAt
           ? new Date(snapshot.updatedAt).toISOString()
           : undefined,
+        cacheExpiresAt: new Date(Date.now() + PROXY_INFO_CACHE_TTL_MS).toISOString(),
         previousIps,
         currentIps,
         addedIps,
@@ -438,7 +510,7 @@ export async function getProviderProxyInfo(
   customSettings?: CustomProxySettings,
 ): Promise<ProxyInfoResult> {
   if (providerType === "webshare") {
-    return getWebshareProvider().getProxyInfo();
+    return getProxyInfo({ forceRefresh: true });
   }
 
   if (providerType === "custom" && customSettings) {

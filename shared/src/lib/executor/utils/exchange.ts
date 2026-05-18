@@ -84,6 +84,7 @@ export async function resolveExchangeForAccount(
         buildExchangeCredentials(
           account.tradingPlatform,
           (account.exchangeData as Record<string, unknown>) || {},
+          { proxyAffinityKey: String(accountId) },
         ) ||
         ({
           provider: "paper",
@@ -109,6 +110,7 @@ export async function resolveExchangeForPosition(
     const creds = buildExchangeCredentials(
       account.tradingPlatform,
       (account.exchangeData as Record<string, unknown>) || {},
+      { proxyAffinityKey: String(accountId) },
     );
     return creds ? ExchangeFactory.getClientForAccount(creds) : null;
   };

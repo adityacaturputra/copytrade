@@ -5,7 +5,7 @@ export async function getBybitAccountInfo(ctx: BybitCtx): Promise<AccountInfo> {
   const result = await ctx.signedRequest<any>("GET", "/v5/account/wallet-balance", {
     accountType: "UNIFIED",
   });
-  const wallet = result.list?.[0];
+  const wallet = result?.list?.[0];
   return {
     totalBalance: ctx.parseNumber(wallet?.totalEquity ?? wallet?.totalWalletBalance),
     availableBalance: ctx.parseNumber(wallet?.totalAvailableBalance),

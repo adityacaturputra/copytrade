@@ -12,6 +12,12 @@ export function ProxyTelemetryPanel({
   const ipList = Array.isArray(proxyProviderInfo?.ipList)
     ? proxyProviderInfo.ipList
     : [];
+  const allIpList = Array.isArray(proxyProviderInfo?.allIpList)
+    ? proxyProviderInfo.allIpList
+    : ipList;
+  const ipListsByKey = Array.isArray(proxyProviderInfo?.ipListsByKey)
+    ? proxyProviderInfo.ipListsByKey
+    : [];
   const telemetry = proxyProviderInfo?.telemetry;
   const addedIps = Array.isArray(telemetry?.addedIps) ? telemetry.addedIps : [];
   const removedIps = Array.isArray(telemetry?.removedIps)
@@ -27,7 +33,7 @@ export function ProxyTelemetryPanel({
         <button
           type="button"
           onClick={() => void handleCopyProxyIpCsv()}
-          disabled={!ipList.length}
+          disabled={!allIpList.length}
           className="text-[11px] bg-slate-700 hover:bg-slate-600 disabled:opacity-50 px-2 py-1 rounded text-slate-200 transition"
         >
           {proxyIpCsvCopied ? "✅ Copied CSV" : "📋 Copy CSV"}
@@ -35,7 +41,7 @@ export function ProxyTelemetryPanel({
       </div>
 
       <div className="flex flex-wrap gap-1">
-        {ipList.map((ip) => (
+        {allIpList.map((ip) => (
           <span key={ip} className="text-xs font-mono bg-slate-700 px-1.5 py-0.5 rounded text-slate-300">
             {ip}
           </span>
@@ -44,6 +50,31 @@ export function ProxyTelemetryPanel({
       <p className="text-[11px] text-slate-500">
         Copy CSV format: <span className="font-mono">ip1,ip2,ip3</span>
       </p>
+
+      {ipListsByKey.length > 1 && (
+        <div className="space-y-2">
+          <p className="text-[11px] text-slate-500">Grouped by Webshare API key</p>
+          <div className="space-y-2">
+            {ipListsByKey.map((ips, index) => (
+              <div key={`key-${index}`} className="space-y-1">
+                <p className="text-[11px] text-slate-400">
+                  API Key {index + 1} ({ips.length})
+                </p>
+                <div className="flex flex-wrap gap-1">
+                  {ips.map((ip) => (
+                    <span
+                      key={`key-${index}-${ip}`}
+                      className="text-xs font-mono bg-slate-800 px-1.5 py-0.5 rounded text-slate-300"
+                    >
+                      {ip}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {telemetry && (
         <div className="pt-3 border-t border-slate-700 space-y-2">

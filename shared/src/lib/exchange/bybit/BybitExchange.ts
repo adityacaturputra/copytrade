@@ -33,6 +33,7 @@ export class BybitExchange implements ExchangeClient {
   private readonly secretKey: string;
   private readonly client: AxiosInstance;
   private readonly simulated: boolean;
+  private readonly proxyAffinityKey?: string;
   private readonly baseUrl: string;
   private readonly specsCache = new Map<string, { specs: InstrumentSpecs; ts: number }>();
   private accountMarginModeCache: {
@@ -40,16 +41,22 @@ export class BybitExchange implements ExchangeClient {
     ts: number;
   } | null = null;
 
-  constructor(apiKey: string, secretKey: string, simulated: boolean = false) {
+  constructor(
+    apiKey: string,
+    secretKey: string,
+    simulated: boolean = false,
+    proxyAffinityKey?: string,
+  ) {
     this.apiKey = apiKey.trim();
     this.secretKey = secretKey.trim();
     this.simulated = simulated;
+    this.proxyAffinityKey = proxyAffinityKey;
     this.baseUrl = this.simulated
       ? process.env.BYBIT_DEMO_BASE_URL || "https://api-demo.bybit.com"
       : process.env.BYBIT_BASE_URL || "https://api.bybit.com";
     this.client = axios.create({ baseURL: this.baseUrl, timeout: 30000, headers: { "Content-Type": "application/json" } });
     this.client.interceptors.request.use(async (config) => {
-      const agent = await getProxyAgent();
+      const agent = await getProxyAgent(this.proxyAffinityKey);
       if (agent) { config.httpsAgent = agent; config.httpAgent = agent; }
       return config;
     });
@@ -57,7 +64,7 @@ export class BybitExchange implements ExchangeClient {
 
   private getHelperContext(): BybitCtx {
     return {
-      apiKey: this.apiKey, secretKey: this.secretKey, client: this.client, specsCache: this.specsCache, specsCacheTtl: SPECS_CACHE_TTL,
+      apiKey: this.apiKey, secretKey: this.secretKey, proxyAffinityKey: this.proxyAffinityKey, client: this.client, specsCache: this.specsCache, specsCacheTtl: SPECS_CACHE_TTL,
       toSymbol: this.toSymbol.bind(this), parseNumber: this.parseNumber.bind(this), countDecimals: this.countDecimals.bind(this),
       formatNum: this.formatNum.bind(this), clampToStep: this.clampToStep.bind(this), signedRequest: this.signedRequest.bind(this),
       publicRequest: this.publicRequest.bind(this), fetchPositions: this.fetchPositions.bind(this), getTickerPrice: this.getTickerPrice.bind(this),
@@ -117,7 +124,7 @@ export class BybitExchange implements ExchangeClient {
 
   async fetchRealtimeOrders(f: "Order" | "StopOrder", s?: string): Promise<any[]> {
     const res = await this.signedRequest<any>("GET", "/v5/order/realtime", { category: "linear", symbol: s ? this.toSymbol(s) : undefined, settleCoin: s ? undefined : "USDT", filter: f });
-    return res.list || [];
+    return res?.list || [];
   }
   async clearTradingStopsForPosition(s: string, idx: number): Promise<void> {
     await this.signedRequest("POST", "/v5/position/trading-stop", { category: "linear", symbol: this.toSymbol(s), takeProfit: "0", stopLoss: "0", positionIdx: idx });

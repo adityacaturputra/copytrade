@@ -8,7 +8,7 @@ export async function getBybitTickerPrice(ctx: BybitCtx, symbol: string): Promis
 
 export async function getBybitKlines(ctx: BybitCtx, symbol: string, interval: string, limit: number): Promise<KlineData[]> {
   const result = await ctx.signedRequest<any>("GET", "/v5/market/kline", { category: "linear", symbol: ctx.toSymbol(symbol), interval, limit });
-  return [...(result.list || [])].reverse().map((row) => ({
+  return [...(result?.list || [])].reverse().map((row) => ({
     time: Math.floor(ctx.parseNumber(row[0]) / 1000),
     open: ctx.parseNumber(row[1]),
     high: ctx.parseNumber(row[2]),
@@ -23,7 +23,7 @@ export async function getBybitInstrumentSpecs(ctx: BybitCtx, symbol: string): Pr
   const cached = ctx.specsCache.get(normalized);
   if (cached && Date.now() - cached.ts < ctx.specsCacheTtl) return cached.specs;
   const result = await ctx.publicRequest<any>("/v5/market/instruments-info", { category: "linear", symbol: normalized });
-  const instrument = result.list?.find((item: any) => item.symbol === normalized);
+  const instrument = result?.list?.find((item: any) => item.symbol === normalized);
   if (!instrument) throw new Error(`Instrument not found on Bybit: ${normalized}`);
   const lotSz = ctx.parseNumber(instrument.lotSizeFilter?.qtyStep, 1);
   const tickSz = ctx.parseNumber(instrument.priceFilter?.tickSize, 0.01);

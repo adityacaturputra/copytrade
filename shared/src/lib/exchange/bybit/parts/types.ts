@@ -3,6 +3,7 @@ import { InstrumentSpecs } from "../../types";
 export interface BybitCtx {
   apiKey: string;
   secretKey: string;
+  proxyAffinityKey?: string;
   client: any;
   specsCache: Map<string, { specs: InstrumentSpecs; ts: number }>;
   specsCacheTtl: number;

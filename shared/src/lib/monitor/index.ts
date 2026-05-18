@@ -6,6 +6,7 @@ import {
   buildExchangeCredentials,
 } from "../exchange/ExchangeFactory";
 import { ExchangeClient } from "../exchange/types";
+import { getHttpErrorDetails } from "../http/error";
 import { inspectPendingLimitOrder } from "./pending-order-sync";
 import {
   logExecutorError,
@@ -29,6 +30,7 @@ async function getExchangeForPosition(position: {
       const creds = buildExchangeCredentials(
         account.tradingPlatform,
         account.exchangeData as Record<string, unknown>,
+        { proxyAffinityKey: String(position.accountId) },
       );
       if (creds) return ExchangeFactory.getClientForAccount(creds);
     }
@@ -124,6 +126,7 @@ export async function runPositionMonitor(): Promise<{
               const creds = buildExchangeCredentials(
                 account.tradingPlatform,
                 account.exchangeData as Record<string, unknown>,
+                { proxyAffinityKey: String(accountId) },
               );
               exchange = creds
                 ? ExchangeFactory.getClientForAccount(creds)
@@ -239,9 +242,13 @@ export async function runPositionMonitor(): Promise<{
               pendingErr instanceof Error
                 ? pendingErr.message
                 : String(pendingErr);
+            const httpDetails = getHttpErrorDetails(pendingErr);
+            const responseSuffix = httpDetails.responseBody
+              ? ` | response=${httpDetails.responseBody}`
+              : "";
             result.errors.push(`Pending ${position.symbol}: ${errMsg}`);
             await logExecutorError(
-              `Error checking pending position ${position.symbol}: ${errMsg}`,
+              `Error checking pending position ${position.symbol}: ${errMsg}${responseSuffix}`,
               {
                 accountId: position.accountId,
                 processId,
@@ -284,6 +291,7 @@ export async function runPositionMonitor(): Promise<{
             const creds = buildExchangeCredentials(
               account.tradingPlatform,
               account.exchangeData as Record<string, unknown>,
+              { proxyAffinityKey: String(accountId) },
             );
             exchange = creds
               ? ExchangeFactory.getClientForAccount(creds)
@@ -306,8 +314,12 @@ export async function runPositionMonitor(): Promise<{
         }
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
+        const httpDetails = getHttpErrorDetails(err);
+        const responseSuffix = httpDetails.responseBody
+          ? ` | response=${httpDetails.responseBody}`
+          : "";
         await logExecutorWarn(
-          `⚠️ Failed to fetch exchange positions for account ${accountId}: ${errMsg}`,
+          `⚠️ Failed to fetch exchange positions for account ${accountId}: ${errMsg}${responseSuffix}`,
           {
             accountId: accountId === "__global__" ? undefined : accountId,
             type: "monitor",

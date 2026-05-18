@@ -13,6 +13,7 @@ import {
   logProcessStep,
 } from "../process/log";
 import { ensurePersistedProcessId } from "../process/id";
+import { getHttpErrorDetails } from "../http/error";
 import { calculatePositionPnlUsd } from "./index";
 
 function isSamePrice(a: number, b: number): boolean {
@@ -114,6 +115,7 @@ async function getExchangeForPosition(position: {
       const creds = buildExchangeCredentials(
         account.tradingPlatform,
         account.exchangeData as Record<string, unknown>,
+        { proxyAffinityKey: String(position.accountId) },
       );
       if (creds) return ExchangeFactory.getClientForAccount(creds);
     }
@@ -435,9 +437,13 @@ export async function runTpslMonitor(): Promise<{
             pendingErr instanceof Error
               ? pendingErr.message
               : String(pendingErr);
+          const httpDetails = getHttpErrorDetails(pendingErr);
+          const responseSuffix = httpDetails.responseBody
+            ? ` | response=${httpDetails.responseBody}`
+            : "";
           result.errors.push(`Pending ${position.symbol}: ${errMsg}`);
           await logExecutorError(
-            `[TP/SL Monitor] Error checking pending ${position.symbol}: ${errMsg}`,
+            `[TP/SL Monitor] Error checking pending ${position.symbol}: ${errMsg}${responseSuffix}`,
             {
               accountId: position.accountId,
               processId,

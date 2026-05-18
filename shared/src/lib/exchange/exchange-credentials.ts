@@ -5,6 +5,7 @@ import { type ExchangeProvider, normalizeExchangeProvider } from "./provider-con
  */
 export interface ExchangeCredentials {
   provider: ExchangeProvider;
+  proxyAffinityKey?: string;
   apiKey?: string;
   secretKey?: string;
   passphrase?: string;
@@ -23,6 +24,7 @@ export type ExchangeCredentialValues = Omit<ExchangeCredentials, "provider">;
 export function buildExchangeCredentials(
   providerValue: unknown,
   exchangeData?: Record<string, unknown> | null,
+  options?: { proxyAffinityKey?: string },
 ): ExchangeCredentials | null {
   const provider = normalizeExchangeProvider(providerValue);
   if (!provider) return null;
@@ -32,6 +34,11 @@ export function buildExchangeCredentials(
   return {
     ...data,
     provider,
+    proxyAffinityKey:
+      typeof options?.proxyAffinityKey === "string" &&
+      options.proxyAffinityKey.trim().length > 0
+        ? options.proxyAffinityKey.trim()
+        : undefined,
     apiKey: typeof data.apiKey === "string" ? data.apiKey : undefined,
     secretKey: typeof data.secretKey === "string" ? data.secretKey : undefined,
     passphrase:

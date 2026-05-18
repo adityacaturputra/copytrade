@@ -27,13 +27,13 @@ export class CustomProvider implements IProxyProvider {
     this.settings = settings;
   }
 
-  async getProxyUrl(): Promise<string | null> {
+  async getProxyUrl(_affinityKey?: string): Promise<string | null> {
     if (!this.settings.host) return null;
     return `http://${this.settings.username}:${this.settings.password}@${this.settings.host}:${this.settings.port}`;
   }
 
-  async getProxyAgent(): Promise<HttpsProxyAgent<string> | null> {
-    const proxyUrl = await this.getProxyUrl();
+  async getProxyAgent(affinityKey?: string): Promise<HttpsProxyAgent<string> | null> {
+    const proxyUrl = await this.getProxyUrl(affinityKey);
     if (!proxyUrl) return null;
     return new HttpsProxyAgent(proxyUrl);
   }

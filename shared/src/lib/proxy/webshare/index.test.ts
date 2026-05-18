@@ -9,7 +9,7 @@ beforeEach(() => {
 });
 
 test("WebshareProvider fetchProxyList requires an API key", async () => {
-  const { WebshareProvider } = await import("./webshare/index");
+  const { WebshareProvider } = await import("./index");
   const provider = new WebshareProvider();
 
   await assert.rejects(
@@ -40,7 +40,7 @@ test("WebshareProvider fetches and caches proxy lists", async () => {
   const nowSpy = vi.spyOn(Date, "now");
   nowSpy.mockReturnValue(1_000);
 
-  const { WebshareProvider } = await import("./webshare/index");
+  const { WebshareProvider } = await import("./index");
   const provider = new WebshareProvider();
 
   const first = await provider.fetchProxyList();
@@ -69,7 +69,7 @@ test("WebshareProvider handles missing keys, errors, info, and agents", async ()
   const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
   const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-  let mod = await import("./webshare/index");
+  let mod = await import("./index");
   let provider = new mod.WebshareProvider();
 
   assert.equal(await provider.getProxyUrl(), null);
@@ -85,7 +85,7 @@ test("WebshareProvider handles missing keys, errors, info, and agents", async ()
   }));
   vi.stubGlobal("fetch", fetchMock);
 
-  mod = await import("./webshare/index");
+  mod = await import("./index");
   provider = new mod.WebshareProvider();
 
   assert.equal(await provider.getProxyUrl(), null);
@@ -127,7 +127,7 @@ test("WebshareProvider handles missing keys, errors, info, and agents", async ()
     })),
   );
 
-  mod = await import("./webshare/index");
+  mod = await import("./index");
   provider = new mod.WebshareProvider();
 
   assert.equal(
@@ -159,7 +159,125 @@ test("WebshareProvider handles missing keys, errors, info, and agents", async ()
       },
     ],
     ipList: ["2.2.2.2"],
+    ipListsByKey: [["2.2.2.2"]],
+    allIpList: ["2.2.2.2"],
     total: 2,
     validCount: 1,
+    webshareApiKeys: {
+      total: 1,
+      activeIndex: 0,
+      activeKeyMasked: "****",
+    },
   });
+});
+
+test("WebshareProvider rotates API key on 402 bandwidth limits and aggregates IPs across keys", async () => {
+  const persistSpy = vi.fn(async () => {});
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        results: [
+          {
+            proxy_address: "4.4.4.4",
+            port: 8080,
+            username: "user4",
+            password: "pass4",
+            valid: true,
+            country_code: "US",
+            city_name: "Buffalo",
+          },
+        ],
+      }),
+    })
+    .mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        results: [
+          {
+            proxy_address: "1.1.1.1",
+            port: 8080,
+            username: "user1",
+            password: "pass1",
+            valid: true,
+            country_code: "SG",
+            city_name: "Singapore",
+          },
+        ],
+      }),
+    })
+    .mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        results: [
+          {
+            proxy_address: "4.4.4.4",
+            port: 8080,
+            username: "user4",
+            password: "pass4",
+            valid: true,
+            country_code: "US",
+            city_name: "Buffalo",
+          },
+        ],
+      }),
+    });
+
+  vi.stubGlobal("fetch", fetchMock);
+
+  const mod = await import("./index");
+  mod.configureWebshareApiKeyPool({
+    resolvePool: () => ({
+      keys: ["key-a", "key-b"],
+      activeIndex: 0,
+      allowedCountryCodes: [],
+    }),
+    persistActiveIndex: persistSpy,
+  });
+
+  const provider = new mod.WebshareProvider();
+  const rotated = await provider.tryRotateApiKeyForError({
+    status: 402,
+    responseBody:
+      "Bandwidth limit reached. Please upgrade to continue using the proxy.",
+  });
+
+  assert.equal(rotated, true);
+  assert.equal(await provider.getProxyUrl(), "http://user4:pass4@4.4.4.4:8080");
+
+  provider.clearCache();
+  const info = await provider.getProxyInfo();
+  assert.equal(info.success, true);
+  assert.deepEqual(info.ipListsByKey, [["1.1.1.1"], ["4.4.4.4"]]);
+  assert.deepEqual(info.allIpList, ["1.1.1.1", "4.4.4.4"]);
+  assert.equal(persistSpy.mock.calls.length > 0, true);
+});
+
+test("WebshareProvider keeps API-key rotation available while IP cooldown is handled separately", async () => {
+  const persistSpy = vi.fn(async () => {});
+  const mod = await import("./index");
+  mod.configureWebshareApiKeyPool({
+    resolvePool: () => ({
+      keys: ["key-a", "key-b"],
+      activeIndex: 0,
+      allowedCountryCodes: [],
+    }),
+    persistActiveIndex: persistSpy,
+  });
+
+  const provider = new mod.WebshareProvider();
+  const firstRotate = await provider.tryRotateApiKeyForError({
+    status: 402,
+    responseBody:
+      "Bandwidth limit reached. Please upgrade to continue using the proxy.",
+  });
+  const secondRotate = await provider.tryRotateApiKeyForError({
+    status: 402,
+    responseBody:
+      "Bandwidth limit reached. Please upgrade to continue using the proxy.",
+  });
+
+  assert.equal(firstRotate, true);
+  assert.equal(secondRotate, true);
 });

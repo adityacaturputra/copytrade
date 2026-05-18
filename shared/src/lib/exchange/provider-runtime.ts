@@ -133,6 +133,7 @@ export const EXCHANGE_PROVIDER_RUNTIME_REGISTRY: ExchangeProviderRuntimeRegistry
           apiKey,
           secretKey,
           credentials?.simulated ?? false,
+          credentials?.proxyAffinityKey,
         );
       },
       capabilities: {

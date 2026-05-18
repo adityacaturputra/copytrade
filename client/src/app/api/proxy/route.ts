@@ -19,7 +19,7 @@ export async function GET() {
     // Get provider info if enabled
     let providerInfo = null;
     if (config.enabled) {
-      providerInfo = await getProxyInfo();
+      providerInfo = await getProxyInfo({ forceRefresh: false });
     }
 
     return NextResponse.json({

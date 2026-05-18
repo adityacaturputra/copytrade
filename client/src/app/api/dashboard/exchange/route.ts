@@ -92,6 +92,7 @@ export async function GET() {
             const creds = buildExchangeCredentials(
               acct.tradingPlatform,
               (acct.exchangeData as Record<string, unknown>) || {},
+              { proxyAffinityKey: acct._id.toString() },
             );
             const client = creds
               ? ExchangeFactory.getClientForAccount(creds)

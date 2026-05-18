@@ -134,6 +134,7 @@ export function toExchangeCredentials(account: AccountRecord): ExchangeCredentia
   const credentials = buildExchangeCredentials(
     account.tradingPlatform,
     (account.exchangeData || {}) as Record<string, unknown>,
+    { proxyAffinityKey: String(account._id) },
   );
   if (!credentials) {
     throw new Error(

@@ -32,7 +32,7 @@ export async function cancelBybitOrder(ctx: BybitCtx, orderId: string, symbol: s
 export async function getBybitOpenOrders(ctx: BybitCtx, symbol?: string): Promise<OpenOrderInfo[]> {
   const normalized = symbol ? ctx.toSymbol(symbol) : undefined;
   const result = await ctx.signedRequest<any>("GET", "/v5/order/realtime", { category: "linear", symbol: normalized, settleCoin: "USDT" });
-  return (result.list || []).map((row: any) => ({
+  return (result?.list || []).map((row: any) => ({
     orderId: String(row.orderId || ""),
     symbol: String(row.symbol || ""),
     side: row.side === "Buy" ? "BUY" : "SELL",
@@ -107,7 +107,7 @@ export async function cancelBybitAlgoOrders(ctx: BybitCtx, symbol: string): Prom
 export async function getBybitOrderHistory(ctx: BybitCtx, symbol?: string, limit: number = 20): Promise<HistoricalOrder[]> {
   const normalized = symbol ? ctx.toSymbol(symbol) : undefined;
   const result = await ctx.signedRequest<any>("GET", "/v5/order/history", { category: "linear", settleCoin: "USDT", symbol: normalized, limit: Math.max(1, Math.min(limit, 50)) });
-  return (result.list || []).map((row: any) => ({
+  return (result?.list || []).map((row: any) => ({
     orderId: String(row.orderId || ""),
     symbol: String(row.symbol || ""),
     side: row.side === "Buy" ? "BUY" : "SELL",

@@ -10,6 +10,7 @@ import type { AnalysisContextSnapshot } from "./analysis-context-format";
 import { roundContextNumber } from "./analysis-context-format";
 
 type AnalysisAccountRecord = {
+  proxyAffinityKey?: string;
   name: string;
   sourceType?: string;
   tradingPlatform?: string;
@@ -25,6 +26,7 @@ export async function buildAnalysisContextSnapshot(msg: ProcessTrackedMessage): 
 
   const exchange = ExchangeFactory.getClientForAccount(
     buildExchangeCredentialsFromAccount({
+      proxyAffinityKey: String(msg.sourceId || ""),
       name: account.name,
       sourceType: String(account.sourceType || ""),
       tradingPlatform: account.tradingPlatform || undefined,
@@ -105,7 +107,11 @@ export async function buildAnalysisContextSnapshot(msg: ProcessTrackedMessage): 
 }
 
 function buildExchangeCredentialsFromAccount(account: AnalysisAccountRecord): ExchangeCredentials {
-  const credentials = buildExchangeCredentials(account.tradingPlatform, account.exchangeData || {});
+  const credentials = buildExchangeCredentials(
+    account.tradingPlatform,
+    account.exchangeData || {},
+    { proxyAffinityKey: account.proxyAffinityKey },
+  );
   if (!credentials) {
     throw new Error(`Account "${account.name || "unknown"}" has invalid trading platform "${account.tradingPlatform || "unset"}"`);
   }

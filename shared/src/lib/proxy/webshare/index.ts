@@ -40,15 +40,50 @@ const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 let missingKeyWarned = false;
 let proxyFetchErrorWarned = false;
 let roundRobinCursor = 0;
-let blockedCountryCodes = new Set<string>();
-let blockedIps = new Set<string>();
+type AffinityState = {
+  blockedCountryCodes: Set<string>;
+  blockedIps: Set<string>;
+  cooldownIps: Map<string, number>;
+  lastSelectedProxyMeta: {
+    ip: string;
+    countryCode: string;
+    city: string;
+  } | null;
+  preferredCountryCode: string | null;
+  preferredIp: string | null;
+};
+
+const DEFAULT_AFFINITY_KEY = "__global__";
+let affinityStates = new Map<string, AffinityState>();
+
+function getAffinityState(affinityKey?: string): AffinityState {
+  const key = affinityKey || DEFAULT_AFFINITY_KEY;
+  const existing = affinityStates.get(key);
+  if (existing) return existing;
+  const created: AffinityState = {
+    blockedCountryCodes: new Set<string>(),
+    blockedIps: new Set<string>(),
+    cooldownIps: new Map<string, number>(),
+    lastSelectedProxyMeta: null,
+    preferredCountryCode: null,
+    preferredIp: null,
+  };
+  affinityStates.set(key, created);
+  return created;
+}
+
+function getAffinityLabel(affinityKey?: string): string {
+  return affinityKey || DEFAULT_AFFINITY_KEY;
+}
+
 let lastSelectedProxyMeta: {
   ip: string;
   countryCode: string;
   city: string;
 } | null = null;
-let preferredCountryCode: string | null = null;
-let preferredIp: string | null = null;
+let activeWebshareKeyIndex = 0;
+let providerInfoCache: { value: ProxyInfoResult; ts: number } | null = null;
+const WEBHARE_PROXY_IP_COOLDOWN_MS = 60 * 60 * 1000;
 
 function normalizeIndex(index: number, total: number): number {
   if (total <= 0) return 0;
@@ -60,6 +95,39 @@ function maskApiKey(key: string): string {
   if (!trimmed) return "";
   if (trimmed.length <= 8) return "****";
   return `${trimmed.slice(0, 4)}****${trimmed.slice(-4)}`;
+}
+
+function isUsageLimitedResponse(status: number, text: string): boolean {
+  return (
+    status === 402 ||
+    status === 429 ||
+    status === 401 ||
+    status === 403 ||
+    /rate.?limit|usage|quota|bandwidth limit reached|upgrade to continue using the proxy/i.test(
+      text,
+    )
+  );
+}
+
+function isIpCoolingDown(affinity: AffinityState, ip: string): boolean {
+  const until = affinity.cooldownIps.get(ip) || 0;
+  return until > Date.now();
+}
+
+function markIpCooldown(affinity: AffinityState, ip?: string): void {
+  const normalized = String(ip || "").trim();
+  if (!normalized) return;
+  affinity.cooldownIps.set(
+    normalized,
+    Date.now() + WEBHARE_PROXY_IP_COOLDOWN_MS,
+  );
+}
+
+function getIpCooldownRemainingMs(
+  affinity: AffinityState,
+  ip: string,
+): number {
+  return Math.max(0, (affinity.cooldownIps.get(ip) || 0) - Date.now());
 }
 
 export class WebshareProvider implements IProxyProvider {
@@ -98,7 +166,6 @@ export class WebshareProvider implements IProxyProvider {
     let lastError = "Unknown Webshare API error";
     let json: any = null;
     let successfulIndex = startIndex;
-
     for (let i = 0; i < apiKeys.length; i++) {
       const keyIndex = normalizeIndex(startIndex + i, apiKeys.length);
       const response = await fetch(baseUrl, {
@@ -111,16 +178,13 @@ export class WebshareProvider implements IProxyProvider {
       if (response.ok) {
         json = await response.json();
         successfulIndex = keyIndex;
+        activeWebshareKeyIndex = keyIndex;
         break;
       }
 
       const text = await response.text();
       lastError = `Webshare API error (${response.status}): ${text}`;
-      const usageLimited =
-        response.status === 429 ||
-        response.status === 401 ||
-        response.status === 403 ||
-        /rate.?limit|usage|quota/i.test(text);
+      const usageLimited = isUsageLimitedResponse(response.status, text);
 
       if (!usageLimited) {
         throw new Error(lastError);
@@ -134,6 +198,7 @@ export class WebshareProvider implements IProxyProvider {
     if (persistWebshareActiveIndex) {
       await persistWebshareActiveIndex(successfulIndex);
     }
+    activeWebshareKeyIndex = successfulIndex;
 
     const proxies: ProxyEntry[] = (json.results || []).map(
       (p: Record<string, unknown>) => ({
@@ -151,7 +216,59 @@ export class WebshareProvider implements IProxyProvider {
     return proxies;
   }
 
-  async getProxyUrl(): Promise<string | null> {
+  async rotateApiKey(): Promise<boolean> {
+    const pool = await resolveWebshareApiKeyPool();
+    const apiKeys = (pool.keys || []).map((k) => k.trim()).filter(Boolean);
+    if (apiKeys.length <= 1) {
+      console.warn(
+        "[WebshareProxy] Rotation skipped: only one Webshare API key is configured.",
+      );
+      return false;
+    }
+    const nextIndex = normalizeIndex(activeWebshareKeyIndex + 1, apiKeys.length);
+
+    console.warn(
+      `[WebshareProxy] Rotating API key ${activeWebshareKeyIndex + 1} -> ${nextIndex + 1}`,
+    );
+
+    activeWebshareKeyIndex = nextIndex;
+    proxyCache = null;
+    affinityStates = new Map<string, AffinityState>();
+    lastSelectedProxyMeta = null;
+
+    if (persistWebshareActiveIndex) {
+      await persistWebshareActiveIndex(nextIndex);
+    }
+
+    return true;
+  }
+
+  async tryRotateApiKeyForError(error: unknown): Promise<boolean> {
+    const status =
+      typeof error === "object" && error && "status" in error
+        ? Number((error as { status?: unknown }).status)
+        : undefined;
+    const responseBody =
+      typeof error === "object" && error && "responseBody" in error
+        ? String((error as { responseBody?: unknown }).responseBody || "")
+        : error instanceof Error
+          ? error.message
+          : String(error || "");
+
+    if (
+      typeof status === "number" &&
+      isUsageLimitedResponse(status, responseBody)
+    ) {
+      console.warn(
+        `[WebshareProxy] Usage-limited proxy error detected (status=${status}). Trying API key rotation...`,
+      );
+      return this.rotateApiKey();
+    }
+
+    return false;
+  }
+
+  async getProxyUrl(affinityKey?: string): Promise<string | null> {
     const pool = await resolveWebshareApiKeyPool();
     const hasAnyApiKey = (pool.keys || []).some((k) => k.trim().length > 0);
     if (!hasAnyApiKey) {
@@ -166,6 +283,7 @@ export class WebshareProvider implements IProxyProvider {
     missingKeyWarned = false;
 
     try {
+      const affinity = getAffinityState(affinityKey);
       const proxies = await this.fetchProxyList();
       const validProxies = proxies.filter((p) => p.valid);
       if (validProxies.length === 0) return null;
@@ -181,31 +299,37 @@ export class WebshareProvider implements IProxyProvider {
         countryFilteredProxies.length > 0
           ? countryFilteredProxies
           : validProxies;
+      const nonCoolingProxies = eligibleProxies.filter(
+        (p) => !isIpCoolingDown(affinity, p.ip),
+      );
+      const activeEligibleProxies =
+        nonCoolingProxies.length > 0 ? nonCoolingProxies : eligibleProxies;
 
       const preferredIpMatch =
-        preferredIp &&
-        eligibleProxies.find(
+        affinity.preferredIp &&
+        activeEligibleProxies.find(
           (p) =>
-            p.ip === preferredIp &&
-            !blockedIps.has(p.ip) &&
-            !blockedCountryCodes.has((p.country_code || "").toUpperCase()),
+            p.ip === affinity.preferredIp &&
+            !affinity.blockedIps.has(p.ip) &&
+            !affinity.blockedCountryCodes.has((p.country_code || "").toUpperCase()),
         );
       if (preferredIpMatch) {
-        lastSelectedProxyMeta = {
+        affinity.lastSelectedProxyMeta = {
           ip: preferredIpMatch.ip,
           countryCode: preferredIpMatch.country_code,
           city: preferredIpMatch.city_name,
         };
+        lastSelectedProxyMeta = affinity.lastSelectedProxyMeta;
         proxyFetchErrorWarned = false;
         return `http://${preferredIpMatch.username}:${preferredIpMatch.password}@${preferredIpMatch.ip}:${preferredIpMatch.port}`;
       }
 
-      const preferredCountryPool = preferredCountryCode
-        ? eligibleProxies.filter(
+      const preferredCountryPool = affinity.preferredCountryCode
+          ? activeEligibleProxies.filter(
             (p) =>
-              !blockedIps.has(p.ip) &&
-              (p.country_code || "").toUpperCase() === preferredCountryCode &&
-              !blockedCountryCodes.has((p.country_code || "").toUpperCase()),
+              !affinity.blockedIps.has(p.ip) &&
+              (p.country_code || "").toUpperCase() === affinity.preferredCountryCode &&
+              !affinity.blockedCountryCodes.has((p.country_code || "").toUpperCase()),
           )
         : [];
 
@@ -213,31 +337,33 @@ export class WebshareProvider implements IProxyProvider {
         const idx = roundRobinCursor % preferredCountryPool.length;
         const selected = preferredCountryPool[idx];
         roundRobinCursor = (roundRobinCursor + 1) % preferredCountryPool.length;
-        lastSelectedProxyMeta = {
+        affinity.lastSelectedProxyMeta = {
           ip: selected.ip,
           countryCode: selected.country_code,
           city: selected.city_name,
         };
+        lastSelectedProxyMeta = affinity.lastSelectedProxyMeta;
         proxyFetchErrorWarned = false;
         return `http://${selected.username}:${selected.password}@${selected.ip}:${selected.port}`;
       }
 
-      const preferred = eligibleProxies.filter(
+      const preferred = activeEligibleProxies.filter(
         (p) =>
-          !blockedIps.has(p.ip) &&
-          !blockedCountryCodes.has((p.country_code || "").toUpperCase()),
+          !affinity.blockedIps.has(p.ip) &&
+          !affinity.blockedCountryCodes.has((p.country_code || "").toUpperCase()),
       );
-      const candidatePool = preferred.length > 0 ? preferred : eligibleProxies;
+      const candidatePool = preferred.length > 0 ? preferred : activeEligibleProxies;
 
       const index = roundRobinCursor % candidatePool.length;
       const selectedProxy = candidatePool[index];
       roundRobinCursor = (roundRobinCursor + 1) % candidatePool.length;
 
-      lastSelectedProxyMeta = {
+      affinity.lastSelectedProxyMeta = {
         ip: selectedProxy.ip,
         countryCode: selectedProxy.country_code,
         city: selectedProxy.city_name,
       };
+      lastSelectedProxyMeta = affinity.lastSelectedProxyMeta;
 
       proxyFetchErrorWarned = false;
       return `http://${selectedProxy.username}:${selectedProxy.password}@${selectedProxy.ip}:${selectedProxy.port}`;
@@ -253,31 +379,66 @@ export class WebshareProvider implements IProxyProvider {
     }
   }
 
-  async getProxyAgent(): Promise<HttpsProxyAgent<string> | null> {
-    const proxyUrl = await this.getProxyUrl();
+  async getProxyAgent(affinityKey?: string): Promise<HttpsProxyAgent<string> | null> {
+    const proxyUrl = await this.getProxyUrl(affinityKey);
     if (!proxyUrl) return null;
     return new HttpsProxyAgent(proxyUrl);
   }
 
   async getProxyInfo(): Promise<ProxyInfoResult> {
     try {
+      if (providerInfoCache && Date.now() - providerInfoCache.ts < 60_000) {
+        return providerInfoCache.value;
+      }
+
       const pool = await resolveWebshareApiKeyPool();
       const cleaned = (pool.keys || []).map((k) => k.trim()).filter(Boolean);
       const activeIndex = normalizeIndex(
         pool.activeIndex || 0,
         cleaned.length || 1,
       );
-      const proxies = await this.fetchProxyList();
+      const ipListsByKey: string[][] = [];
+      let mergedProxies: ProxyEntry[] = [];
+      const originalCache = proxyCache;
+
+      for (let index = 0; index < cleaned.length; index++) {
+        proxyCache = null;
+        if (persistWebshareActiveIndex) {
+          await persistWebshareActiveIndex(index);
+        }
+        activeWebshareKeyIndex = index;
+        const jsonProxies = await this.fetchProxyList();
+        mergedProxies = mergedProxies.concat(jsonProxies);
+        ipListsByKey.push(jsonProxies.filter((p) => p.valid).map((p) => p.ip));
+      }
+
+      proxyCache = null;
+      if (persistWebshareActiveIndex) {
+        await persistWebshareActiveIndex(activeIndex);
+      }
+      activeWebshareKeyIndex = activeIndex;
+      proxyCache = originalCache;
+
+      const dedupedByIp = new Map<string, ProxyEntry>();
+      for (const proxy of mergedProxies) {
+        if (!dedupedByIp.has(proxy.ip)) {
+          dedupedByIp.set(proxy.ip, proxy);
+        }
+      }
+
+      const proxies = Array.from(dedupedByIp.values());
       const validProxies = proxies.filter((p) => p.valid);
       const firstProxy = validProxies[0];
 
-      return {
+      const result = {
         success: true,
         credentials: firstProxy
           ? { username: firstProxy.username, password: firstProxy.password }
           : undefined,
         proxies,
         ipList: validProxies.map((p) => p.ip),
+        ipListsByKey,
+        allIpList: validProxies.map((p) => p.ip),
         total: proxies.length,
         validCount: validProxies.length,
         webshareApiKeys: {
@@ -288,6 +449,8 @@ export class WebshareProvider implements IProxyProvider {
             : null,
         },
       };
+      providerInfoCache = { value: result, ts: Date.now() };
+      return result;
     } catch (error) {
       return {
         success: false,
@@ -300,46 +463,50 @@ export class WebshareProvider implements IProxyProvider {
   /** Clear the proxy cache */
   clearCache(): void {
     proxyCache = null;
+    providerInfoCache = null;
+    affinityStates = new Map<string, AffinityState>();
     roundRobinCursor = 0;
-    blockedCountryCodes = new Set<string>();
-    blockedIps = new Set<string>();
     lastSelectedProxyMeta = null;
   }
 
-  markCountryBlocked(countryCode?: string): void {
+  markCountryBlocked(countryCode?: string, affinityKey?: string): void {
+    const affinity = getAffinityState(affinityKey);
     const normalized = String(countryCode || "")
       .trim()
       .toUpperCase();
     if (!normalized) return;
-    blockedCountryCodes.add(normalized);
-    if (preferredCountryCode === normalized) {
-      preferredCountryCode = null;
-      preferredIp = null;
+    affinity.blockedCountryCodes.add(normalized);
+    if (affinity.preferredCountryCode === normalized) {
+      affinity.preferredCountryCode = null;
+      affinity.preferredIp = null;
     }
   }
 
-  getLastSelectedProxyMeta(): {
+  getLastSelectedProxyMeta(affinityKey?: string): {
     ip: string;
     countryCode: string;
     city: string;
   } | null {
-    return lastSelectedProxyMeta;
+    return getAffinityState(affinityKey).lastSelectedProxyMeta;
   }
 
-  markCurrentProxySuccessful(): void {
-    if (!lastSelectedProxyMeta) return;
-    preferredCountryCode = (
-      lastSelectedProxyMeta.countryCode || ""
+  markCurrentProxySuccessful(affinityKey?: string): void {
+    const affinity = getAffinityState(affinityKey);
+    if (!affinity.lastSelectedProxyMeta) return;
+    affinity.preferredCountryCode = (
+      affinity.lastSelectedProxyMeta.countryCode || ""
     ).toUpperCase();
-    preferredIp = lastSelectedProxyMeta.ip;
+    affinity.preferredIp = affinity.lastSelectedProxyMeta.ip;
   }
 
-  markIpBlocked(ip?: string): void {
+  markIpBlocked(ip?: string, affinityKey?: string): void {
+    const affinity = getAffinityState(affinityKey);
     const normalized = String(ip || "").trim();
     if (!normalized) return;
-    blockedIps.add(normalized);
-    if (preferredIp === normalized) {
-      preferredIp = null;
+    affinity.blockedIps.add(normalized);
+    markIpCooldown(affinity, normalized);
+    if (affinity.preferredIp === normalized) {
+      affinity.preferredIp = null;
     }
   }
 }

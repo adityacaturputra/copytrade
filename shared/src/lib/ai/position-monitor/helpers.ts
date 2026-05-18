@@ -65,6 +65,7 @@ export function getExchangeForMonitorAccount(
     const credentials = buildExchangeCredentials(
       account.tradingPlatform,
       account.exchangeData as Record<string, unknown>,
+      { proxyAffinityKey: String(account._id) },
     );
     if (credentials) {
       return ExchangeFactory.getClientForAccount(credentials);

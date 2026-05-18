@@ -100,6 +100,7 @@ router.get("/", async (req: Request, res: Response) => {
           const creds = buildExchangeCredentials(
             account.tradingPlatform,
             (account.exchangeData as Record<string, unknown>) || {},
+            { proxyAffinityKey: accountIdValue },
           );
           if (!creds) {
             specsCache.set(cacheKey, null);

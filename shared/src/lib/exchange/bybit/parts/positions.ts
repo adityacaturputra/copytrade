@@ -6,8 +6,8 @@ export async function fetchBybitPositions(ctx: BybitCtx, symbol?: string): Promi
   let cursor: string | undefined;
   do {
     const result = await ctx.signedRequest<any>("GET", "/v5/position/list", { category: "linear", symbol: symbol ? ctx.toSymbol(symbol) : undefined, settleCoin: symbol ? undefined : "USDT", cursor, limit: 50 });
-    if (result.list) rows.push(...result.list);
-    cursor = result.nextPageCursor;
+    if (result?.list) rows.push(...result.list);
+    cursor = result?.nextPageCursor;
   } while (cursor);
   return rows;
 }

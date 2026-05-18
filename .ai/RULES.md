@@ -14,6 +14,7 @@
 - Trade logging is a first-class subsystem under `shared/src/lib/trade-log/`.
 - Trade/process logs must preserve `processId` tracing so draft, executor, monitor, and agent flows can be correlated in UI and debugging.
 - Logging/storage refactors are sensitive because they affect dashboard logs, per-process logs, cleanup APIs, Mongo legacy reads, and optional remote backend proxy mode.
+- Exchange/proxy error logs should preserve actionable HTTP context whenever possible: status, parsed response body, and selected proxy metadata (provider/IP/country/city) so proxy-rotation and exchange failures can be debugged without reproducing blindly.
 
 ## Structure Rules
 - Folder-first organization. Group related files into domain folders.

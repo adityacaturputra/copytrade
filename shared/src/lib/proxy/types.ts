@@ -41,12 +41,15 @@ export interface ProxyInfoResult {
   credentials?: { username: string; password: string };
   proxies?: ProxyEntry[];
   ipList?: string[];
+  ipListsByKey?: string[][];
+  allIpList?: string[];
   total?: number;
   validCount?: number;
   error?: string;
   providerName?: string;
   telemetry?: {
     snapshotUpdatedAt?: string;
+    cacheExpiresAt?: string;
     previousIps?: string[];
     currentIps?: string[];
     addedIps?: string[];
@@ -65,10 +68,10 @@ export interface IProxyProvider {
   readonly name: string;
 
   /** Get a proxy URL string (http://user:pass@host:port) */
-  getProxyUrl(): Promise<string | null>;
+  getProxyUrl(affinityKey?: string): Promise<string | null>;
 
   /** Get an HTTPS proxy agent for fetch/axios */
-  getProxyAgent(): Promise<HttpsProxyAgent<string> | null>;
+  getProxyAgent(affinityKey?: string): Promise<HttpsProxyAgent<string> | null>;
 
   /** Get proxy info for the settings page (IP list, credentials, etc.) */
   getProxyInfo(): Promise<ProxyInfoResult>;

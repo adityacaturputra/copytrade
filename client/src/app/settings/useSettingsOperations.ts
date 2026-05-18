@@ -90,8 +90,12 @@ export function useSettingsOperations(check403: (res: Response) => boolean) {
   };
 
   const handleCopyProxyIpCsv = async () => {
-    if (!proxyProviderInfo?.ipList?.length) return;
-    await navigator.clipboard.writeText(proxyProviderInfo.ipList.join(","));
+    const ipList =
+      proxyProviderInfo?.allIpList?.length
+        ? proxyProviderInfo.allIpList
+        : proxyProviderInfo?.ipList || [];
+    if (!ipList.length) return;
+    await navigator.clipboard.writeText(ipList.join(","));
     setProxyIpCsvCopied(true);
     setTimeout(() => setProxyIpCsvCopied(false), 1800);
   };

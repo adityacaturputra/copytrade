@@ -41,6 +41,7 @@ export async function resolveTradeExchange({
         buildExchangeCredentials(
           account.tradingPlatform,
           (account.exchangeData as Record<string, unknown>) || {},
+          { proxyAffinityKey: String(accountId) },
         ) || ({ provider: "paper" } as ExchangeCredentials);
       return ExchangeFactory.getClientForAccount(creds);
     }

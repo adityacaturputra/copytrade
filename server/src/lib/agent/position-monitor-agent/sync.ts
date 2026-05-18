@@ -15,6 +15,7 @@ import {
   logExecutorWarn,
   logProcessStep,
 } from "@copytrade/shared/lib/process/log";
+import { getHttpErrorDetails } from "@copytrade/shared/lib/http/error";
 import { ensurePersistedProcessId } from "@copytrade/shared/lib/process/id";
 import { createTradeLog } from "@copytrade/shared/lib/trade-log/store";
 
@@ -40,6 +41,7 @@ export async function getExchangeForPosition(position: {
       const creds = buildExchangeCredentials(
         account.tradingPlatform,
         account.exchangeData as Record<string, unknown>,
+        { proxyAffinityKey: String(position.accountId) },
       );
       if (creds) {
         return ExchangeFactory.getClientForAccount(creds);
@@ -104,9 +106,13 @@ export async function syncPendingPositions(
       });
     } catch (error) {
       const errMsg = getErrorMessage(error);
+      const httpDetails = getHttpErrorDetails(error);
+      const responseSuffix = httpDetails.responseBody
+        ? ` | response=${httpDetails.responseBody}`
+        : "";
       result.errors.push(`Pending ${position.symbol}: ${errMsg}`);
       await logExecutorError(
-        `Error checking pending position ${position.symbol}: ${errMsg}`,
+        `Error checking pending position ${position.symbol}: ${errMsg}${responseSuffix}`,
         {
           accountId: position.accountId,
           processId,
