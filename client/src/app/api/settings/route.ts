@@ -66,6 +66,8 @@ export async function POST(request: NextRequest) {
         skipNoSL,
         autoRaiseMinOrderEnabled,
         autoRaiseMinOrderMaxMarginUsdt,
+        autoRaiseTpCountEnabled,
+        autoRaiseTpCountMaxMarginUsdt,
       } = body.risk;
 
       // Validation
@@ -132,6 +134,34 @@ export async function POST(request: NextRequest) {
           { status: 400 },
         );
       }
+      if (
+        autoRaiseTpCountEnabled !== undefined &&
+        typeof autoRaiseTpCountEnabled !== "boolean"
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Auto-raise TP count must be enabled or disabled",
+          },
+          { status: 400 },
+        );
+      }
+      if (
+        autoRaiseTpCountMaxMarginUsdt !== undefined &&
+        (typeof autoRaiseTpCountMaxMarginUsdt !== "number" ||
+          !Number.isFinite(autoRaiseTpCountMaxMarginUsdt) ||
+          autoRaiseTpCountMaxMarginUsdt < 0 ||
+          autoRaiseTpCountMaxMarginUsdt > 1_000_000)
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "Auto-raise TP count max margin must be between 0 and 1,000,000 USDT",
+          },
+          { status: 400 },
+        );
+      }
 
       const { defaultRR, defaultPositionSize, defaultLeverage, maxPositions } =
         body.risk;
@@ -190,6 +220,12 @@ export async function POST(request: NextRequest) {
         }),
         ...(autoRaiseMinOrderMaxMarginUsdt !== undefined && {
           autoRaiseMinOrderMaxMarginUsdt,
+        }),
+        ...(autoRaiseTpCountEnabled !== undefined && {
+          autoRaiseTpCountEnabled,
+        }),
+        ...(autoRaiseTpCountMaxMarginUsdt !== undefined && {
+          autoRaiseTpCountMaxMarginUsdt,
         }),
       });
     }

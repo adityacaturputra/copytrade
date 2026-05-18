@@ -86,6 +86,12 @@ const RISK_OVERRIDE_VALIDATORS: Record<string, (value: unknown) => boolean> = {
     Number.isFinite(value) &&
     value >= 0 &&
     value <= 1_000_000,
+  autoRaiseTpCountEnabled: (value) => typeof value === "boolean",
+  autoRaiseTpCountMaxMarginUsdt: (value) =>
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= 0 &&
+    value <= 1_000_000,
 };
 
 function isMaskedValue(value: unknown): boolean {
