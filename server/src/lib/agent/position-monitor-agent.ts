@@ -16,7 +16,6 @@ import {
 } from "./position-monitor-agent/helpers";
 import {
   cleanupOrphanProtectionForAccounts,
-  syncPendingPositions,
 } from "./position-monitor-agent/sync";
 import { runPositionAgentForDoc } from "./position-monitor-agent/runtime";
 
@@ -51,8 +50,6 @@ export async function runPositionMonitorAgent(): Promise<{
         level: "debug",
       },
     );
-
-    await syncPendingPositions(result, getErrorMessage);
 
     const activePositions = (await Position.find({
       status: "open",
