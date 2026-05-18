@@ -15,9 +15,7 @@ import {
   getErrorMessage,
 } from "./position-monitor-agent/helpers";
 import {
-  buildExchangePositionMap,
   cleanupOrphanProtectionForAccounts,
-  syncClosedPositions,
   syncPendingPositions,
 } from "./position-monitor-agent/sync";
 import { runPositionAgentForDoc } from "./position-monitor-agent/runtime";
@@ -55,21 +53,6 @@ export async function runPositionMonitorAgent(): Promise<{
     );
 
     await syncPendingPositions(result, getErrorMessage);
-
-    const openPositions = (await Position.find({
-      status: "open",
-    })) as PositionDocLike[];
-    const exchangePositions = await buildExchangePositionMap(
-      openPositions,
-      getAccountPositionKey,
-      getErrorMessage,
-    );
-    await syncClosedPositions(
-      openPositions,
-      exchangePositions,
-      result,
-      getAccountPositionKey,
-    );
 
     const activePositions = (await Position.find({
       status: "open",

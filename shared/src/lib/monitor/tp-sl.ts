@@ -7,6 +7,11 @@ import { ExchangeClient } from "../exchange/types";
 import { splitQuantityForTPs } from "../executor";
 import { inspectPendingLimitOrder } from "./pending-order-sync";
 import {
+  buildExchangePositionMap,
+  getExchangeForPosition,
+  syncClosedPositions,
+} from "./position-sync";
+import {
   logExecutorError,
   logExecutorInfo,
   logExecutorWarn,
@@ -101,27 +106,18 @@ async function cancelExistingStopLossOrders(
   return { cancelled, errors };
 }
 
-/**
- * Resolve the exchange client for a position based on its accountId.
- * If accountId is set, look up the Account and use its exchangeData.
- * Otherwise, fall back to global ExchangeFactory.getClient().
- */
-async function getExchangeForPosition(position: {
-  accountId?: string;
-}): Promise<ExchangeClient> {
-  if (position.accountId) {
-    const account = await Account.findById(position.accountId).lean();
-    if (account?.exchangeData) {
-      const creds = buildExchangeCredentials(
-        account.tradingPlatform,
-        account.exchangeData as Record<string, unknown>,
-        { proxyAffinityKey: String(position.accountId) },
-      );
-      if (creds) return ExchangeFactory.getClientForAccount(creds);
-    }
-  }
-  return ExchangeFactory.getPaperClient();
+function getAccountPositionKey(
+  accountId: string | undefined,
+  symbol: string,
+  side?: string,
+): string {
+  return `${accountId || "__global__"}::${symbol}::${side || "__any__"}`;
 }
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 
 /**
  * TP/SL Monitor — dedicated cron job that:
@@ -308,6 +304,7 @@ export async function runTpslMonitor(): Promise<{
   checked: number;
   promoted: number;
   tpslPlaced: number;
+  syncedClosed: number;
   errors: string[];
 }> {
   await connectDB();
@@ -316,6 +313,7 @@ export async function runTpslMonitor(): Promise<{
     checked: 0,
     promoted: 0,
     tpslPlaced: 0,
+    syncedClosed: 0,
     errors: [] as string[],
   };
 
@@ -456,6 +454,31 @@ export async function runTpslMonitor(): Promise<{
       }
     }
 
+    const openPositionsForSync = (await Position.find({
+      status: "open",
+    })) as IPosition[];
+    const exchangePositions = await buildExchangePositionMap(
+      openPositionsForSync,
+      getAccountPositionKey,
+      getErrorMessage,
+      {
+        label: "[TP/SL Monitor]",
+        type: "tpsl-monitor",
+        action: "exchange_positions_fetch_failed",
+      },
+    );
+    await syncClosedPositions(
+      openPositionsForSync,
+      exchangePositions,
+      result,
+      getAccountPositionKey,
+      {
+        prefix: "[TP/SL Monitor]",
+        processIdPrefix: "tpslsync",
+        processType: "tpsl-monitor",
+      },
+    );
+
     // ─── Step 2: Place TP/SL for open positions missing them ─────────────
     // Use atomic findOneAndUpdate to claim each position — prevents concurrent
     // cron instances from placing duplicate TP/SL orders (race condition fix).
@@ -536,7 +559,7 @@ export async function runTpslMonitor(): Promise<{
     });
 
     await logExecutorInfo(
-      `✅ [TP/SL Monitor] Complete: ${result.checked} checked, ${result.promoted} promoted, ${result.tpslPlaced} TP/SL placed, ${openWithTpsl} already OK`,
+      `✅ [TP/SL Monitor] Complete: ${result.checked} checked, ${result.promoted} promoted, ${result.tpslPlaced} TP/SL placed, ${result.syncedClosed} synced closed, ${openWithTpsl} already OK`,
       {
         type: "tpsl-monitor",
         action: "tpsl_monitor_completed",
