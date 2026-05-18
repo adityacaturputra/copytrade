@@ -91,6 +91,29 @@ export function getTpMinimums(
     tpMinQty && draft.entryPrice && draft.entryPrice > 0 && riskLeverage > 0
       ? (tpMinQty * draft.entryPrice) / riskLeverage
       : null;
+  const minOrderQty =
+    typeof draft.minOrderQty === 'number' && Number.isFinite(draft.minOrderQty)
+      ? draft.minOrderQty
+      : draft.instrumentLotSize && draft.instrumentLotSize > 0
+        ? draft.instrumentLotSize
+        : null;
+  const minOrderMarginUsdt =
+    typeof draft.minOrderMarginUsdt === 'number' &&
+    Number.isFinite(draft.minOrderMarginUsdt)
+      ? draft.minOrderMarginUsdt
+      : minOrderQty &&
+          draft.entryPrice &&
+          draft.entryPrice > 0 &&
+          riskLeverage > 0
+        ? (minOrderQty * draft.entryPrice) / riskLeverage
+        : null;
 
-  return { tpCount, tpMinQty, tpMinMarginUsdt, riskLeverage };
+  return {
+    tpCount,
+    tpMinQty,
+    tpMinMarginUsdt,
+    minOrderQty,
+    minOrderMarginUsdt,
+    riskLeverage,
+  };
 }

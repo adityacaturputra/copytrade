@@ -30,7 +30,14 @@ export function DraftCard({
   const autoTPs = buildAutoTpPreview(draft, customRR);
   const { orderType, parsedSignalData } = parseDraftSignal(draft.signalData);
   const resolvedStyle = getResolvedStyle(draft.status);
-  const { tpCount, tpMinQty, tpMinMarginUsdt, riskLeverage } = getTpMinimums(
+  const {
+    tpCount,
+    tpMinQty,
+    tpMinMarginUsdt,
+    minOrderQty,
+    minOrderMarginUsdt,
+    riskLeverage,
+  } = getTpMinimums(
     draft,
     riskConfig,
     accountBalance,
@@ -73,6 +80,8 @@ export function DraftCard({
                 tpCount={tpCount}
                 tpMinQty={tpMinQty}
                 tpMinMarginUsdt={tpMinMarginUsdt}
+                minOrderQty={minOrderQty}
+                minOrderMarginUsdt={minOrderMarginUsdt}
                 riskLeverage={riskLeverage}
               />
 

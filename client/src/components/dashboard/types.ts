@@ -279,6 +279,8 @@ export interface DraftTrade {
   createdAt: string;
   resolvedAt?: string;
   instrumentLotSize?: number | null;
+  minOrderQty?: number | null;
+  minOrderMarginUsdt?: number | null;
 }
 
 export type DraftAction = "accept" | "reject" | "redraft" | "reanalyze";

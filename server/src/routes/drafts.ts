@@ -79,7 +79,12 @@ router.get("/", async (req: Request, res: Response) => {
       drafts.map(async (draft) => {
         const accountIdValue = draft.accountId?.toString();
         if (!accountIdValue) {
-          return { ...draft, instrumentLotSize: null };
+          return {
+            ...draft,
+            instrumentLotSize: null,
+            minOrderQty: null,
+            minOrderMarginUsdt: null,
+          };
         }
 
         const cacheKey = `${accountIdValue}:${draft.symbol}`;
@@ -93,7 +98,12 @@ router.get("/", async (req: Request, res: Response) => {
         const account = accountMap.get(accountIdValue);
         if (!account?.exchangeData) {
           specsCache.set(cacheKey, null);
-          return { ...draft, instrumentLotSize: null };
+          return {
+            ...draft,
+            instrumentLotSize: null,
+            minOrderQty: null,
+            minOrderMarginUsdt: null,
+          };
         }
 
         try {
@@ -104,7 +114,12 @@ router.get("/", async (req: Request, res: Response) => {
           );
           if (!creds) {
             specsCache.set(cacheKey, null);
-            return { ...draft, instrumentLotSize: null };
+            return {
+              ...draft,
+              instrumentLotSize: null,
+              minOrderQty: null,
+              minOrderMarginUsdt: null,
+            };
           }
 
           const exchange = ExchangeFactory.getClientForAccount(creds);
@@ -113,12 +128,34 @@ router.get("/", async (req: Request, res: Response) => {
             typeof specs.lotSz === "number" && Number.isFinite(specs.lotSz)
               ? specs.lotSz
               : null;
+          const minOrderQty =
+            typeof specs.minSz === "number" && Number.isFinite(specs.minSz)
+              ? specs.minSz
+              : null;
+          const minOrderMarginUsdt =
+            minOrderQty &&
+            draft.entryPrice &&
+            draft.entryPrice > 0 &&
+            draft.leverage &&
+            draft.leverage > 0
+              ? (minOrderQty * draft.entryPrice) / draft.leverage
+              : null;
 
           specsCache.set(cacheKey, lotSize);
-          return { ...draft, instrumentLotSize: lotSize };
+          return {
+            ...draft,
+            instrumentLotSize: lotSize,
+            minOrderQty,
+            minOrderMarginUsdt,
+          };
         } catch {
           specsCache.set(cacheKey, null);
-          return { ...draft, instrumentLotSize: null };
+          return {
+            ...draft,
+            instrumentLotSize: null,
+            minOrderQty: null,
+            minOrderMarginUsdt: null,
+          };
         }
       }),
     );
