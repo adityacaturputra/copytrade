@@ -20,7 +20,14 @@ import {
 import { setBybitLeverage } from "./parts/leverage";
 import { getBybitTickerPrice, getBybitKlines, getBybitInstrumentSpecs } from "./parts/market";
 import { placeBybitOrder, cancelBybitOrder, getBybitOpenOrders, getBybitAlgoOrders, cancelBybitAlgoOrders, getBybitOrderHistory } from "./parts/orders";
-import { fetchBybitPositions, mapBybitOpenPositions, closeBybitPosition, closeBybitAllPositions, placeBybitConditionalCloseOrder } from "./parts/positions";
+import {
+  fetchBybitPositions,
+  mapBybitOpenPositions,
+  closeBybitPosition,
+  closeBybitAllPositions,
+  placeBybitConditionalCloseOrder,
+  setBybitPositionStopLoss,
+} from "./parts/positions";
 import { bybitPublicRequest, bybitRequest } from "./parts/request";
 import { BybitCtx } from "./parts/types";
 
@@ -114,7 +121,7 @@ export class BybitExchange implements ExchangeClient {
   async closePosition(s: string, id?: string, q?: number): Promise<void> { return closeBybitPosition(this.getHelperContext(), s, id, q); }
   async closeAllPositions(): Promise<{ closed: string[]; errors: string[] }> { return closeBybitAllPositions(this.getHelperContext()); }
   async setLeverage(s: string, l: number, t: "isolated" | "cross" = "isolated"): Promise<number> { return setBybitLeverage(this.getHelperContext(), s, l, t); }
-  async placeStopLoss(s: string, tp: number, ep: number, side: "BUY" | "SELL", q: number): Promise<string> { return placeBybitConditionalCloseOrder(this.getHelperContext(), "sl", s, tp, side, q); }
+  async placeStopLoss(s: string, tp: number, ep: number, side: "BUY" | "SELL", q: number): Promise<string> { return setBybitPositionStopLoss(this.getHelperContext(), s, tp, side); }
   async placeTakeProfit(s: string, tp: number, ep: number, side: "BUY" | "SELL", q: number): Promise<string> { return placeBybitConditionalCloseOrder(this.getHelperContext(), "tp", s, tp, side, q); }
   async getOpenOrders(s?: string): Promise<OpenOrderInfo[]> { return getBybitOpenOrders(this.getHelperContext(), s); }
   async cancelOrder(id: string, s: string): Promise<boolean> { return cancelBybitOrder(this.getHelperContext(), id, s); }

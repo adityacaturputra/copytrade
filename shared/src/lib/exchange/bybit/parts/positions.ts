@@ -98,3 +98,44 @@ export async function placeBybitConditionalCloseOrder(ctx: BybitCtx, type: "tp" 
   const result = await ctx.signedRequest<any>("POST", "/v5/order/create", payload);
   return result.orderId || result.orderLinkId || payload.orderLinkId;
 }
+
+export async function setBybitPositionStopLoss(
+  ctx: BybitCtx,
+  symbol: string,
+  triggerPrice: number,
+  side: "BUY" | "SELL",
+): Promise<string> {
+  const normalized = ctx.toSymbol(symbol);
+  const specs = await ctx.getInstrumentSpecs(normalized);
+  const positions = (await ctx.fetchPositions(normalized)).filter(
+    (row) =>
+      row.symbol === normalized &&
+      (row.side === "Buy" || row.side === "Sell") &&
+      ctx.parseNumber(row.size) > 0,
+  );
+  const position = positions.find(
+    (row) => (side === "BUY" ? "Sell" : "Buy") === row.side,
+  );
+  if (!position) {
+    throw new Error(
+      `No matching ${side === "BUY" ? "SHORT" : "LONG"} position for SL on ${normalized}`,
+    );
+  }
+
+  const price = ctx.clampToStep(
+    triggerPrice,
+    specs.tickSz,
+    specs.priceDecimals,
+  );
+  const positionIdx = position.positionIdx ?? 0;
+
+  await ctx.signedRequest("POST", "/v5/position/trading-stop", {
+    category: "linear",
+    symbol: normalized,
+    stopLoss: ctx.formatNum(price, specs.priceDecimals),
+    slTriggerBy: "MarkPrice",
+    positionIdx,
+  });
+
+  return `position-sl:${normalized}:${positionIdx}`;
+}
