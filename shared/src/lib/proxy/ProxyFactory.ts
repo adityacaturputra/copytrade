@@ -5,9 +5,13 @@
  * Usage: ProxyFactory.getProvider() → IProxyProvider
  */
 
-import { HttpsProxyAgent } from "https-proxy-agent";
 import { connectDB } from "../database";
-import { ProxyConfig, ProxyProviderType, ProxyInfoResult } from "./types";
+import {
+  ProxyAgentLike,
+  ProxyConfig,
+  ProxyProviderType,
+  ProxyInfoResult,
+} from "./types";
 import {
   WebshareProvider,
   configureWebshareApiKeyPool,
@@ -319,7 +323,7 @@ export async function getProvider() {
  */
 export async function getProxyAgent(
   affinityKey?: string,
-): Promise<HttpsProxyAgent<string> | null> {
+): Promise<ProxyAgentLike | null> {
   const provider = await getProvider();
   if (!provider) return null;
   return provider.getProxyAgent(affinityKey);

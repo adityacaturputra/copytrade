@@ -61,6 +61,7 @@
 - Open the website and verify no visible/runtime error.
 - If an error appears, fix it, rerun validation, reopen the site.
 - Do not stop at “build passed” if the runtime page is broken.
+- Before declaring a task done, always perform the most relevant final verification for the touched area and record any remaining unrelated blockers explicitly instead of silently stopping early.
 
 ## Task Notes
 - Active notes live in `.ai/tasks/open/`.

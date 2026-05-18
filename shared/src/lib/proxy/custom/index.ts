@@ -4,8 +4,8 @@
  * For self-hosted VPS or any manual proxy configuration.
  */
 
-import { HttpsProxyAgent } from "https-proxy-agent";
-import { IProxyProvider, ProxyInfoResult } from "../types";
+import { createHttpsProxyAgent } from "../core/agent-runtime";
+import { IProxyProvider, ProxyAgentLike, ProxyInfoResult } from "../types";
 
 export interface CustomProxySettings {
   host: string;
@@ -32,10 +32,10 @@ export class CustomProvider implements IProxyProvider {
     return `http://${this.settings.username}:${this.settings.password}@${this.settings.host}:${this.settings.port}`;
   }
 
-  async getProxyAgent(affinityKey?: string): Promise<HttpsProxyAgent<string> | null> {
+  async getProxyAgent(affinityKey?: string): Promise<ProxyAgentLike | null> {
     const proxyUrl = await this.getProxyUrl(affinityKey);
     if (!proxyUrl) return null;
-    return new HttpsProxyAgent(proxyUrl);
+    return createHttpsProxyAgent(proxyUrl);
   }
 
   async getProxyInfo(): Promise<ProxyInfoResult> {

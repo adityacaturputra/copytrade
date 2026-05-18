@@ -5,8 +5,13 @@
  * API Docs: https://apidocs.webshare.io/
  */
 
-import { HttpsProxyAgent } from "https-proxy-agent";
-import { IProxyProvider, ProxyEntry, ProxyInfoResult } from "../types";
+import { createHttpsProxyAgent } from "../core/agent-runtime";
+import {
+  IProxyProvider,
+  ProxyAgentLike,
+  ProxyEntry,
+  ProxyInfoResult,
+} from "../types";
 
 type WebshareApiKeyPoolState = {
   keys: string[];
@@ -379,10 +384,10 @@ export class WebshareProvider implements IProxyProvider {
     }
   }
 
-  async getProxyAgent(affinityKey?: string): Promise<HttpsProxyAgent<string> | null> {
+  async getProxyAgent(affinityKey?: string): Promise<ProxyAgentLike | null> {
     const proxyUrl = await this.getProxyUrl(affinityKey);
     if (!proxyUrl) return null;
-    return new HttpsProxyAgent(proxyUrl);
+    return createHttpsProxyAgent(proxyUrl);
   }
 
   async getProxyInfo(): Promise<ProxyInfoResult> {

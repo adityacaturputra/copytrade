@@ -5,7 +5,9 @@
  * (Webshare, custom VPS, etc.)
  */
 
-import { HttpsProxyAgent } from "https-proxy-agent";
+export type ProxyAgentLike = {
+  [key: string]: unknown;
+};
 
 /** Proxy configuration stored in DB */
 export interface ProxyConfig {
@@ -71,7 +73,7 @@ export interface IProxyProvider {
   getProxyUrl(affinityKey?: string): Promise<string | null>;
 
   /** Get an HTTPS proxy agent for fetch/axios */
-  getProxyAgent(affinityKey?: string): Promise<HttpsProxyAgent<string> | null>;
+  getProxyAgent(affinityKey?: string): Promise<ProxyAgentLike | null>;
 
   /** Get proxy info for the settings page (IP list, credentials, etc.) */
   getProxyInfo(): Promise<ProxyInfoResult>;
