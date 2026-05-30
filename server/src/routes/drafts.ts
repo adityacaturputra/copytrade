@@ -84,6 +84,7 @@ router.get("/", async (req: Request, res: Response) => {
             instrumentLotSize: null,
             minOrderQty: null,
             minOrderMarginUsdt: null,
+            maxLeverage: null,
           };
         }
 
@@ -103,6 +104,7 @@ router.get("/", async (req: Request, res: Response) => {
             instrumentLotSize: null,
             minOrderQty: null,
             minOrderMarginUsdt: null,
+            maxLeverage: null,
           };
         }
 
@@ -119,6 +121,7 @@ router.get("/", async (req: Request, res: Response) => {
               instrumentLotSize: null,
               minOrderQty: null,
               minOrderMarginUsdt: null,
+              maxLeverage: null,
             };
           }
 
@@ -147,6 +150,7 @@ router.get("/", async (req: Request, res: Response) => {
             instrumentLotSize: lotSize,
             minOrderQty,
             minOrderMarginUsdt,
+            maxLeverage: specs.maxLeverage ?? null,
           };
         } catch {
           specsCache.set(cacheKey, null);
@@ -155,6 +159,7 @@ router.get("/", async (req: Request, res: Response) => {
             instrumentLotSize: null,
             minOrderQty: null,
             minOrderMarginUsdt: null,
+            maxLeverage: null,
           };
         }
       }),

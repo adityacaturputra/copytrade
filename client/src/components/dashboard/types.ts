@@ -281,6 +281,7 @@ export interface DraftTrade {
   instrumentLotSize?: number | null;
   minOrderQty?: number | null;
   minOrderMarginUsdt?: number | null;
+  maxLeverage?: number | null;
 }
 
 export type DraftAction = "accept" | "reject" | "redraft" | "reanalyze";

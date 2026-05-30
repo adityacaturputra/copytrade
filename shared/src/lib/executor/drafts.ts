@@ -146,7 +146,7 @@ async function buildDraftPayload(
         }
       }
     } catch (err) {
-      // Ignore fetch errors during draft creation
+      console.warn(`[drafts] Failed to fetch specs for ${signal.symbol} during draft creation:`, err instanceof Error ? err.message : String(err));
     }
   }
 

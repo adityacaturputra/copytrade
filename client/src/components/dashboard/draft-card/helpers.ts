@@ -78,7 +78,7 @@ export function getTpMinimums(
           entryPrice: draft.entryPrice!,
           stopLossPrice: draft.stopLoss!,
           minLeverage: riskConfig.minLeverage,
-          maxLeverage: riskConfig.maxLeverage,
+          maxLeverage: draft.maxLeverage || riskConfig.maxLeverage,
         })
       : null;
 
