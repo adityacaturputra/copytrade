@@ -92,6 +92,8 @@ const RISK_OVERRIDE_VALIDATORS: Record<string, (value: unknown) => boolean> = {
     Number.isFinite(value) &&
     value >= 0 &&
     value <= 1_000_000,
+  tpCloseMode: (value) =>
+    typeof value === "string" && ["equal", "halving"].includes(value),
 };
 
 function isMaskedValue(value: unknown): boolean {

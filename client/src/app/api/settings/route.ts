@@ -68,6 +68,7 @@ export async function POST(request: NextRequest) {
         autoRaiseMinOrderMaxMarginUsdt,
         autoRaiseTpCountEnabled,
         autoRaiseTpCountMaxMarginUsdt,
+        tpCloseMode,
       } = body.risk;
 
       // Validation
@@ -162,6 +163,18 @@ export async function POST(request: NextRequest) {
           { status: 400 },
         );
       }
+      if (
+        tpCloseMode !== undefined &&
+        !["equal", "halving"].includes(tpCloseMode)
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "TP Close Mode must be 'equal' or 'halving'",
+          },
+          { status: 400 },
+        );
+      }
 
       const { defaultRR, defaultPositionSize, defaultLeverage, maxPositions } =
         body.risk;
@@ -227,6 +240,7 @@ export async function POST(request: NextRequest) {
         ...(autoRaiseTpCountMaxMarginUsdt !== undefined && {
           autoRaiseTpCountMaxMarginUsdt,
         }),
+        ...(tpCloseMode !== undefined && { tpCloseMode }),
       });
     }
 
