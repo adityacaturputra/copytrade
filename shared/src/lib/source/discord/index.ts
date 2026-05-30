@@ -228,7 +228,16 @@ export class DiscordSourceProvider implements ISourceProvider {
     });
 
     for (const [, msg] of fetched) {
-      const imageUrls = extractImageUrls(msg.attachments, msg.embeds);
+      const imageUrls = extractImageUrls(msg.attachments, msg.embeds, msg.content);
+      
+      // Also manually extract any TradingView links directly from text
+      const tvUrls = extractTradingViewImageUrls(msg.content);
+      for (const tvUrl of tvUrls) {
+        if (!imageUrls.includes(tvUrl)) {
+          imageUrls.push(tvUrl);
+        }
+      }
+
       const isReply = msg.content.includes("> ");
       const stripped = stripDiscordQuotes(msg.content);
 
@@ -278,7 +287,16 @@ export class DiscordSourceProvider implements ISourceProvider {
     });
 
     for (const [, msg] of fetched) {
-      const imageUrls = extractImageUrls(msg.attachments, msg.embeds);
+      const imageUrls = extractImageUrls(msg.attachments, msg.embeds, msg.content);
+      const tvRegex = /https?:\/\/(?:www\.)?tradingview\.com\/x\/([a-zA-Z0-9]+)\/?/g;
+      let match;
+      while ((match = tvRegex.exec(msg.content)) !== null) {
+        if (match[1] && match[1].length > 0) {
+          const tvUrl = `https://s3.tradingview.com/snapshots/${match[1].charAt(0).toLowerCase()}/${match[1]}.png`;
+          if (!imageUrls.includes(tvUrl)) imageUrls.push(tvUrl);
+        }
+      }
+
       const isReply = msg.content.includes("> ");
       const stripped = stripDiscordQuotes(msg.content);
 
@@ -662,6 +680,7 @@ function extractImageUrls(
     | undefined,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   embeds: any[],
+  content?: string,
 ): string[] {
   const urls: string[] = [];
 
@@ -681,5 +700,27 @@ function extractImageUrls(
     if (embed.thumbnail?.url) urls.push(embed.thumbnail.url);
   }
 
+  if (content) {
+    const tvUrls = extractTradingViewImageUrls(content);
+    for (const tvUrl of tvUrls) {
+      if (!urls.includes(tvUrl)) urls.push(tvUrl);
+    }
+  }
+
+  return urls;
+}
+
+export function extractTradingViewImageUrls(content: string): string[] {
+  const urls: string[] = [];
+  // Match https://www.tradingview.com/x/Ku5unqX3/ or similar
+  const tvRegex = /https?:\/\/(?:www\.)?tradingview\.com\/x\/([a-zA-Z0-9]+)\/?/g;
+  let match;
+  while ((match = tvRegex.exec(content)) !== null) {
+    const id = match[1];
+    if (id && id.length > 0) {
+      const firstLetter = id.charAt(0).toLowerCase();
+      urls.push(`https://s3.tradingview.com/snapshots/${firstLetter}/${id}.png`);
+    }
+  }
   return urls;
 }

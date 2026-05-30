@@ -35,11 +35,29 @@ async function buildBulkInputForMessage(
     .filter(Boolean)
     .join("\n\n");
 
+  const processedImageUrls = await Promise.all(
+    imageUrls.map(async (url) => {
+      if (url.includes("s3.tradingview.com")) {
+        try {
+          const res = await fetch(url);
+          if (res.ok) {
+            const buffer = await res.arrayBuffer();
+            const base64 = Buffer.from(buffer).toString("base64");
+            return `data:image/png;base64,${base64}`;
+          }
+        } catch (e) {
+          console.warn(`[AI] Failed to fetch TradingView image to base64: ${url}`, e);
+        }
+      }
+      return url;
+    })
+  );
+
   return {
     messageId: msg.messageId,
     content,
-    ...(signalConfig.includeImageUrls && imageUrls.length > 0
-      ? { imageUrls }
+    ...(signalConfig.includeImageUrls && processedImageUrls.length > 0
+      ? { imageUrls: processedImageUrls }
       : {}),
   };
 }
