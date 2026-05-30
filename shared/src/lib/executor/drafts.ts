@@ -1,5 +1,9 @@
 import type { TradingSignal } from "../ai/core/types";
-import { DraftTrade } from "../database/index";
+import { Account, DraftTrade } from "../database/index";
+import {
+  ExchangeFactory,
+  buildExchangeCredentials,
+} from "../exchange/ExchangeFactory";
 import {
   autoCalculateSLFromRR,
   autoCalculateTPFromRR,
@@ -66,6 +70,7 @@ async function buildDraftPayload(
 
   let tpTargets = signal.takeProfitTargets || [];
   let autoSL: number | null = null;
+  let finalLeverage = sanitizeLeverage(signal.leverage) || riskCfg.defaultLeverage;
 
   if (!signal.stopLoss && tpTargets.length > 0 && signal.entryPrice) {
     const rr =
@@ -123,6 +128,28 @@ async function buildDraftPayload(
     }
   }
 
+  if (accountId) {
+    try {
+      const account = await Account.findById(accountId).lean();
+      if (account && account.exchangeData) {
+        const creds = buildExchangeCredentials(
+          account.tradingPlatform,
+          account.exchangeData as Record<string, unknown>,
+          { proxyAffinityKey: String(accountId) },
+        );
+        if (creds) {
+          const exchange = ExchangeFactory.getClientForAccount(creds);
+          const specs = await exchange.getInstrumentSpecs(signal.symbol);
+          if (specs.maxLeverage && finalLeverage > specs.maxLeverage) {
+            finalLeverage = specs.maxLeverage;
+          }
+        }
+      }
+    } catch (err) {
+      // Ignore fetch errors during draft creation
+    }
+  }
+
   return {
     accountId: accountId || null,
     processId: msg.processId || null,
@@ -139,7 +166,7 @@ async function buildDraftPayload(
     entryPrice: signal.entryPrice || null,
     takeProfitTargets: tpTargets,
     stopLoss: signal.stopLoss || autoSL || null,
-    leverage: sanitizeLeverage(signal.leverage) || riskCfg.defaultLeverage,
+    leverage: finalLeverage,
     quantity,
     confidence: signal.confidence || 0,
     reasoning: signal.reasoning || "",

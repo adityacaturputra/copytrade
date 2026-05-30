@@ -27,7 +27,8 @@ export async function getBybitInstrumentSpecs(ctx: BybitCtx, symbol: string): Pr
   if (!instrument) throw new Error(`Instrument not found on Bybit: ${normalized}`);
   const lotSz = ctx.parseNumber(instrument.lotSizeFilter?.qtyStep, 1);
   const tickSz = ctx.parseNumber(instrument.priceFilter?.tickSize, 0.01);
-  const specs = { ctVal: 1, lotSz, minSz: ctx.parseNumber(instrument.lotSizeFilter?.minOrderQty, lotSz), minNotional: ctx.parseNumber(instrument.lotSizeFilter?.minNotionalValue, 0), ctValCcy: instrument.baseCoin || normalized.replace(/USDT|USDC|USD$/, ""), tickSz, qtyDecimals: ctx.countDecimals(lotSz), priceDecimals: ctx.countDecimals(tickSz) };
+  const maxLeverage = ctx.parseNumber(instrument.leverageFilter?.maxLeverage);
+  const specs = { ctVal: 1, lotSz, minSz: ctx.parseNumber(instrument.lotSizeFilter?.minOrderQty, lotSz), minNotional: ctx.parseNumber(instrument.lotSizeFilter?.minNotionalValue, 0), ctValCcy: instrument.baseCoin || normalized.replace(/USDT|USDC|USD$/, ""), tickSz, qtyDecimals: ctx.countDecimals(lotSz), priceDecimals: ctx.countDecimals(tickSz), maxLeverage: maxLeverage > 0 ? maxLeverage : undefined };
   ctx.specsCache.set(normalized, { specs, ts: Date.now() });
   return specs;
 }

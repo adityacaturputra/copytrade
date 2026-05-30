@@ -144,6 +144,38 @@ export async function applyTradeRiskManagement(
     });
   }
 
+  try {
+    const specs = await exchange.getInstrumentSpecs(runtime.symbol);
+    if (specs.maxLeverage && orderLeverage > specs.maxLeverage) {
+      const originalLeverage = orderLeverage;
+      orderLeverage = specs.maxLeverage;
+      
+      if (plannedMarginUsdt && runtime.entryPrice && runtime.entryPrice > 0) {
+        plannedMarginUsdt = (orderQuantity * runtime.entryPrice) / orderLeverage;
+      }
+      
+      await logExecutorInfo(
+        `${runtime.logPrefix}🛡️ Leverage capped by exchange limit: ${originalLeverage}x → ${orderLeverage}x${plannedMarginUsdt ? ` (margin increased to $${plannedMarginUsdt.toFixed(2)})` : ''}`,
+        {
+          accountId: runtime.accountId,
+          processId: runtime.processId,
+          symbol: runtime.symbol,
+          action: "console_leverage_capped_by_exchange",
+        },
+      );
+    }
+  } catch (err) {
+    await logExecutorWarn(
+      `${runtime.logPrefix}⚠️ Failed to fetch specs to check max leverage limit: ${err instanceof Error ? err.message : String(err)}`,
+      {
+        accountId: runtime.accountId,
+        processId: runtime.processId,
+        symbol: runtime.symbol,
+        action: "console_specs_fetch_failed",
+      },
+    );
+  }
+
   return { orderQuantity, orderLeverage, plannedMarginUsdt, riskAccountBalance };
 }
 

@@ -208,4 +208,6 @@ export interface InstrumentSpecs {
   qtyDecimals: number;
   /** Number of decimal places for price (derived from tickSz) */
   priceDecimals: number;
+  /** Maximum leverage allowed for this instrument */
+  maxLeverage?: number;
 }
