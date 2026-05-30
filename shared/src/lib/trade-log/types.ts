@@ -42,6 +42,8 @@ export interface TradeLogListResult {
   page: number;
   limit: number;
   totalPages: number;
+  hasMore?: boolean;
+  truncated?: boolean;
 }
 
 export interface TradeLogCleanupOptions {

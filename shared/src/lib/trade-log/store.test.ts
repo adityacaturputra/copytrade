@@ -694,6 +694,56 @@ test("listTradeLogs filters by processId without dropping accountId=all records"
   assert.deepEqual(result.logs.map((log) => log._id), ["keep-proc"]);
 });
 
+test("listTradeLogs marks truncated and hasMore when file scan hits max cap", async () => {
+  setEnv({
+    PROCESS_LOG_STORAGE: "file",
+    PROCESS_LOG_DIR: "/tmp/copytrade-list-truncated",
+    PROCESS_LOG_MAX_SCAN: "2",
+  });
+  storeMocks.readFile.mockResolvedValue(
+    [
+      JSON.stringify({
+        _id: "keep-1",
+        accountId: "acc-1",
+        processId: "proc-1",
+        type: "executor",
+        action: "BUY",
+        createdAt: "2026-01-02T00:00:00.000Z",
+      }),
+      JSON.stringify({
+        _id: "keep-2",
+        accountId: "acc-1",
+        processId: "proc-2",
+        type: "executor",
+        action: "SELL",
+        createdAt: "2026-01-03T00:00:00.000Z",
+      }),
+      JSON.stringify({
+        _id: "keep-3",
+        accountId: "acc-1",
+        processId: "proc-3",
+        type: "executor",
+        action: "BUY",
+        createdAt: "2026-01-04T00:00:00.000Z",
+      }),
+    ].join("\n"),
+  );
+
+  const result = await listTradeLogs({
+    page: 1,
+    limit: 2,
+    accountId: "acc-1",
+    hideCronNoise: false,
+    order: "desc",
+  });
+
+  assert.equal(result.truncated, true);
+  assert.equal(result.hasMore, true);
+  assert.equal(result.totalCount, 2);
+  assert.equal(result.totalPages, 1);
+  assert.deepEqual(result.logs.map((log) => log._id), ["keep-2", "keep-1"]);
+});
+
 test("listTradeLogs warns and falls back to file logs when reading all mongo logs fails", async () => {
   setEnv({
     PROCESS_LOG_STORAGE: "dual",

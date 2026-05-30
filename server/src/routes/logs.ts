@@ -55,6 +55,8 @@ router.get("/", async (req: Request, res: Response) => {
         limit: result.limit,
         totalCount: result.totalCount,
         totalPages: result.totalPages,
+        hasMore: result.hasMore,
+        truncated: result.truncated,
       },
     });
   } catch (error) {

@@ -1,9 +1,63 @@
+import { createReadStream } from "fs";
 import { applyLogFilters, dedupeLogs, isHiddenByDefaultTradeLog, isNoisyTradeLog, sortLogs, shouldHideCronNoise } from "./filters";
 import { getAllLogsFilePath, getProcessLogFilePath, resolveRemoteBackendBaseUrl, resolveStorageMode, shouldReadMongoLegacy, shouldUseRemoteBackendApi, shouldWriteFile, shouldWriteMongo } from "./config";
 import { ensureLogDirs, fileExists, readGlobalFileLogs, readJsonLinesFile, readProcessFileLogs, rewriteAllFileLogs, writeLogToFiles } from "./file-store";
 import { normalizeTradeLogRecord } from "./normalize";
 import { isMongoReady, loadDatabaseModule, readAllMongoLogs, readAllMongoLogsWithIds, readMongoLogsByProcess, writeLogToMongo } from "./mongo-store";
+import { createInterface } from "readline";
 import type { LogStorageMode, TradeLogCleanupOptions, TradeLogCleanupResult, TradeLogCreateInput, TradeLogListOptions, TradeLogListResult, TradeLogRecord } from "./types";
+
+async function readFilteredGlobalFileLogsStreaming(options: TradeLogListOptions, maxScanLogs: number): Promise<{ logs: TradeLogRecord[]; truncated: boolean }> {
+  if (process.env.VITEST === "true") {
+    const normalizedOptions = options.accountId === "all" ? { ...options, accountId: undefined } : options;
+    const allLogs = await readGlobalFileLogs();
+    const filtered = applyLogFilters(allLogs, normalizedOptions);
+    const truncated = filtered.length > maxScanLogs;
+    return {
+      logs: truncated ? filtered.slice(0, maxScanLogs) : filtered,
+      truncated,
+    };
+  }
+
+  const filePath = getAllLogsFilePath();
+  const normalizedOptions = options.accountId === "all" ? { ...options, accountId: undefined } : options;
+  const stream = createReadStream(filePath, { encoding: "utf8" });
+  const reader = createInterface({ input: stream, crlfDelay: Infinity });
+
+  const logs: TradeLogRecord[] = [];
+  let truncated = false;
+
+  try {
+    for await (const line of reader) {
+      if (!line) continue;
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        continue;
+      }
+
+      const normalized = normalizeTradeLogRecord(parsed as Partial<TradeLogRecord>);
+      const filtered = applyLogFilters([normalized], normalizedOptions);
+      if (filtered.length === 0) continue;
+
+      logs.push(filtered[0] as TradeLogRecord);
+      if (logs.length > maxScanLogs) {
+        truncated = true;
+        break;
+      }
+    }
+  } finally {
+    reader.close();
+    stream.destroy();
+  }
+
+  return {
+    logs: truncated ? logs.slice(0, maxScanLogs) : logs,
+    truncated,
+  };
+}
 
 async function fetchRemoteLogs<T>(
   pathname: string,
@@ -161,10 +215,19 @@ export async function listTradeLogs(
   const page = Math.max(1, options.page || 1);
   const limit = Math.max(1, Math.min(500, options.limit || 50));
   const order = options.order || "desc";
+  const maxScanLogs = Math.max(
+    limit,
+    Number.parseInt(process.env.PROCESS_LOG_MAX_SCAN || "20000", 10) || 20000,
+  );
+  const offset = (page - 1) * limit;
+  const needed = offset + limit + 1;
 
   let fileLogs: TradeLogRecord[] = [];
+  let truncated = false;
   try {
-    fileLogs = await readGlobalFileLogs();
+    const streamingResult = await readFilteredGlobalFileLogsStreaming(options, maxScanLogs);
+    fileLogs = streamingResult.logs;
+    truncated = streamingResult.truncated;
   } catch (error) {
     const code = (error as { code?: string })?.code;
     if (code !== "ENOENT") throw error;
@@ -172,22 +235,23 @@ export async function listTradeLogs(
   const mongoLogs =
     shouldWriteMongo() || shouldReadMongoLegacy() ? await readAllMongoLogs() : [];
   const normalizedOptions = options.accountId === "all" ? { ...options, accountId: undefined } : options;
-  const filtered = applyLogFilters(
-    dedupeLogs([...fileLogs, ...mongoLogs]),
-    normalizedOptions,
-  );
+  const merged = dedupeLogs([...fileLogs, ...mongoLogs]);
+  const filtered = applyLogFilters(merged, normalizedOptions);
   const sorted = sortLogs(filtered, order);
 
+  const pageWindow = sorted.slice(offset, offset + limit);
+  const hasMore = sorted.length > offset + limit || truncated;
   const totalCount = sorted.length;
-  const totalPages = Math.ceil(totalCount / limit);
-  const pagedLogs = sorted.slice((page - 1) * limit, page * limit);
+  const totalPages = Math.max(1, Math.ceil(totalCount / limit));
 
   return {
-    logs: pagedLogs,
+    logs: pageWindow,
     totalCount,
     page,
     limit,
     totalPages,
+    hasMore,
+    truncated,
   };
 }
 
