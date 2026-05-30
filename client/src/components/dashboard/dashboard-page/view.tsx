@@ -45,7 +45,6 @@ export function DashboardPageView() {
     openPositions: 0,
     closedPositions: 0,
     totalLogs: 0,
-    pendingDrafts: 0,
   };
   const selectedAccount =
     selectedAccountId === "all"
@@ -157,7 +156,6 @@ export function DashboardPageView() {
               <DashboardTabs
                 activeTab={activeTab}
                 setActiveTab={setActiveTab}
-                pendingDraftCount={data?.pendingDrafts?.length || 0}
                 selectedChannelId={selectedChannelId}
                 selectedAccountId={selectedAccountId}
                 refreshKey={refreshKey}

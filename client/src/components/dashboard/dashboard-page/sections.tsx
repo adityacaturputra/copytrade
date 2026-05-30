@@ -12,7 +12,6 @@ import type { AccountExchangeInfo, CronRunStatus, DashboardData, DraftAction, Ri
 export function DashboardTabs(props: {
   activeTab: "positions" | "drafts" | "signals" | "logs";
   setActiveTab: (tab: "positions" | "drafts" | "signals" | "logs") => void;
-  pendingDraftCount: number;
   selectedChannelId: string;
   selectedAccountId: string;
   refreshKey: number;
@@ -25,14 +24,14 @@ export function DashboardTabs(props: {
   channelNames: Record<string, string>;
   loadingExchange: boolean;
 }) {
-  const { activeTab, setActiveTab, pendingDraftCount, selectedChannelId, selectedAccountId, refreshKey, actingDraft, onDraftAction, riskConfig, accountBalance, openPositions, pendingPositions, channelNames, loadingExchange } = props;
+  const { activeTab, setActiveTab, selectedChannelId, selectedAccountId, refreshKey, actingDraft, onDraftAction, riskConfig, accountBalance, openPositions, pendingPositions, channelNames, loadingExchange } = props;
   return (
     <>
       <PositionSummaryPanel positions={openPositions || []} title={<>Active Positions ({openPositions?.length || 0})</>} dotColor="bg-success" type="open" channelNames={channelNames} loadingExchange={loadingExchange} />
       <PositionSummaryPanel positions={pendingPositions || []} title={<><span className="text-amber-400">Pending Limit Orders</span><span className="text-sm font-normal text-slate-400">({pendingPositions?.length || 0} waiting to fill)</span></>} borderColor="border-amber-700/30" dotColor="bg-amber-400" dotAnimate type="pending" channelNames={channelNames} loadingExchange={loadingExchange} />
       <div className="card">
         <div className="flex overflow-x-auto -mx-4 sm:mx-0 px-4 sm:px-0 border-b border-slate-700 mb-4 gap-0 scrollbar-hide">
-          <button onClick={() => setActiveTab("drafts")} className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium border-b-2 transition flex items-center gap-1 whitespace-nowrap ${activeTab === "drafts" ? "border-primary-500 text-primary-400" : "border-transparent text-slate-400 hover:text-slate-300"}`}>📝 Drafts{pendingDraftCount > 0 ? <span className="bg-primary-600 text-white text-xs font-bold px-1.5 py-0.5 rounded-full">{pendingDraftCount}</span> : null}</button>
+          <button onClick={() => setActiveTab("drafts")} className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium border-b-2 transition flex items-center gap-1 whitespace-nowrap ${activeTab === "drafts" ? "border-primary-500 text-primary-400" : "border-transparent text-slate-400 hover:text-slate-300"}`}>📝 Drafts</button>
           <button onClick={() => setActiveTab("positions")} className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium border-b-2 transition whitespace-nowrap ${activeTab === "positions" ? "border-primary-500 text-primary-400" : "border-transparent text-slate-400 hover:text-slate-300"}`}>📊 Positions</button>
           <button onClick={() => setActiveTab("signals")} className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium border-b-2 transition whitespace-nowrap ${activeTab === "signals" ? "border-primary-500 text-primary-400" : "border-transparent text-slate-400 hover:text-slate-300"}`}>📨 Signals</button>
           <button onClick={() => setActiveTab("logs")} className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium border-b-2 transition whitespace-nowrap ${activeTab === "logs" ? "border-primary-500 text-primary-400" : "border-transparent text-slate-400 hover:text-slate-300"}`}>📝 Logs</button>

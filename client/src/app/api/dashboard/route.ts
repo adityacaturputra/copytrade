@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   connectDB,
-  getStats,
   getOpenPositions,
-  getPendingDrafts,
   getTradingMode,
   Position,
   Account,
@@ -55,21 +53,13 @@ export async function GET() {
       .sort({ createdAt: -1 })
       .lean();
 
-    const [
-      stats,
-      openPositions,
-      pendingDrafts,
-      tradingMode,
-      riskConfig,
-      signalConfig,
-    ] = await Promise.all([
-      getStats(),
-      getOpenPositions(),
-      getPendingDrafts(),
-      getTradingMode(),
-      getRiskConfig(),
-      getSignalConfig(),
-    ]);
+    const [openPositions, tradingMode, riskConfig, signalConfig] =
+      await Promise.all([
+        getOpenPositions(),
+        getTradingMode(),
+        getRiskConfig(),
+        getSignalConfig(),
+      ]);
 
     // Resolve channel names from accounts
     const channelNames: Record<string, string> = {};
@@ -92,13 +82,11 @@ export async function GET() {
     return NextResponse.json({
       success: true,
       data: {
-        stats,
         accounts: accountExchangeInfos,
         account: null,
         exchangeProvider: accountExchangeInfos[0]?.tradingPlatform || null,
         exchangeError: null,
         openPositions, // returned as-is from DB, without live PnL or markPrice
-        pendingDrafts,
         pendingPositions,
         tradingMode,
         riskConfig,

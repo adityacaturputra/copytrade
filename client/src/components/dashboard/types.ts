@@ -339,7 +339,6 @@ export interface DashboardData {
   exchangeError: string | null;
   openPositions: Position[];
   pendingPositions: Position[];
-  pendingDrafts: DraftTrade[];
   tradingMode: "auto" | "manual";
   riskConfig: RiskConfig | null;
   signalConfig: SignalConfig | null;
