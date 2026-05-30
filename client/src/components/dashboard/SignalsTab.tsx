@@ -19,7 +19,7 @@ export function SignalsTab({
   const [totalPages, setTotalPages] = useState(0);
   const [loading, setLoading] = useState(true);
 
-  const fetchMessages = useCallback(async () => {
+  const fetchMessages = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     try {
       const params = new URLSearchParams({
@@ -28,25 +28,24 @@ export function SignalsTab({
       });
       if (channelIdFilter !== "all") params.set("channelId", channelIdFilter);
       if (accountIdFilter !== "all") params.set("accountId", accountIdFilter);
-      const res = await fetch(`/api/signals?${params}`);
+      const res = await fetch(`/api/signals?${params}`, { signal });
       const json = await res.json();
       if (json.success) {
         setMessages(json.data.messages);
         setTotalCount(json.data.totalCount);
         setTotalPages(json.data.totalPages);
       }
-    } catch {}
+    } catch (e: any) {
+      if (e.name === 'AbortError') return;
+    }
     setLoading(false);
   }, [page, pageSize, channelIdFilter, accountIdFilter]);
 
   useEffect(() => {
-    fetchMessages();
-  }, [fetchMessages]);
-
-  useEffect(() => {
-    fetchMessages();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshKey]);
+    const controller = new AbortController();
+    fetchMessages(controller.signal);
+    return () => controller.abort();
+  }, [fetchMessages, refreshKey]);
 
   useEffect(() => {
     setPage(1);

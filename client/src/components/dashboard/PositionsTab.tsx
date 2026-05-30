@@ -77,7 +77,7 @@ export function PositionsTab({
     [expandedPosId],
   );
 
-  const fetchStatusCounts = useCallback(async () => {
+  const fetchStatusCounts = useCallback(async (signal?: AbortSignal) => {
     try {
       const statuses: Array<"open" | "closed" | "pending"> = [
         "open",
@@ -92,7 +92,7 @@ export function PositionsTab({
         });
         if (channelIdFilter !== "all") params.set("channelId", channelIdFilter);
         if (accountIdFilter !== "all") params.set("accountId", accountIdFilter);
-        const res = await fetch(`/api/positions?${params}`);
+        const res = await fetch(`/api/positions?${params}`, { signal });
         const json = await res.json();
         return [
           status,
@@ -106,12 +106,12 @@ export function PositionsTab({
         closed: counts.find(([status]) => status === "closed")?.[1] || 0,
         pending: counts.find(([status]) => status === "pending")?.[1] || 0,
       });
-    } catch {
-      // Keep previous counts if count fetch fails.
+    } catch (e: any) {
+      if (e.name === "AbortError") return;
     }
   }, [channelIdFilter, accountIdFilter]);
 
-  const fetchPositions = useCallback(async () => {
+  const fetchPositions = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     try {
       const params = new URLSearchParams({
@@ -121,30 +121,30 @@ export function PositionsTab({
       });
       if (channelIdFilter !== "all") params.set("channelId", channelIdFilter);
       if (accountIdFilter !== "all") params.set("accountId", accountIdFilter);
-      const res = await fetch(`/api/positions?${params}`);
+      const res = await fetch(`/api/positions?${params}`, { signal });
       const json = await res.json();
       if (json.success) {
         setPositions(json.data.positions);
         setTotalCount(json.data.totalCount);
         setTotalPages(json.data.totalPages);
       }
-    } catch {}
+    } catch (e: any) {
+      if (e.name === "AbortError") return;
+    }
     setLoading(false);
   }, [page, pageSize, positionFilter, channelIdFilter, accountIdFilter]);
 
   useEffect(() => {
-    fetchPositions();
-  }, [fetchPositions]);
+    const controller = new AbortController();
+    fetchPositions(controller.signal);
+    return () => controller.abort();
+  }, [fetchPositions, refreshKey]);
 
   useEffect(() => {
-    fetchStatusCounts();
-  }, [fetchStatusCounts]);
-
-  useEffect(() => {
-    fetchPositions();
-    fetchStatusCounts();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshKey]);
+    const controller = new AbortController();
+    fetchStatusCounts(controller.signal);
+    return () => controller.abort();
+  }, [fetchStatusCounts, refreshKey]);
 
   useEffect(() => {
     setPage(1);

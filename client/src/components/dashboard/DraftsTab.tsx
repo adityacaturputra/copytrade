@@ -29,12 +29,12 @@ export function DraftsTab({
 }) {
   const [drafts, setDrafts] = useState<DraftTrade[]>([]);
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(50);
+  const [pageSize, setPageSize] = useState(10);
   const [totalCount, setTotalCount] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
   const [loading, setLoading] = useState(true);
 
-  const fetchDrafts = useCallback(async () => {
+  const fetchDrafts = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     try {
       const params = new URLSearchParams({
@@ -43,25 +43,24 @@ export function DraftsTab({
       });
       if (channelIdFilter !== "all") params.set("channelId", channelIdFilter);
       if (accountIdFilter !== "all") params.set("accountId", accountIdFilter);
-      const res = await fetch(`/api/drafts?${params}`);
+      const res = await fetch(`/api/drafts?${params}`, { signal });
       const json = await res.json();
       if (json.success) {
         setDrafts(json.data.drafts);
         setTotalCount(json.data.totalCount);
         setTotalPages(json.data.totalPages);
       }
-    } catch {}
+    } catch (e: any) {
+      if (e.name === 'AbortError') return;
+    }
     setLoading(false);
   }, [page, pageSize, channelIdFilter, accountIdFilter]);
 
   useEffect(() => {
-    fetchDrafts();
-  }, [fetchDrafts]);
-
-  useEffect(() => {
-    fetchDrafts();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshKey]);
+    const controller = new AbortController();
+    fetchDrafts(controller.signal);
+    return () => controller.abort();
+  }, [fetchDrafts, refreshKey]);
 
   useEffect(() => {
     setPage(1);

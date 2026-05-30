@@ -38,7 +38,7 @@ async function readFilteredGlobalFileLogsStreaming(options: TradeLogListOptions,
         continue;
       }
 
-      const normalized = normalizeTradeLogRecord(parsed as Partial<TradeLogRecord>);
+      const normalized = normalizeTradeLogRecord(parsed as TradeLogCreateInput & { _id?: string });
       const filtered = applyLogFilters([normalized], normalizedOptions);
       if (filtered.length === 0) continue;
 
