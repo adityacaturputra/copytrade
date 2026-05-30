@@ -46,6 +46,7 @@ export interface ProxyConfigState {
     username: string;
     password: string;
   };
+  manualReferenceIps?: string[];
 }
 
 export interface ProxyProviderInfo {
@@ -70,6 +71,7 @@ export interface ProxyProviderInfo {
     currentIps?: string[];
     addedIps?: string[];
     removedIps?: string[];
+    isUsingManualReference?: boolean;
   };
 }
 

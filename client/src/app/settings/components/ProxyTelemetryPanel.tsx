@@ -15,14 +15,24 @@ export function ProxyTelemetryPanel({
   const allIpList = Array.isArray(proxyProviderInfo?.allIpList)
     ? proxyProviderInfo.allIpList
     : ipList;
+  const distinctAllIps = Array.from(new Set(allIpList));
   const ipListsByKey = Array.isArray(proxyProviderInfo?.ipListsByKey)
     ? proxyProviderInfo.ipListsByKey
     : [];
   const telemetry = proxyProviderInfo?.telemetry;
-  const addedIps = Array.isArray(telemetry?.addedIps) ? telemetry.addedIps : [];
+  const addedIps = Array.isArray(telemetry?.addedIps) ? Array.from(new Set(telemetry.addedIps)) : [];
   const removedIps = Array.isArray(telemetry?.removedIps)
-    ? telemetry.removedIps
+    ? Array.from(new Set(telemetry.removedIps))
     : [];
+
+  const firstKeyIps = new Set(ipListsByKey[0] || []);
+  const areAllKeyListsIdentical = ipListsByKey.length > 1 && ipListsByKey.every(ips => {
+    const distinctIps = new Set(ips);
+    if (distinctIps.size !== firstKeyIps.size) return false;
+    return ips.every(ip => firstKeyIps.has(ip));
+  });
+
+  const showGrouping = ipListsByKey.length > 1 && !areAllKeyListsIdentical;
 
   return (
     <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-3 space-y-3">
@@ -41,7 +51,7 @@ export function ProxyTelemetryPanel({
       </div>
 
       <div className="flex flex-wrap gap-1">
-        {allIpList.map((ip) => (
+        {distinctAllIps.map((ip) => (
           <span key={ip} className="text-xs font-mono bg-slate-700 px-1.5 py-0.5 rounded text-slate-300">
             {ip}
           </span>
@@ -51,7 +61,7 @@ export function ProxyTelemetryPanel({
         Copy CSV format: <span className="font-mono">ip1,ip2,ip3</span>
       </p>
 
-      {ipListsByKey.length > 1 && (
+      {showGrouping && (
         <div className="space-y-2">
           <p className="text-[11px] text-slate-500">Grouped by Webshare API key</p>
           <div className="space-y-2">
@@ -61,7 +71,7 @@ export function ProxyTelemetryPanel({
                   API Key {index + 1} ({ips.length})
                 </p>
                 <div className="flex flex-wrap gap-1">
-                  {ips.map((ip) => (
+                  {Array.from(new Set(ips)).map((ip) => (
                     <span
                       key={`key-${index}-${ip}`}
                       className="text-xs font-mono bg-slate-800 px-1.5 py-0.5 rounded text-slate-300"
@@ -79,8 +89,10 @@ export function ProxyTelemetryPanel({
       {telemetry && (
         <div className="pt-3 border-t border-slate-700 space-y-2">
           <p className="text-xs text-slate-400">
-            IP changes since last snapshot
-            {telemetry.snapshotUpdatedAt
+            {telemetry.isUsingManualReference 
+              ? "IP changes compared to Manual Whitelisted Exchange IPs" 
+              : "IP changes since last snapshot"}
+            {!telemetry.isUsingManualReference && telemetry.snapshotUpdatedAt
               ? ` (${new Date(telemetry.snapshotUpdatedAt).toLocaleString()})`
               : ""}
           </p>

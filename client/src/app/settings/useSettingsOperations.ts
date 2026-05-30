@@ -13,6 +13,7 @@ export function useSettingsOperations(check403: (res: Response) => boolean) {
   const [webshareApiKeysText, setWebshareApiKeysText] = useState("");
   const [webshareActiveKeyIndex, setWebshareActiveKeyIndex] = useState(0);
   const [webshareAllowedCountriesText, setWebshareAllowedCountriesText] = useState("");
+  const [manualReferenceIpsText, setManualReferenceIpsText] = useState("");
   const [proxyIpCsvCopied, setProxyIpCsvCopied] = useState(false);
   const [logCleanupLoading, setLogCleanupLoading] = useState<string | null>(null);
   const [logCleanupDays, setLogCleanupDays] = useState("30");
@@ -33,6 +34,9 @@ export function useSettingsOperations(check403: (res: Response) => boolean) {
           setWebshareApiKeysText((json.webshareApiKeyPool.keys || []).join("\n"));
           setWebshareActiveKeyIndex(Number(json.webshareApiKeyPool.activeIndex || 0));
           setWebshareAllowedCountriesText((json.webshareApiKeyPool.allowedCountryCodes || []).join("\n"));
+        }
+        if (json.config?.manualReferenceIps) {
+          setManualReferenceIpsText(json.config.manualReferenceIps.join("\n"));
         }
         if (json.config?.custom) setCustomProxy(json.config.custom);
         setProxyError(null);
@@ -59,9 +63,12 @@ export function useSettingsOperations(check403: (res: Response) => boolean) {
         body.webshareApiKeyPool = {
           keys: webshareApiKeysText.split("\n").map((line) => line.trim()).filter(Boolean),
           activeIndex: webshareActiveKeyIndex,
-          allowedCountryCodes: webshareAllowedCountriesText.split("\n").map((line) => line.trim().toUpperCase()).filter(Boolean),
+          allowedCountryCodes: webshareAllowedCountriesText.split(/[\n,]+/).map((line) => line.trim().toUpperCase()).filter(Boolean),
         };
       }
+      const manualIps = manualReferenceIpsText.split(/[\n,]+/).map(ip => ip.trim()).filter(Boolean);
+      body.manualReferenceIps = manualIps.length > 0 ? manualIps : null;
+
       const res = await fetch("/api/proxy", { method: "POST", headers: withActionPassword({ "Content-Type": "application/json" }), body: JSON.stringify(body) });
       if (check403(res)) {
         setProxySaving(false);
@@ -75,6 +82,11 @@ export function useSettingsOperations(check403: (res: Response) => boolean) {
           setWebshareApiKeysText((json.webshareApiKeyPool.keys || []).join("\n"));
           setWebshareActiveKeyIndex(Number(json.webshareApiKeyPool.activeIndex || 0));
           setWebshareAllowedCountriesText((json.webshareApiKeyPool.allowedCountryCodes || []).join("\n"));
+        }
+        if (json.config?.manualReferenceIps) {
+          setManualReferenceIpsText(json.config.manualReferenceIps.join("\n"));
+        } else {
+          setManualReferenceIpsText("");
         }
       } else setProxyError(json.error || "Failed to save proxy config");
     } catch (err) {
@@ -154,7 +166,7 @@ export function useSettingsOperations(check403: (res: Response) => boolean) {
   return {
     proxyConfig, setProxyConfig, proxyProviderInfo, proxyLoading, proxyRefreshing, proxySaving, proxyError,
     customProxy, setCustomProxy, webshareApiKeysText, setWebshareApiKeysText, webshareActiveKeyIndex, setWebshareActiveKeyIndex,
-    webshareAllowedCountriesText, setWebshareAllowedCountriesText, proxyIpCsvCopied,
+    webshareAllowedCountriesText, setWebshareAllowedCountriesText, proxyIpCsvCopied, manualReferenceIpsText, setManualReferenceIpsText,
     logCleanupLoading, logCleanupDays, setLogCleanupDays, logCleanupResult,
     resetLoading, resetResult, resetShowConfirm, setResetShowConfirm, resetConfirmText, setResetConfirmText,
     handleProxySave, handleProxyRefresh, handleCopyProxyIpCsv, handleReset, runLogCleanup,

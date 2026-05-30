@@ -28,6 +28,7 @@ export async function GET() {
         enabled: config.enabled,
         provider: config.provider,
         custom: config.custom,
+        manualReferenceIps: config.manualReferenceIps,
       },
       providerInfo,
       webshareApiKeyPool: await getWebshareApiKeyPoolConfig(),
@@ -70,6 +71,9 @@ export async function POST(request: NextRequest) {
             password: body.custom.password || "",
           }
         : undefined,
+      manualReferenceIps: Array.isArray(body.manualReferenceIps)
+        ? body.manualReferenceIps.map((ip: unknown) => String(ip).trim()).filter(Boolean)
+        : undefined,
     });
 
     if (body.webshareApiKeyPool) {
@@ -103,6 +107,7 @@ export async function POST(request: NextRequest) {
         enabled: config.enabled,
         provider: config.provider,
         custom: config.custom,
+        manualReferenceIps: config.manualReferenceIps,
       },
       providerInfo,
       webshareApiKeyPool: await getWebshareApiKeyPoolConfig(),

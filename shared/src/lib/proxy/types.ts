@@ -22,6 +22,8 @@ export interface ProxyConfig {
     username: string;
     password: string;
   };
+  /** Manually provided reference IPs for telemetry calculation */
+  manualReferenceIps?: string[];
 }
 
 export type ProxyProviderType = "webshare" | "custom";
@@ -56,6 +58,7 @@ export interface ProxyInfoResult {
     currentIps?: string[];
     addedIps?: string[];
     removedIps?: string[];
+    isUsingManualReference?: boolean;
   };
   webshareApiKeys?: {
     total: number;

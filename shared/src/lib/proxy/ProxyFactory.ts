@@ -32,6 +32,7 @@ export interface IProxySettings extends Document {
   webshareApiKeys: string[];
   webshareActiveKeyIndex: number;
   webshareAllowedCountryCodes: string[];
+  manualReferenceIps: string[];
   updatedAt: Date;
 }
 
@@ -58,6 +59,7 @@ const ProxySettingsSchema = new Schema<IProxySettings>(
     webshareApiKeys: { type: [String], default: [] },
     webshareActiveKeyIndex: { type: Number, default: 0 },
     webshareAllowedCountryCodes: { type: [String], default: [] },
+    manualReferenceIps: { type: [String], default: [] },
   },
   { timestamps: { createdAt: false, updatedAt: true } },
 );
@@ -96,6 +98,7 @@ const DEFAULT_PROXY_CONFIG: ProxyConfig = {
     username: "",
     password: "",
   },
+  manualReferenceIps: [],
 };
 
 // ─── Singleton providers ────────────────────────────────────────────────────
@@ -248,6 +251,7 @@ export async function getProxyConfig(): Promise<ProxyConfig> {
           username: doc.customUsername,
           password: doc.customPassword,
         },
+        manualReferenceIps: doc.manualReferenceIps || [],
       };
     }
   } catch (err) {
@@ -275,6 +279,8 @@ export async function setProxyConfig(
     update.customUsername = config.custom.username;
   if (config.custom?.password !== undefined)
     update.customPassword = config.custom.password;
+  if (config.manualReferenceIps !== undefined)
+    update.manualReferenceIps = config.manualReferenceIps;
 
   const doc = await ProxySettings.findOneAndUpdate({}, update, {
     upsert: true,
@@ -295,6 +301,7 @@ export async function setProxyConfig(
       username: doc.customUsername,
       password: doc.customPassword,
     },
+    manualReferenceIps: doc.manualReferenceIps || [],
   };
 }
 
@@ -447,16 +454,19 @@ export async function getProxyInfo(options?: {
           ).toISOString(),
           previousIps: snapshot.previousIps || [],
           currentIps: snapshot.currentIps || [],
-          addedIps:
-            payload.telemetry?.addedIps ||
-            (snapshot.currentIps || []).filter(
-              (ip) => !(snapshot.previousIps || []).includes(ip),
-            ),
-          removedIps:
-            payload.telemetry?.removedIps ||
-            (snapshot.previousIps || []).filter(
-              (ip) => !(snapshot.currentIps || []).includes(ip),
-            ),
+          addedIps: config.manualReferenceIps && config.manualReferenceIps.length > 0
+            ? (snapshot.currentIps || []).filter(ip => !config.manualReferenceIps!.includes(ip))
+            : payload.telemetry?.addedIps ||
+              (snapshot.currentIps || []).filter(
+                (ip) => !(snapshot.previousIps || []).includes(ip),
+              ),
+          removedIps: config.manualReferenceIps && config.manualReferenceIps.length > 0
+            ? config.manualReferenceIps.filter(ip => !(snapshot.currentIps || []).includes(ip))
+            : payload.telemetry?.removedIps ||
+              (snapshot.previousIps || []).filter(
+                (ip) => !(snapshot.currentIps || []).includes(ip),
+              ),
+          isUsingManualReference: config.manualReferenceIps && config.manualReferenceIps.length > 0,
         },
       };
     }
@@ -470,8 +480,18 @@ export async function getProxyInfo(options?: {
       .catch(() => null);
     const previousIps = snapshot?.currentIps || [];
     const currentIps = info.ipList;
-    const addedIps = currentIps.filter((ip) => !previousIps.includes(ip));
-    const removedIps = previousIps.filter((ip) => !currentIps.includes(ip));
+    
+    let addedIps: string[];
+    let removedIps: string[];
+    const isUsingManualReference = config.manualReferenceIps && config.manualReferenceIps.length > 0;
+    
+    if (isUsingManualReference) {
+      addedIps = currentIps.filter(ip => !config.manualReferenceIps!.includes(ip));
+      removedIps = config.manualReferenceIps!.filter(ip => !currentIps.includes(ip));
+    } else {
+      addedIps = currentIps.filter((ip) => !previousIps.includes(ip));
+      removedIps = previousIps.filter((ip) => !currentIps.includes(ip));
+    }
 
     await ProxyIpSnapshot.findOneAndUpdate(
       { provider: "webshare" },
@@ -499,6 +519,7 @@ export async function getProxyInfo(options?: {
         currentIps,
         addedIps,
         removedIps,
+        isUsingManualReference,
       },
     };
   }

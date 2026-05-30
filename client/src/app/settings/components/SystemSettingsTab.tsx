@@ -57,6 +57,8 @@ export function SystemSettingsTab(props: {
   setWebshareActiveKeyIndex: React.Dispatch<React.SetStateAction<number>>;
   webshareAllowedCountriesText: string;
   setWebshareAllowedCountriesText: React.Dispatch<React.SetStateAction<string>>;
+  manualReferenceIpsText: string;
+  setManualReferenceIpsText: React.Dispatch<React.SetStateAction<string>>;
   proxyIpCsvCopied: boolean;
   handleProxyRefresh: () => void | Promise<void>;
   handleProxySave: () => void | Promise<void>;
@@ -123,6 +125,8 @@ export function SystemSettingsTab(props: {
         setWebshareActiveKeyIndex={props.setWebshareActiveKeyIndex}
         webshareAllowedCountriesText={props.webshareAllowedCountriesText}
         setWebshareAllowedCountriesText={props.setWebshareAllowedCountriesText}
+        manualReferenceIpsText={props.manualReferenceIpsText}
+        setManualReferenceIpsText={props.setManualReferenceIpsText}
         proxyIpCsvCopied={props.proxyIpCsvCopied}
         handleProxyRefresh={props.handleProxyRefresh}
         handleProxySave={props.handleProxySave}

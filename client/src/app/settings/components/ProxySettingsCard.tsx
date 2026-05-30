@@ -17,6 +17,8 @@ export function ProxySettingsCard({
   setWebshareActiveKeyIndex,
   webshareAllowedCountriesText,
   setWebshareAllowedCountriesText,
+  manualReferenceIpsText,
+  setManualReferenceIpsText,
   proxyIpCsvCopied,
   handleProxyRefresh,
   handleProxySave,
@@ -37,6 +39,8 @@ export function ProxySettingsCard({
   setWebshareActiveKeyIndex: React.Dispatch<React.SetStateAction<number>>;
   webshareAllowedCountriesText: string;
   setWebshareAllowedCountriesText: React.Dispatch<React.SetStateAction<string>>;
+  manualReferenceIpsText: string;
+  setManualReferenceIpsText: React.Dispatch<React.SetStateAction<string>>;
   proxyIpCsvCopied: boolean;
   handleProxyRefresh: () => void | Promise<void>;
   handleProxySave: () => void | Promise<void>;
@@ -98,6 +102,11 @@ export function ProxySettingsCard({
                   setWebshareActiveKeyIndex={setWebshareActiveKeyIndex}
                   webshareAllowedCountriesText={webshareAllowedCountriesText}
                   setWebshareAllowedCountriesText={setWebshareAllowedCountriesText}
+                  manualReferenceIpsText={manualReferenceIpsText}
+                  setManualReferenceIpsText={setManualReferenceIpsText}
+                  handleProxySave={handleProxySave}
+                  proxySaving={proxySaving}
+                  savedManualIps={proxyConfig?.manualReferenceIps}
                 />
               )}
 
@@ -159,6 +168,11 @@ function WebshareFields({
   setWebshareActiveKeyIndex,
   webshareAllowedCountriesText,
   setWebshareAllowedCountriesText,
+  manualReferenceIpsText,
+  setManualReferenceIpsText,
+  handleProxySave,
+  proxySaving,
+  savedManualIps,
 }: {
   webshareApiKeysText: string;
   setWebshareApiKeysText: React.Dispatch<React.SetStateAction<string>>;
@@ -166,6 +180,11 @@ function WebshareFields({
   setWebshareActiveKeyIndex: React.Dispatch<React.SetStateAction<number>>;
   webshareAllowedCountriesText: string;
   setWebshareAllowedCountriesText: React.Dispatch<React.SetStateAction<string>>;
+  manualReferenceIpsText: string;
+  setManualReferenceIpsText: React.Dispatch<React.SetStateAction<string>>;
+  handleProxySave: () => void | Promise<void>;
+  proxySaving: boolean;
+  savedManualIps?: string[];
 }) {
   return (
     <div className="space-y-4 mb-4">
@@ -196,6 +215,38 @@ function WebshareFields({
         <p className="mt-2 text-xs text-slate-500">
           If set, proxy selection will prioritize only these ISO country codes.
         </p>
+      </div>
+      <div>
+        <label className="block text-xs text-slate-400 mb-1">Manual Whitelisted Exchange IPs</label>
+        <textarea
+          value={manualReferenceIpsText}
+          onChange={(e) => setManualReferenceIpsText(e.target.value)}
+          rows={3}
+          placeholder="Paste IPs from Exchange here (one per line or comma-separated)"
+          className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
+        />
+        <p className="mt-2 text-xs text-slate-500">
+          If set, Telemetry will compare Webshare IPs against this manual list instead of the last auto-snapshot.
+        </p>
+        {savedManualIps && savedManualIps.length > 0 && (
+          <div className="mt-3">
+            <p className="text-[11px] text-slate-400 mb-1">Saved IPs ({savedManualIps.length})</p>
+            <div className="flex flex-wrap gap-1">
+              {savedManualIps.map((ip) => (
+                <span key={ip} className="text-xs font-mono bg-slate-700 px-1.5 py-0.5 rounded text-slate-300">
+                  {ip}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+        <button
+          onClick={() => void handleProxySave()}
+          disabled={proxySaving}
+          className="mt-3 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 px-3 py-1.5 rounded-lg text-xs transition border border-slate-600 text-slate-200"
+        >
+          {proxySaving ? "Saving..." : "💾 Save Manual IPs"}
+        </button>
       </div>
     </div>
   );
