@@ -78,6 +78,11 @@ export function AccountCardItem({
                 Account TP Auto-Raise: {account.riskOverrides.autoRaiseTpCountEnabled ? `ON${account.riskOverrides.autoRaiseTpCountMaxMarginUsdt !== undefined ? ` ≤ $${account.riskOverrides.autoRaiseTpCountMaxMarginUsdt}` : ""}` : "OFF"}
               </span>
             ) : null}
+            {account.riskOverrides?.tpCloseMode ? (
+              <span className="text-xs px-2 py-1 rounded border border-purple-700/40 bg-purple-900/20 text-purple-300">
+                Account TP Mode: {account.riskOverrides.tpCloseMode}
+              </span>
+            ) : null}
             {(account.channelIds || []).map((channelId) => {
               const isDisabled = (account.disabledChannelIds || []).includes(channelId);
               const name = account.channelNames?.[channelId] || channelId;
@@ -105,6 +110,7 @@ export function AccountCardItem({
                       ? ` • tp≤$${overrides.autoRaiseTpCountMaxMarginUsdt ?? "?"}`
                       : " • tp off"
                     : ""}
+                  {overrides?.tpCloseMode ? ` • tpMode=${overrides.tpCloseMode}` : ""}
                 </button>
               );
             })}

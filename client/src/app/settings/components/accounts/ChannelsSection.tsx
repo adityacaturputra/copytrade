@@ -1,4 +1,4 @@
-import type { AccountFormData, AutoRaiseOverrideMode } from "../../types";
+import type { AccountFormData, AutoRaiseOverrideMode, TpCloseModeOverride } from "../../types";
 
 export function ChannelsSection({
   form,
@@ -90,6 +90,23 @@ export function ChannelsSection({
               }))
             }
           />
+          <div>
+            <label className="block text-sm text-slate-400 mb-1">Account TP Close Mode</label>
+            <select
+              value={form.accountTpCloseMode}
+              onChange={(e) =>
+                setForm((prev) => ({
+                  ...prev,
+                  accountTpCloseMode: e.target.value as TpCloseModeOverride,
+                }))
+              }
+              className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
+            >
+              <option value="inherit">Use inherited</option>
+              <option value="equal">Equal</option>
+              <option value="halving">Halving</option>
+            </select>
+          </div>
         </div>
         <p className="text-xs text-slate-500 mt-2">
           Override account berlaku di atas global. Channel tertentu tetap bisa override lagi, termasuk saat account di-set disabled dan channel di-set enabled.
@@ -148,6 +165,19 @@ export function ChannelsSection({
               <option value="enabled">Enabled</option>
               <option value="disabled">Disabled</option>
             </select>
+            <select
+              value={channel.tpCloseMode}
+              onChange={(e) =>
+                updateChannel(index, {
+                  tpCloseMode: e.target.value as TpCloseModeOverride,
+                })
+              }
+              className="min-w-0 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:border-primary-500 focus:outline-none"
+            >
+              <option value="inherit">TP close mode inherit</option>
+              <option value="equal">Equal</option>
+              <option value="halving">Halving</option>
+            </select>
             <div className="min-w-0">
               <InputField
                 type="number"
@@ -201,6 +231,7 @@ export function ChannelsSection({
                   autoRaiseMinOrderMaxMarginUsdt: "",
                   autoRaiseTpCountMode: "inherit",
                   autoRaiseTpCountMaxMarginUsdt: "",
+                  tpCloseMode: "inherit",
                 },
               ],
             }))

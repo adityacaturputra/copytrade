@@ -7,6 +7,7 @@ import {
   enforceTpCountFeasibility,
   resolveTradeExchange,
 } from "./helpers";
+import { resolveEffectiveRiskConfig } from "../../risk";
 import type { ExecuteTradeInput } from "../types";
 
 export async function executeTrade(
@@ -59,6 +60,11 @@ export async function executeTrade(
   const minOrderSizing = await enforceExchangeMinimums(exchange, runtime, riskSizing);
   const finalSizing = await enforceTpCountFeasibility(exchange, runtime, minOrderSizing);
 
+  const effectiveRiskConfig = await resolveEffectiveRiskConfig({
+    accountId: runtime.accountId,
+    channelId: runtime.channelId,
+  });
+
   await logExecutorInfo(
     `${lp}🔄 Placing ${orderType} ${action} order: symbol=${symbol}, qty=${finalSizing.orderQuantity}, leverage=${finalSizing.orderLeverage}${orderType === "LIMIT" ? `, price=${entryPrice}` : ""}`,
     { accountId, processId, symbol, action: "console_place_order" },
@@ -96,9 +102,10 @@ export async function executeTrade(
     accountId,
     processId,
     logPrefix: lp,
+    tpCloseMode: effectiveRiskConfig.tpCloseMode || "equal",
   });
 
-  const tpTargetObjects = buildTPTargets(tpTargets, filledQty);
+  const tpTargetObjects = buildTPTargets(tpTargets, filledQty, effectiveRiskConfig.tpCloseMode || "equal");
   const positionStatus = orderType === "LIMIT" ? "pending" : "open";
 
   await logExecutorInfo(
@@ -146,6 +153,7 @@ async function placeProtectionOrders({
   accountId,
   processId,
   logPrefix,
+  tpCloseMode,
 }: {
   exchange: {
     getInstrumentSpecs(symbol: string): Promise<{ lotSz: number; qtyDecimals: number }>;
@@ -161,6 +169,7 @@ async function placeProtectionOrders({
   accountId?: string;
   processId?: string;
   logPrefix: string;
+  tpCloseMode: "equal" | "halving";
 }) {
   if (orderType === "LIMIT") {
     await logExecutorInfo(
@@ -172,6 +181,7 @@ async function placeProtectionOrders({
 
   const tpQuantities = await splitQuantityForTPs(filledQty, tpTargets.length, () =>
     exchange.getInstrumentSpecs(symbol),
+    tpCloseMode
   );
 
   for (let index = 0; index < tpTargets.length; index++) {

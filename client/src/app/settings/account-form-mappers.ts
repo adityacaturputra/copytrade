@@ -6,6 +6,7 @@ import {
 import {
   formatOptionalNumber,
   toAutoRaiseOverrideMode,
+  toTpCloseModeOverride,
   type AccountData,
   type AccountFormData,
 } from "./types";
@@ -39,6 +40,9 @@ function buildBaseForm(account: AccountData): AccountFormData {
       autoRaiseTpCountMaxMarginUsdt: formatOptionalNumber(
         account.channelConfigs?.[channelId]?.riskOverrides?.autoRaiseTpCountMaxMarginUsdt,
       ),
+      tpCloseMode: toTpCloseModeOverride(
+        account.channelConfigs?.[channelId]?.riskOverrides?.tpCloseMode,
+      ),
     })),
     accountRiskPerTradePercent: formatOptionalNumber(
       account.riskOverrides?.riskPerTradePercent,
@@ -54,6 +58,9 @@ function buildBaseForm(account: AccountData): AccountFormData {
     ),
     accountAutoRaiseTpCountMaxMarginUsdt: formatOptionalNumber(
       account.riskOverrides?.autoRaiseTpCountMaxMarginUsdt,
+    ),
+    accountTpCloseMode: toTpCloseModeOverride(
+      account.riskOverrides?.tpCloseMode,
     ),
     tradingPlatform: resolveAccountFormTradingPlatform(account.tradingPlatform),
     exchangeValues: buildExchangeFormValues(account.exchangeData),

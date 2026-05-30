@@ -1,9 +1,12 @@
 import { logExecutorInfo } from "../../process/log";
 
+import { calculateTPPercentages } from "../../database";
+
 export async function splitQuantityForTPs(
   totalQty: number,
   numLevels: number,
   getSpecs: () => Promise<{ lotSz: number; qtyDecimals: number }>,
+  mode: "equal" | "halving" = "equal",
 ): Promise<number[]> {
   if (numLevels <= 0) return [];
   if (numLevels === 1) return [totalQty];
@@ -27,12 +30,26 @@ export async function splitQuantityForTPs(
   const quantities: number[] = [];
   let allocated = 0;
 
-  for (let i = 0; i < numLevels; i++) {
-    if (i === numLevels - 1) {
-      quantities.push((totalUnits - allocated) / mult);
-    } else {
-      quantities.push(baseLotUnits / mult);
-      allocated += baseLotUnits;
+  if (mode === "halving") {
+    const percentages = calculateTPPercentages(numLevels, "halving");
+    for (let i = 0; i < numLevels; i++) {
+      if (i === numLevels - 1) {
+        quantities.push((totalUnits - allocated) / mult);
+      } else {
+        const targetUnits = Math.round((totalUnits * percentages[i]) / 100);
+        const tpLotUnits = Math.max(lotUnits, Math.floor(targetUnits / lotUnits) * lotUnits);
+        quantities.push(tpLotUnits / mult);
+        allocated += tpLotUnits;
+      }
+    }
+  } else {
+    for (let i = 0; i < numLevels; i++) {
+      if (i === numLevels - 1) {
+        quantities.push((totalUnits - allocated) / mult);
+      } else {
+        quantities.push(baseLotUnits / mult);
+        allocated += baseLotUnits;
+      }
     }
   }
 

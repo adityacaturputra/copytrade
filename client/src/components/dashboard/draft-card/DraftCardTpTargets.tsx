@@ -1,16 +1,20 @@
-export function DraftCardTpTargets({ takeProfitTargets }: { takeProfitTargets: number[] }) {
+import { calculateTPPercentages } from '@copytrade/shared/lib/risk/calc';
+
+export function DraftCardTpTargets({
+  takeProfitTargets,
+  tpCloseMode = 'equal',
+}: {
+  takeProfitTargets: number[];
+  tpCloseMode?: 'equal' | 'halving';
+}) {
   if (!takeProfitTargets?.length) return null;
+
+  const percentages = calculateTPPercentages(takeProfitTargets.length, tpCloseMode);
 
   return (
     <div className="flex flex-wrap gap-1.5 mb-3">
       {takeProfitTargets.map((tp, idx) => {
-        const total = takeProfitTargets.length;
-        const pct =
-          total === 1
-            ? 100
-            : idx < total - 1
-              ? Math.floor((100 / total) * 100) / 100
-              : Math.round((100 - (total - 1) * (Math.floor((100 / total) * 100) / 100)) * 100) / 100;
+        const pct = percentages[idx] || 0;
 
         return (
           <span

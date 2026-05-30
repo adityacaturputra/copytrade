@@ -91,6 +91,7 @@ export function useSettingsAccounts(check403: (res: Response) => boolean) {
       if (channel.autoRaiseTpCountMode !== "inherit") channelRiskOverrides.autoRaiseTpCountEnabled = channel.autoRaiseTpCountMode === "enabled";
       const channelTpRaiseCap = parseOptionalNonNegativeNumber(channel.autoRaiseTpCountMaxMarginUsdt);
       if (channelTpRaiseCap !== null) channelRiskOverrides.autoRaiseTpCountMaxMarginUsdt = channelTpRaiseCap;
+      if (channel.tpCloseMode !== "inherit") channelRiskOverrides.tpCloseMode = channel.tpCloseMode;
       if (Object.keys(channelRiskOverrides).length > 0) channelConfigs[channel.id.trim()] = { riskOverrides: channelRiskOverrides };
     }
 
@@ -102,6 +103,7 @@ export function useSettingsAccounts(check403: (res: Response) => boolean) {
     if (form.accountAutoRaiseTpCountMode !== "inherit") accountRiskOverrides.autoRaiseTpCountEnabled = form.accountAutoRaiseTpCountMode === "enabled";
     const accountTpRaiseCap = parseOptionalNonNegativeNumber(form.accountAutoRaiseTpCountMaxMarginUsdt);
     if (accountTpRaiseCap !== null) accountRiskOverrides.autoRaiseTpCountMaxMarginUsdt = accountTpRaiseCap;
+    if (form.accountTpCloseMode !== "inherit") accountRiskOverrides.tpCloseMode = form.accountTpCloseMode;
 
     if (!form.name.trim()) return setAndStop(setFormError, setSaving, "Account name is required.");
     if (channelIdsArray.length === 0) return setAndStop(setFormError, setSaving, "At least one channel is required.");

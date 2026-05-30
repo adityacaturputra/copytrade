@@ -66,7 +66,10 @@ export function DraftCard({
           <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 sm:gap-4">
             <div className="flex-1 min-w-0">
               <DraftCardMetrics draft={draft} />
-              <DraftCardTpTargets takeProfitTargets={draft.takeProfitTargets} />
+              <DraftCardTpTargets
+                takeProfitTargets={draft.takeProfitTargets}
+                tpCloseMode={riskConfig?.tpCloseMode}
+              />
 
               {canCalcTPFromRR && isPending && (
                 <DraftCardRrEditor

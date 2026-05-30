@@ -127,6 +127,26 @@ export function RiskSettingsCard({
           }
         />
       </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">
+            TP Close Distribution Mode
+          </label>
+          <select
+            value={riskConfig.tpCloseMode || "equal"}
+            onChange={(e) =>
+              setRiskConfigState((prev) => ({
+                ...prev,
+                tpCloseMode: e.target.value as "equal" | "halving",
+              }))
+            }
+            className="w-full h-[42px] px-3 bg-slate-800 border border-slate-600 rounded-lg text-sm text-white focus:outline-none focus:border-primary-500"
+          >
+            <option value="equal">Equal — splits qty evenly across TPs</option>
+            <option value="halving">Halving — each TP closes 50% of remaining</option>
+          </select>
+        </div>
+      </div>
       <div className="flex items-center gap-2 mt-4">
         <input
           type="checkbox"

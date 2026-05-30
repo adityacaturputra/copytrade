@@ -20,6 +20,7 @@ export interface RiskConfig {
   autoRaiseMinOrderMaxMarginUsdt: number; // max margin in USDT allowed for auto-raise
   autoRaiseTpCountEnabled: boolean; // allow auto-raising margin to support all TP legs
   autoRaiseTpCountMaxMarginUsdt: number; // max margin in USDT allowed for TP-count auto-raise
+  tpCloseMode: "equal" | "halving"; // how to split quantity across multiple TP legs
 }
 
 export interface RiskCalculation {
@@ -57,6 +58,7 @@ export interface EffectiveRiskConfig extends RiskConfig {
     autoRaiseMinOrderMaxMarginUsdt: "global" | "account" | "source_chat";
     autoRaiseTpCountEnabled: "global" | "account" | "source_chat";
     autoRaiseTpCountMaxMarginUsdt: "global" | "account" | "source_chat";
+    tpCloseMode: "global" | "account" | "source_chat";
   };
 }
 
@@ -75,6 +77,7 @@ const DEFAULT_RISK_CONFIG: RiskConfig = {
   autoRaiseMinOrderMaxMarginUsdt: 0,
   autoRaiseTpCountEnabled: false,
   autoRaiseTpCountMaxMarginUsdt: 0,
+  tpCloseMode: "equal",
 };
 
 type RiskConfigField = keyof RiskConfig;
@@ -92,6 +95,7 @@ const RISK_CONFIG_FIELDS: RiskConfigField[] = [
   "autoRaiseMinOrderMaxMarginUsdt",
   "autoRaiseTpCountEnabled",
   "autoRaiseTpCountMaxMarginUsdt",
+  "tpCloseMode",
 ];
 
 function toRiskOverrideConfig(value: unknown): RiskOverrideConfig {
@@ -115,6 +119,15 @@ function toRiskOverrideConfig(value: unknown): RiskOverrideConfig {
       (field === "skipNoSL" ||
         field === "autoRaiseMinOrderEnabled" ||
         field === "autoRaiseTpCountEnabled")
+    ) {
+      overrides[field] = fieldValue as never;
+      continue;
+    }
+
+    if (
+      typeof fieldValue === "string" &&
+      field === "tpCloseMode" &&
+      (fieldValue === "equal" || fieldValue === "halving")
     ) {
       overrides[field] = fieldValue as never;
     }
@@ -170,6 +183,7 @@ export function mergeRiskConfigOverrides(
     autoRaiseMinOrderMaxMarginUsdt: "global",
     autoRaiseTpCountEnabled: "global",
     autoRaiseTpCountMaxMarginUsdt: "global",
+    tpCloseMode: "global",
   };
 
   for (const field of RISK_CONFIG_FIELDS) {
@@ -213,6 +227,7 @@ export async function getRiskConfig(): Promise<RiskConfig> {
           settings.autoRaiseTpCountEnabled ?? false,
         autoRaiseTpCountMaxMarginUsdt:
           settings.autoRaiseTpCountMaxMarginUsdt ?? 0,
+        tpCloseMode: settings.tpCloseMode ?? "equal",
       };
     }
   } catch (err) {
@@ -267,6 +282,9 @@ export async function setRiskConfig(
     update.autoRaiseTpCountMaxMarginUsdt =
       config.autoRaiseTpCountMaxMarginUsdt;
   }
+  if (config.tpCloseMode !== undefined) {
+    update.tpCloseMode = config.tpCloseMode;
+  }
   const doc = await RiskSettingsModel.findOneAndUpdate({}, update, {
     upsert: true,
     new: true,
@@ -284,6 +302,7 @@ export async function setRiskConfig(
     autoRaiseMinOrderMaxMarginUsdt: doc.autoRaiseMinOrderMaxMarginUsdt ?? 0,
     autoRaiseTpCountEnabled: doc.autoRaiseTpCountEnabled ?? false,
     autoRaiseTpCountMaxMarginUsdt: doc.autoRaiseTpCountMaxMarginUsdt ?? 0,
+    tpCloseMode: doc.tpCloseMode ?? "equal",
   };
 }
 

@@ -1,4 +1,4 @@
-import { connectDB, Position, Account, IPosition } from "../database/index";
+import { connectDB, Position, Account, IPosition, ITPTarget } from "../database/index";
 import {
   ExchangeFactory,
   buildExchangeCredentials,
@@ -18,6 +18,7 @@ import {
   logProcessStep,
 } from "../process/log";
 import { ensurePersistedProcessId } from "../process/id";
+import { resolveEffectiveRiskConfig } from "../risk";
 import { getHttpErrorDetails } from "../http/error";
 import { calculatePositionPnlUsd } from "./index";
 
@@ -613,11 +614,18 @@ async function placeTpslForPosition(
   if (tpTargets.length > 0) {
     const tpPrices = tpTargets.map((t) => t.price);
 
+    // Fetch effective risk config to get tpCloseMode
+    const effectiveRiskConfig = await resolveEffectiveRiskConfig({
+      accountId: position.accountId,
+      channelId: position.channelId,
+    });
+
     // Split quantity across TP levels
     const tpQuantities = await splitQuantityForTPs(
       quantity,
       tpPrices.length,
       () => exchange.getInstrumentSpecs(position.symbol),
+      effectiveRiskConfig.tpCloseMode || "equal",
     );
 
     for (let i = 0; i < tpPrices.length; i++) {

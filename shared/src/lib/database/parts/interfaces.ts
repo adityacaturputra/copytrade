@@ -151,6 +151,7 @@ export interface IRiskSettings extends Document {
   autoRaiseMinOrderMaxMarginUsdt?: number;
   autoRaiseTpCountEnabled?: boolean;
   autoRaiseTpCountMaxMarginUsdt?: number;
+  tpCloseMode?: "equal" | "halving";
 }
 
 export interface ISignalConfig extends Document {

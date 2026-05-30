@@ -1,5 +1,6 @@
 import mongoose, { models, Model } from "mongoose";
 import { countTradeLogs, getRecentTradeLogs } from "../trade-log/store";
+import { calculateTPPercentages } from "../risk/calc";
 import {
   IProcessedMessage, IPosition, ITradeLog, IDraftTrade, ITradingMode,
   IDiscordSource, IAccount, IRiskSettings, ISignalConfig, IAgentSession, IAgentTurn, ITPTarget
@@ -27,7 +28,12 @@ export async function connectDB(): Promise<void> {
 
 export async function disconnectDB(): Promise<void> {
   try { if (mongoose.connection.readyState !== 0) await mongoose.disconnect(); }
-  finally { isConnected = false; processedMessageIndexesEnsured = false; }
+  finally { resetDBConnectionState(); }
+}
+
+export function resetDBConnectionState() {
+  isConnected = false;
+  processedMessageIndexesEnsured = false;
 }
 
 async function ensureProcessedMessageIndexes(): Promise<void> {
@@ -79,18 +85,12 @@ export function getAllPositions(limit = 50) { return Position.find().sort({ open
 export function getPendingDrafts() { return DraftTrade.find({ status: "pending" }).sort({ sourceTimestamp: -1 }).lean(); }
 export function getRecentDrafts(limit = 50) { return DraftTrade.find().sort({ sourceTimestamp: -1 }).limit(limit).lean(); }
 
-export function calculateTPPercentages(count: number): number[] {
-  if (count <= 0) return []; if (count === 1) return [100];
-  const base = Math.floor((100 / count) * 100) / 100;
-  const percentages: number[] = []; let allocated = 0;
-  for (let i = 0; i < count - 1; i++) { percentages.push(base); allocated = Math.round((allocated + base) * 100) / 100; }
-  percentages.push(Math.round((100 - allocated) * 100) / 100); return percentages;
-}
-export function buildTPTargets(prices: number[], totalQuantity: number): ITPTarget[] {
-  const percentages = calculateTPPercentages(prices.length);
+export { calculateTPPercentages };
+export function buildTPTargets(prices: number[], totalQuantity: number, mode: "equal" | "halving" = "equal"): ITPTarget[] {
+  const percentages = calculateTPPercentages(prices.length, mode);
   return prices.map((price, idx) => ({ price, quantity: Math.round(((totalQuantity * percentages[idx]) / 100) * 10000) / 10000, percentage: percentages[idx], status: "pending" }));
 }
-export function recalculateTPAllocation(targets: ITPTarget[], totalQuantity: number): ITPTarget[] {
-  const percentages = calculateTPPercentages(targets.length);
+export function recalculateTPAllocation(targets: ITPTarget[], totalQuantity: number, mode: "equal" | "halving" = "equal"): ITPTarget[] {
+  const percentages = calculateTPPercentages(targets.length, mode);
   return targets.map((t, idx) => ({ ...t, quantity: Math.round(((totalQuantity * percentages[idx]) / 100) * 10000) / 10000, percentage: percentages[idx] }));
 }

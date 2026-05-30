@@ -297,6 +297,7 @@ export interface RiskConfig {
   maxLeverage: number;
   minLeverage: number;
   skipNoSL: boolean;
+  tpCloseMode?: "equal" | "halving";
 }
 
 export interface CronStep {

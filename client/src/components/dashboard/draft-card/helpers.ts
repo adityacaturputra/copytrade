@@ -1,5 +1,6 @@
 import { calculateRisk } from '@copytrade/shared/lib/risk/calc';
 import { autoCalculateTPFromRR } from '@copytrade/shared/lib/executor/utils/signal';
+import { calculateTPPercentages } from '@copytrade/shared/lib/risk/calc';
 import type { DraftTrade, RiskConfig } from '../types';
 import type { ResolvedStyle } from './types';
 
@@ -83,10 +84,19 @@ export function getTpMinimums(
 
   const riskLeverage = riskResult?.leverage ?? draft.leverage;
   const tpCount = draft.takeProfitTargets?.length ?? 0;
-  const tpMinQty =
-    draft.instrumentLotSize && tpCount > 0
-      ? draft.instrumentLotSize * tpCount
-      : null;
+  
+  let tpMinQty = null;
+  if (draft.instrumentLotSize && tpCount > 0) {
+    const tpCloseMode = riskConfig?.tpCloseMode || 'equal';
+    const percentages = calculateTPPercentages(tpCount, tpCloseMode);
+    const minPercentage = Math.min(...percentages);
+    
+    // Calculate total quantity required so the smallest percentage slice 
+    // meets at least 1 instrumentLotSize
+    tpMinQty = minPercentage > 0 
+      ? draft.instrumentLotSize / (minPercentage / 100) 
+      : draft.instrumentLotSize * tpCount;
+  }
   const tpMinMarginUsdt =
     tpMinQty && draft.entryPrice && draft.entryPrice > 0 && riskLeverage > 0
       ? (tpMinQty * draft.entryPrice) / riskLeverage

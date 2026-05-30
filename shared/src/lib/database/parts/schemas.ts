@@ -140,7 +140,8 @@ export const RiskSettingsSchema = new Schema({
   autoRaiseMinOrderEnabled: { type: Boolean, default: false },
   autoRaiseMinOrderMaxMarginUsdt: { type: Number, default: 0 },
   autoRaiseTpCountEnabled: { type: Boolean, default: false },
-  autoRaiseTpCountMaxMarginUsdt: { type: Number, default: 0 }
+  autoRaiseTpCountMaxMarginUsdt: { type: Number, default: 0 },
+  tpCloseMode: { type: String, enum: ["equal", "halving"], default: "equal" },
 }, { strict: false });
 
 export const SignalConfigSchema = new Schema({

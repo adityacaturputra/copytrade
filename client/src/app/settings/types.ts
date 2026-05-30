@@ -21,10 +21,10 @@ export interface AccountData {
   disabledChannelIds?: string[];
   riskOverrides?: {
     riskPerTradePercent?: number;
-    autoRaiseMinOrderEnabled?: boolean;
     autoRaiseMinOrderMaxMarginUsdt?: number;
     autoRaiseTpCountEnabled?: boolean;
     autoRaiseTpCountMaxMarginUsdt?: number;
+    tpCloseMode?: "equal" | "halving";
     [key: string]: unknown;
   } | null;
   channelConfigs?: Record<
@@ -32,10 +32,10 @@ export interface AccountData {
     {
       riskOverrides?: {
         riskPerTradePercent?: number;
-        autoRaiseMinOrderEnabled?: boolean;
         autoRaiseMinOrderMaxMarginUsdt?: number;
         autoRaiseTpCountEnabled?: boolean;
         autoRaiseTpCountMaxMarginUsdt?: number;
+        tpCloseMode?: "equal" | "halving";
         [key: string]: unknown;
       };
       [key: string]: unknown;
@@ -57,6 +57,7 @@ export interface HealthStatus {
 }
 
 export type AutoRaiseOverrideMode = "inherit" | "enabled" | "disabled";
+export type TpCloseModeOverride = "inherit" | "equal" | "halving";
 
 export interface ChannelEntry {
   id: string;
@@ -66,6 +67,7 @@ export interface ChannelEntry {
   autoRaiseMinOrderMaxMarginUsdt: string;
   autoRaiseTpCountMode: AutoRaiseOverrideMode;
   autoRaiseTpCountMaxMarginUsdt: string;
+  tpCloseMode: TpCloseModeOverride;
 }
 
 export interface AccountFormData {
@@ -86,6 +88,7 @@ export interface AccountFormData {
   accountAutoRaiseMinOrderMaxMarginUsdt: string;
   accountAutoRaiseTpCountMode: AutoRaiseOverrideMode;
   accountAutoRaiseTpCountMaxMarginUsdt: string;
+  accountTpCloseMode: TpCloseModeOverride;
   // Exchange
   tradingPlatform: string;
   exchangeValues: ExchangeFormValues;
@@ -110,6 +113,7 @@ export const emptyForm: AccountFormData = {
       autoRaiseMinOrderMaxMarginUsdt: "",
       autoRaiseTpCountMode: "inherit",
       autoRaiseTpCountMaxMarginUsdt: "",
+      tpCloseMode: "inherit",
     },
   ],
   accountRiskPerTradePercent: "",
@@ -117,6 +121,7 @@ export const emptyForm: AccountFormData = {
   accountAutoRaiseMinOrderMaxMarginUsdt: "",
   accountAutoRaiseTpCountMode: "inherit",
   accountAutoRaiseTpCountMaxMarginUsdt: "",
+  accountTpCloseMode: "inherit",
   tradingPlatform: DEFAULT_ACCOUNT_EXCHANGE_PROVIDER,
   exchangeValues: createEmptyExchangeFormValues(),
   exchangeIsDemo: false,
@@ -134,6 +139,7 @@ export function createEmptyAccountForm(): AccountFormData {
         autoRaiseMinOrderMaxMarginUsdt: "",
         autoRaiseTpCountMode: "inherit",
         autoRaiseTpCountMaxMarginUsdt: "",
+        tpCloseMode: "inherit",
       },
     ],
     exchangeValues: createEmptyExchangeFormValues(),
@@ -153,6 +159,7 @@ export interface RiskConfig {
   autoRaiseMinOrderMaxMarginUsdt: number;
   autoRaiseTpCountEnabled: boolean;
   autoRaiseTpCountMaxMarginUsdt: number;
+  tpCloseMode: "equal" | "halving";
 }
 
 export const defaultRiskConfig: RiskConfig = {
@@ -168,6 +175,7 @@ export const defaultRiskConfig: RiskConfig = {
   autoRaiseMinOrderMaxMarginUsdt: 0,
   autoRaiseTpCountEnabled: false,
   autoRaiseTpCountMaxMarginUsdt: 0,
+  tpCloseMode: "equal",
 };
 
 export interface SignalConfigType {
@@ -238,6 +246,11 @@ export function formatOptionalNumber(value: unknown): string {
 export function toAutoRaiseOverrideMode(value: unknown): AutoRaiseOverrideMode {
   if (value === true) return "enabled";
   if (value === false) return "disabled";
+  return "inherit";
+}
+
+export function toTpCloseModeOverride(value: unknown): TpCloseModeOverride {
+  if (value === "equal" || value === "halving") return value;
   return "inherit";
 }
 

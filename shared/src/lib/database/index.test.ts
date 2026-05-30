@@ -106,7 +106,7 @@ vi.mock("mongoose", () => {
   };
 });
 
-vi.mock("./trade-log-store", () => ({
+vi.mock("../trade-log/store", () => ({
   countTradeLogs: vi.fn(),
   getRecentTradeLogs: vi.fn(),
 }));
@@ -134,8 +134,8 @@ import {
   recalculateTPAllocation,
   resetDBConnectionState,
   setTradingMode,
-} from "./database";
-import { countTradeLogs, getRecentTradeLogs } from "./trade-log-store";
+} from "./index";
+import { countTradeLogs, getRecentTradeLogs } from "../trade-log/store";
 
 beforeEach(() => {
   databaseMocks.connect.mockReset();
@@ -313,6 +313,14 @@ test("tp allocation helpers distribute quantities and percentages deterministica
     { price: 110, quantity: 0.4999, percentage: 33.33, status: "pending" },
     { price: 120, quantity: 0.4999, percentage: 33.33, status: "pending" },
     { price: 130, quantity: 0.5001, percentage: 33.34, status: "pending" },
+  ]);
+
+  assert.deepEqual(calculateTPPercentages(4, "halving"), [50, 25, 12.5, 12.5]);
+  assert.deepEqual(buildTPTargets([110, 120, 130, 140], 100, "halving"), [
+    { price: 110, quantity: 50, percentage: 50, status: "pending" },
+    { price: 120, quantity: 25, percentage: 25, status: "pending" },
+    { price: 130, quantity: 12.5, percentage: 12.5, status: "pending" },
+    { price: 140, quantity: 12.5, percentage: 12.5, status: "pending" },
   ]);
 
   assert.deepEqual(

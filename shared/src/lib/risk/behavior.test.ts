@@ -71,6 +71,7 @@ test("getRiskConfig returns DB-backed settings and falls back to defaults on fai
     autoRaiseMinOrderMaxMarginUsdt: 25,
     autoRaiseTpCountEnabled: false,
     autoRaiseTpCountMaxMarginUsdt: 0,
+    tpCloseMode: "equal",
   });
 
   const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -90,6 +91,7 @@ test("getRiskConfig returns DB-backed settings and falls back to defaults on fai
     autoRaiseMinOrderMaxMarginUsdt: 0,
     autoRaiseTpCountEnabled: false,
     autoRaiseTpCountMaxMarginUsdt: 0,
+    tpCloseMode: "equal",
   });
   assert.equal(warnSpy.mock.calls.length, 1);
 
@@ -109,6 +111,7 @@ test("setRiskConfig persists provided fields and normalizes missing optional val
       maxPositions: undefined,
       autoRaiseMinOrderEnabled: undefined,
       autoRaiseMinOrderMaxMarginUsdt: undefined,
+      tpCloseMode: undefined,
     }),
   });
 
@@ -138,6 +141,7 @@ test("setRiskConfig persists provided fields and normalizes missing optional val
     autoRaiseMinOrderMaxMarginUsdt: 0,
     autoRaiseTpCountEnabled: false,
     autoRaiseTpCountMaxMarginUsdt: 0,
+    tpCloseMode: "equal",
   });
 });
 

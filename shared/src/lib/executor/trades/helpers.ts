@@ -1,4 +1,4 @@
-import { Account, buildTPTargets, IPosition, Position } from "../../database";
+import { Account, buildTPTargets, calculateTPPercentages, IPosition, Position } from "../../database";
 import {
   ExchangeFactory,
   ExchangeCredentials,
@@ -213,16 +213,21 @@ export async function enforceTpCountFeasibility(
 
   const specs = await exchange.getInstrumentSpecs(runtime.symbol);
   const minExecutableTpQty = Math.max(specs.lotSz || 0, 0);
-  const requiredTotalQty = requestedTpCount * minExecutableTpQty;
-  if (!minExecutableTpQty || orderQuantity >= requiredTotalQty) {
-    return { ...sizing, orderQuantity, orderLeverage };
-  }
-
   const effectiveRiskConfig = await resolveEffectiveRiskConfig({
     accountId: runtime.accountId,
     channelId: runtime.channelId,
   });
   if (!effectiveRiskConfig.autoRaiseTpCountEnabled) {
+    return { ...sizing, orderQuantity, orderLeverage };
+  }
+
+  const percentages = calculateTPPercentages(requestedTpCount, effectiveRiskConfig.tpCloseMode || "equal");
+  const minPercentage = Math.min(...percentages);
+  
+  // To ensure the smallest leg gets minExecutableTpQty, the total must be: minExecutableTpQty / (minPercentage / 100)
+  const requiredTotalQty = minPercentage > 0 ? minExecutableTpQty / (minPercentage / 100) : requestedTpCount * minExecutableTpQty;
+
+  if (!minExecutableTpQty || orderQuantity >= requiredTotalQty) {
     return { ...sizing, orderQuantity, orderLeverage };
   }
 

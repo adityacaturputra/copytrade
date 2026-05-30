@@ -158,3 +158,24 @@ export function calculateRisk(params: RiskCalcInput): RiskCalcOutput {
     leverage,
   };
 }
+
+export function calculateTPPercentages(count: number, mode: "equal" | "halving" = "equal"): number[] {
+  if (count <= 0) return []; if (count === 1) return [100];
+
+  if (mode === "halving") {
+    const percentages: number[] = [];
+    let remaining = 100;
+    for (let i = 0; i < count - 1; i++) {
+      const pct = Math.floor((remaining / 2) * 100) / 100;
+      percentages.push(pct);
+      remaining = Math.round((remaining - pct) * 100) / 100;
+    }
+    percentages.push(remaining);
+    return percentages;
+  }
+
+  const base = Math.floor((100 / count) * 100) / 100;
+  const percentages: number[] = []; let allocated = 0;
+  for (let i = 0; i < count - 1; i++) { percentages.push(base); allocated = Math.round((allocated + base) * 100) / 100; }
+  percentages.push(Math.round((100 - allocated) * 100) / 100); return percentages;
+}
