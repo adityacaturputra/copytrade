@@ -105,6 +105,16 @@ Watch as chaotic Discord messages are parsed into clean, actionable data. Review
 Track all open positions with real-time PnL, margin details, and active TP/SL targets.
 ![Positions](./images/positions.png)
 
+### 🤖 Agentic AI Capabilities
+This system goes beyond basic static logic by leveraging autonomous AI agents to manage your trades and interact with you.
+- **Model Context Protocol (MCP) & Extensive Tooling**: The AI is powered by a robust Tool-Calling architecture giving it full read/write access to the system context. Through an extensive suite of tools, the agent can autonomously query `account_market` data, execute `orders_trading`, manage `drafts`, analyze `database_logs`, and even adjust `settings_risk` on the fly.
+- **Agentic Position Monitor**: A background AI agent constantly evaluates open positions against live market trends. It autonomously reasons whether to hold, adjust Stop-Loss/Take-Profit, or close a trade early to maximize profit or minimize loss.
+- **Interactive Agentic Chat**: A built-in AI assistant interface that allows you to converse with your trading bot. You can simply ask the AI to "pull the latest error logs", "check my current Binance balance", or "summarize my trading performance today".
+<p align="center">
+  <img src="./images/agentic-position-monitor.png" width="49%" />
+  <img src="./images/agentic-chat.png" width="49%" />
+</p>
+
 ### 📋 Transparency & Logs
 Full transparency into system operations is essential for automated trading.
 - **Execution Actions (`actions.png`)**: Specific records detailing order executions, filled prices, TP/SL triggers, and exchange responses.
@@ -149,6 +159,11 @@ Keep your MongoDB lightweight and fast. Configure auto-deletion policies for old
 <img src="./images/settings-log-cleanup-and-reset-data.png" width="100%" />
 
 </details>
+
+### 🔒 Security & Action Authorization
+To protect your trading capital from accidental or malicious modifications, the entire system is guarded by a strict **Action Lock (Padlock)** mechanism.
+- By default, both the dashboard and the Agentic AI operate in **Read-Only Mode**. You can freely view logs, check balances, and monitor positions safely.
+- To execute trades, save configurations, or allow the Agentic AI to take write-actions on your behalf, you must explicitly "Unlock the Padlock" by providing your master action password. This ensures you remain in complete control of when the system (or the AI) is allowed to interact with live exchange environments.
 
 ---
 
