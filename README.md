@@ -105,25 +105,49 @@ Watch as chaotic Discord messages are parsed into clean, actionable data. Review
 Track all open positions with real-time PnL, margin details, and active TP/SL targets.
 ![Positions](./images/positions.png)
 
-### 📋 Actions & Logs
-Full transparency into what the system is doing, including order execution logs and cron job histories.
+### 📋 Transparency & Logs
+Full transparency into system operations is essential for automated trading.
+- **Execution Actions (`actions.png`)**: Specific records detailing order executions, filled prices, TP/SL triggers, and exchange responses.
+- **System Logs (`logs.png`)**: A comprehensive audit trail of all background processes. Features built-in **Log Levels (Info, Warn, Error, Debug)** allowing you to easily filter and diagnose raw API responses, AI reasoning delays, and system health status.
 <p align="center">
   <img src="./images/actions.png" width="49%" />
   <img src="./images/logs.png" width="49%" />
 </p>
 
-### ⚙️ Advanced Settings
-Configure everything from API keys to granular risk management rules and AI provider selection.
+### ⚙️ Extensive Configuration & System Settings
+The application provides a highly granular settings dashboard to fine-tune every aspect of the trading bot:
+
+**1. Risk Management**
+Control your capital exposure by defining global rules such as Default Leverage, Position Sizing strategy (Fixed USDT vs % of Margin), Maximum Daily Loss Limits, and Minimum AI Confidence Thresholds.
 ![Risk Management Settings](./images/settings-risk-management.png)
+
 <details>
-<summary><b>View More Settings Screenshots</b></summary>
+<summary><b>View More Features & Configurations</b></summary>
 <br>
+
+**2. Trader Accounts & Multi-Exchange Support**
+Manage multiple exchange bindings in one place. Securely input API Keys, Secrets, and Passphrases to seamlessly switch execution endpoints between MEXC, Binance, Bybit, or Paper Trading.
 <p align="center">
   <img src="./images/settings-trader-accounts.png" width="49%" />
-  <img src="./images/settings-signal-configurations.png" width="49%" />
-  <img src="./images/settings-cron-job-settings.png" width="49%" />
-  <img src="./images/settings-proxy-configurations.png" width="49%" />
+  <img src="./images/settings-trader-accounts-form.png" width="49%" />
 </p>
+
+**3. Signal Configurations**
+Select exactly where your signals come from. Register Discord Guild IDs, Channel IDs, and Telegram chat IDs. You can even map specific channels to dedicated AI models.
+<img src="./images/settings-signal-configurations.png" width="100%" />
+
+**4. Cron Job Settings**
+Manage the heartbeat of your automated system. Adjust the intervals for signal polling (e.g., fetch new messages every 5 minutes) and position monitoring loops (e.g., check open trades every 30 minutes).
+<img src="./images/settings-cron-job-settings.png" width="100%" />
+
+**5. Proxy Configurations**
+Built-in support for HTTP/SOCKS5 proxies. This is crucial for bypassing regional API restrictions (like Telegram in certain countries) or preventing IP rate-limits from exchanges.
+<img src="./images/settings-proxy-configurations.png" width="100%" />
+
+**6. System Maintenance & Cleanup**
+Keep your MongoDB lightweight and fast. Configure auto-deletion policies for old logs/drafts, and perform safe hard-resets of the database when transitioning strategies.
+<img src="./images/settings-log-cleanup-and-reset-data.png" width="100%" />
+
 </details>
 
 ---
