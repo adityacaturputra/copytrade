@@ -285,6 +285,28 @@ install_and_build() {
 
 start_or_restart_pm2() {
   log "Starting/restarting PM2 process: $PROJECT_NAME"
+
+  local ecosystem="$APP_DIR/ecosystem.config.js"
+  if [[ -f "$ecosystem" ]]; then
+    log "Using ecosystem config: $ecosystem"
+    log "Sourcing .env into the shell so pm2 inherits all vars (incl. MONGODB_URI)."
+    if [[ -f "$APP_DIR/.env" ]]; then
+      set -a
+      # shellcheck disable=SC1091
+      source "$APP_DIR/.env"
+      set +a
+    fi
+    if pm2 describe "$PROJECT_NAME" >/dev/null 2>&1; then
+      pm2 delete "$PROJECT_NAME"
+    fi
+    # Do NOT pass --update-env: it would restore a stale saved env and drop
+    # the vars we just sourced from .env.
+    pm2 start "$ecosystem"
+    pm2 save
+    return
+  fi
+
+  # Fallback: legacy direct start (kept for backward compatibility)
   if [[ ! -f "$BACKEND_ENTRY" ]]; then
     die "Missing backend build output: $BACKEND_ENTRY. Build step likely failed."
   fi
