@@ -246,7 +246,12 @@ export async function POST(request: NextRequest) {
 
     // Handle signal config update
     if (body.signal) {
-      const { fetchLimit, timeWindowHours, batchSize } = body.signal;
+      const {
+        fetchLimit,
+        timeWindowHours,
+        batchSize,
+        orphanCleanupLookbackHours,
+      } = body.signal;
 
       if (fetchLimit !== undefined && (fetchLimit < 1 || fetchLimit > 100)) {
         return NextResponse.json(
@@ -278,6 +283,19 @@ export async function POST(request: NextRequest) {
           { status: 400 },
         );
       }
+      if (
+        orphanCleanupLookbackHours !== undefined &&
+        (orphanCleanupLookbackHours < 1 || orphanCleanupLookbackHours > 720)
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "Orphan cleanup lookback must be between 1 and 720 hours (30 days)",
+          },
+          { status: 400 },
+        );
+      }
 
       const includeImageUrls = body.signal.includeImageUrls;
       const monitorVisionImages = body.signal.monitorVisionImages;
@@ -287,6 +305,9 @@ export async function POST(request: NextRequest) {
         ...(batchSize !== undefined && { batchSize }),
         ...(includeImageUrls !== undefined && { includeImageUrls }),
         ...(monitorVisionImages !== undefined && { monitorVisionImages }),
+        ...(orphanCleanupLookbackHours !== undefined && {
+          orphanCleanupLookbackHours,
+        }),
       });
     }
 

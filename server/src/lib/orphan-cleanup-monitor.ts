@@ -1,4 +1,5 @@
 import { Account, Position } from "@copytrade/shared/lib/database/index";
+import { getSignalConfig } from "@copytrade/shared/lib/signal/config";
 import { ExchangeFactory } from "@copytrade/shared/lib/exchange/ExchangeFactory";
 import { createTradeLog } from "@copytrade/shared/lib/trade-log/store";
 import {
@@ -19,10 +20,35 @@ export async function runOrphanCleanupMonitor() {
   try {
     const activeAccounts = await Account.find({ isActive: true }).exec();
 
-    if (activeAccounts.length === 0) {
+    if (!activeAccounts || activeAccounts.length === 0) {
       console.log(
         `[OrphanCleanup] No active accounts found — nothing to clean`,
       );
+      return result;
+    }
+
+    // Fast Database Gate:
+    // If there are no open/pending positions AND no positions closed within the configured lookback window,
+    // there cannot be any new orphaned protection orders. Skip exchange calls to conserve proxy quota.
+    const signalCfg = await getSignalConfig();
+    const lookbackHours = Math.max(
+      1,
+      Number(signalCfg.orphanCleanupLookbackHours) || 6,
+    );
+    const recentCutoff = new Date(Date.now() - lookbackHours * 60 * 60 * 1000);
+
+    const activeOrRecentPositionsCount = await Position.countDocuments?.({
+      $or: [
+        { status: { $in: ["open", "pending"] } },
+        { closedAt: { $gte: recentCutoff } },
+      ],
+    }).catch(() => null);
+
+    if (activeOrRecentPositionsCount === 0) {
+      console.log(
+        `[OrphanCleanup] No open, pending, or recently closed positions in DB — skipping exchange audit to conserve proxy quota`,
+      );
+      return result;
     }
 
     for (const account of activeAccounts) {

@@ -157,7 +157,8 @@ export const SignalConfigSchema = new Schema({
   timeWindowHours: { type: Number, default: 24 },
   batchSize: { type: Number, default: 5 },
   includeImageUrls: { type: Boolean, default: false },
-  monitorVisionImages: { type: Boolean, default: false }
+  monitorVisionImages: { type: Boolean, default: false },
+  orphanCleanupLookbackHours: { type: Number, default: 6 }
 }, { strict: false });
 
 export const AgentSessionSchema = new Schema({

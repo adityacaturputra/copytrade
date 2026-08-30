@@ -8,6 +8,7 @@ export interface SignalSettingsForm {
   batchSize: number;
   includeImageUrls: boolean;
   monitorVisionImages: boolean;
+  orphanCleanupLookbackHours: number;
 }
 
 export interface CronJobFormData {

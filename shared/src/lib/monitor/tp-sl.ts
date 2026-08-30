@@ -319,6 +319,17 @@ export async function runTpslMonitor(): Promise<{
   };
 
   try {
+    // ─── Fast Database Gate ──────────────────────────────────────────
+    // If there are no pending or open positions in DB, nothing needs monitoring or TP/SL placement.
+    // Skip exchange calls completely to conserve proxy quota.
+    const relevantPositionsCount = await Position.countDocuments({
+      status: { $in: ["pending", "open"] },
+    });
+
+    if (relevantPositionsCount === 0) {
+      return result;
+    }
+
     // ─── Step 1: Check pending LIMIT positions ───────────────────────────
     const pendingPositions = await Position.find({ status: "pending" });
 
@@ -458,27 +469,30 @@ export async function runTpslMonitor(): Promise<{
     const openPositionsForSync = (await Position.find({
       status: "open",
     })) as IPosition[];
-    const exchangePositions = await buildExchangePositionMap(
-      openPositionsForSync,
-      getAccountPositionKey,
-      getErrorMessage,
-      {
-        label: "[TP/SL Monitor]",
-        type: "tpsl-monitor",
-        action: "exchange_positions_fetch_failed",
-      },
-    );
-    await syncClosedPositions(
-      openPositionsForSync,
-      exchangePositions,
-      result,
-      getAccountPositionKey,
-      {
-        prefix: "[TP/SL Monitor]",
-        processIdPrefix: "tpslsync",
-        processType: "tpsl-monitor",
-      },
-    );
+
+    if (openPositionsForSync.length > 0) {
+      const exchangePositions = await buildExchangePositionMap(
+        openPositionsForSync,
+        getAccountPositionKey,
+        getErrorMessage,
+        {
+          label: "[TP/SL Monitor]",
+          type: "tpsl-monitor",
+          action: "exchange_positions_fetch_failed",
+        },
+      );
+      await syncClosedPositions(
+        openPositionsForSync,
+        exchangePositions,
+        result,
+        getAccountPositionKey,
+        {
+          prefix: "[TP/SL Monitor]",
+          processIdPrefix: "tpslsync",
+          processType: "tpsl-monitor",
+        },
+      );
+    }
 
     // ─── Step 2: Place TP/SL for open positions missing them ─────────────
     // Use atomic findOneAndUpdate to claim each position — prevents concurrent

@@ -1,5 +1,5 @@
 import mongoose, { Schema, type Document, type Model, models } from "mongoose";
-import { connectDB } from "../database/index";
+import { connectDB } from "../database";
 import {
   CRON_PROVIDER_OPTIONS,
   type CronProvider,
@@ -93,7 +93,7 @@ export const DEFAULT_CRON_JOBS: Omit<CronJobConfig, "id">[] = [
     title: "CopyTrade - Orphan Cleanup",
     url: "/api/cron/orphan-cleanup",
     schedule: {
-      minutes: 1,
+      minutes: 15,
       hours: [],
       mdays: [],
       months: [],
@@ -176,7 +176,11 @@ function normalizeCronJobConfig(job: Partial<CronJobConfig> | null | undefined) 
 }
 
 export function normalizeCronSettings(
-  settings: Partial<CronSettingsType> | null | undefined,
+  settings?: {
+    provider?: unknown;
+    baseUrl?: unknown;
+    jobs?: Array<Partial<CronJobConfig> | null | undefined>;
+  } | null,
 ): CronSettingsType {
   const jobs =
     Array.isArray(settings?.jobs) && settings.jobs.length > 0

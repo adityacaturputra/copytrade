@@ -8,6 +8,7 @@ export interface SignalConfigType {
   batchSize: number; // how many messages to send to AI per bulk request (default 5)
   includeImageUrls: boolean; // whether to include images in AI prompts (default false)
   monitorVisionImages: boolean; // inject Discord chart images into position monitor agent vision (default false)
+  orphanCleanupLookbackHours: number; // lookback window in hours for checking closed positions in orphan cleanup (default 6)
 }
 
 // ─── Defaults ─────────────────────────────────────────────────────────────────
@@ -18,6 +19,7 @@ const DEFAULT_SIGNAL_CONFIG: SignalConfigType = {
   batchSize: 5,
   includeImageUrls: false,
   monitorVisionImages: false,
+  orphanCleanupLookbackHours: 6,
 };
 
 // ─── DB Helpers ───────────────────────────────────────────────────────────────
@@ -35,6 +37,7 @@ export async function getSignalConfig(): Promise<SignalConfigType> {
         batchSize: settings.batchSize ?? DEFAULT_SIGNAL_CONFIG.batchSize,
         includeImageUrls: settings.includeImageUrls ?? false,
         monitorVisionImages: settings.monitorVisionImages ?? false,
+        orphanCleanupLookbackHours: settings.orphanCleanupLookbackHours ?? DEFAULT_SIGNAL_CONFIG.orphanCleanupLookbackHours,
       };
     }
   } catch (err) {
@@ -66,6 +69,9 @@ export async function setSignalConfig(
   if (config.monitorVisionImages !== undefined) {
     update.monitorVisionImages = config.monitorVisionImages;
   }
+  if (config.orphanCleanupLookbackHours !== undefined) {
+    update.orphanCleanupLookbackHours = config.orphanCleanupLookbackHours;
+  }
   const doc = await SignalConfigModel.findOneAndUpdate({}, update, {
     upsert: true,
     new: true,
@@ -76,5 +82,6 @@ export async function setSignalConfig(
     batchSize: doc.batchSize ?? DEFAULT_SIGNAL_CONFIG.batchSize,
     includeImageUrls: doc.includeImageUrls ?? false,
     monitorVisionImages: doc.monitorVisionImages ?? false,
+    orphanCleanupLookbackHours: doc.orphanCleanupLookbackHours ?? DEFAULT_SIGNAL_CONFIG.orphanCleanupLookbackHours,
   };
 }

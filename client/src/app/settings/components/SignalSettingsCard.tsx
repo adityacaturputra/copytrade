@@ -40,6 +40,18 @@ export function SignalSettingsCard({
               setSignalCfg((prev) => ({ ...prev, batchSize: value }))
             }
           />
+          <NumberField
+            label="Orphan Cleanup Lookback (hours)"
+            value={signalCfg.orphanCleanupLookbackHours}
+            min={1}
+            max={720}
+            onChange={(value) =>
+              setSignalCfg((prev) => ({
+                ...prev,
+                orphanCleanupLookbackHours: value,
+              }))
+            }
+          />
           <CheckboxField
             id="includeImageUrls"
             label="Include image URLs in AI analysis"

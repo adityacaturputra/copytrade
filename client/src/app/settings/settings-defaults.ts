@@ -6,6 +6,7 @@ export const DEFAULT_SIGNAL_SETTINGS: SignalSettingsForm = {
   batchSize: 5,
   includeImageUrls: false,
   monitorVisionImages: false,
+  orphanCleanupLookbackHours: 6,
 };
 
 export const DEFAULT_CRON_JOBS: CronJobFormData[] = [

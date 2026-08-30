@@ -4,17 +4,27 @@ import { beforeEach, test, vi } from "vitest";
 const orphanCleanupMocks = vi.hoisted(() => ({
   accountFind: vi.fn(),
   positionFind: vi.fn(),
+  positionCountDocuments: vi.fn(),
   getClientForAccount: vi.fn(),
   toExchangeCredentials: vi.fn(),
   createTradeLog: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@copytrade/shared/lib/database/index", () => ({
+  connectDB: vi.fn().mockResolvedValue(undefined),
   Account: {
     find: orphanCleanupMocks.accountFind,
   },
   Position: {
     find: orphanCleanupMocks.positionFind,
+    countDocuments: orphanCleanupMocks.positionCountDocuments,
+  },
+  SignalConfig: {
+    findOne: () => ({
+      sort: () => ({
+        lean: vi.fn().mockResolvedValue({ orphanCleanupLookbackHours: 6 }),
+      }),
+    }),
   },
 }));
 
@@ -36,7 +46,7 @@ import { runOrphanCleanupMonitor } from "./orphan-cleanup-monitor";
 
 function createExecQuery(result: unknown) {
   const exec = vi.fn().mockResolvedValue(result);
-  return { exec };
+  return Object.assign(Promise.resolve(result), { exec });
 }
 
 function createLeanExecQuery(result: unknown) {
@@ -48,6 +58,7 @@ function createLeanExecQuery(result: unknown) {
 beforeEach(() => {
   orphanCleanupMocks.accountFind.mockReset();
   orphanCleanupMocks.positionFind.mockReset();
+  orphanCleanupMocks.positionCountDocuments.mockReset();
   orphanCleanupMocks.getClientForAccount.mockReset();
   orphanCleanupMocks.toExchangeCredentials.mockReset();
   orphanCleanupMocks.createTradeLog.mockReset();
@@ -58,7 +69,30 @@ beforeEach(() => {
   orphanCleanupMocks.createTradeLog.mockResolvedValue(undefined);
 });
 
+test("orphan cleanup monitor skips exchange calls when no active or recent positions exist in DB", async () => {
+  orphanCleanupMocks.accountFind.mockReturnValue(
+    createExecQuery([
+      {
+        _id: "acc-1",
+        name: "VIP",
+        isActive: true,
+        tradingPlatform: "bybit",
+        exchangeData: { apiKey: "x" },
+      },
+    ]),
+  );
+  orphanCleanupMocks.positionCountDocuments.mockReturnValue(createExecQuery(0));
+
+  const result = await runOrphanCleanupMonitor();
+
+  assert.equal(result.accountsChecked, 0);
+  assert.equal(result.algoOrdersChecked, 0);
+  assert.equal(result.orphansCancelled, 0);
+  assert.equal(orphanCleanupMocks.getClientForAccount.mock.calls.length, 0);
+});
+
 test("orphan cleanup monitor removes stale TP/SL based only on tracked and live positions", async () => {
+  orphanCleanupMocks.positionCountDocuments.mockReturnValue(createExecQuery(1));
   const exchange = {
     getAlgoOrders: vi.fn().mockResolvedValue([
       {

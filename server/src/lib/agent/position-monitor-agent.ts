@@ -42,6 +42,10 @@ export async function runPositionMonitorAgent(): Promise<{
     })) as PositionDocLike[];
     result.checked = initialOpenPositions.length;
 
+    if (initialOpenPositions.length === 0) {
+      return result;
+    }
+
     await logExecutorInfo(
       `🤖 Monitoring ${initialOpenPositions.length} open positions with autonomous agent`,
       {

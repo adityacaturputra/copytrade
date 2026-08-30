@@ -168,6 +168,7 @@ export interface ISignalConfig extends Document {
   batchSize?: number;
   includeImageUrls?: boolean;
   monitorVisionImages?: boolean;
+  orphanCleanupLookbackHours?: number;
 }
 
 export interface IAgentSession extends Document {

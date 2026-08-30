@@ -35,6 +35,8 @@ export function useSettingsConfig(check403: (res: Response) => boolean) {
           batchSize: json.signal.batchSize || 5,
           includeImageUrls: json.signal.includeImageUrls || false,
           monitorVisionImages: json.signal.monitorVisionImages || false,
+          orphanCleanupLookbackHours:
+            json.signal.orphanCleanupLookbackHours ?? 6,
         });
       }
     } catch {}

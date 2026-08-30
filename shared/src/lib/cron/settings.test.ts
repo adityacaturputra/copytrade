@@ -166,7 +166,7 @@ test("getCronSettings string errors also fall back to defaults", async () => {
   const settings = await getCronSettings();
 
   assert.equal(settings.provider, DEFAULT_CRON_PROVIDER);
-  assert.equal(settings.jobs.length, 3);
+  assert.equal(settings.jobs.length, 4);
   assert.deepEqual(warnSpy.mock.calls[0], [
     "Failed to fetch cron settings from DB:",
     "db string",
