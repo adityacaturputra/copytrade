@@ -137,7 +137,17 @@ export async function processTrackedMessages({
       if (!batchResult?.signal) {
         await ProcessedMessage.updateOne(
           { messageId: msg.messageId, accountId: msg.sourceId || null },
-          { status: batchResult?.parseError ? "failed" : "ignored", processedAt: new Date() },
+          {
+            $set: {
+              status: batchResult?.parseError ? "failed" : "ignored",
+              processedAt: new Date(),
+              channelId: msg.channelId,
+              author: msg.author,
+              content: msg.content,
+              signalType: "unknown",
+              sourceTimestamp: msg.timestamp,
+            },
+          },
           { upsert: true },
         );
         continue;
@@ -164,7 +174,20 @@ export async function processTrackedMessages({
         result.drafted++;
         await ProcessedMessage.updateOne(
           { messageId: msg.messageId, accountId: msg.sourceId || null },
-          { status: "drafted", processedAt: new Date() },
+          {
+            $set: {
+              status: "drafted",
+              processedAt: new Date(),
+              channelId: msg.channelId,
+              author: msg.author,
+              content: msg.content,
+              signalType: signal.action,
+              parsedSignal: JSON.stringify(signal),
+              sourceTimestamp: msg.timestamp,
+              processId: msg.processId,
+            },
+          },
+          { upsert: true },
         );
         await logProcessStep({
           accountId: msg.sourceId,
@@ -193,7 +216,20 @@ async function processAutoMode(
 
   await ProcessedMessage.updateOne(
     { messageId: msg.messageId, accountId: msg.sourceId || null },
-    { status: draftOutcome.status === "accepted" ? "executed" : "failed", processedAt: new Date() },
+    {
+      $set: {
+        status: draftOutcome.status === "accepted" ? "executed" : "failed",
+        processedAt: new Date(),
+        channelId: msg.channelId,
+        author: msg.author,
+        content: msg.content,
+        signalType: signal.action,
+        parsedSignal: JSON.stringify(signal),
+        sourceTimestamp: msg.timestamp,
+        processId: msg.processId,
+      },
+    },
+    { upsert: true },
   );
 
   if (draftOutcome.status === "accepted") result.executed++;
@@ -224,7 +260,18 @@ async function handleProcessMessageError(
   result.errors.push(`Message ${msg.messageId}: ${errMsg}`);
   await ProcessedMessage.updateOne(
     { messageId: msg.messageId, accountId: msg.sourceId || null },
-    { status: "failed", processedAt: new Date() },
+    {
+      $set: {
+        status: "failed",
+        processedAt: new Date(),
+        channelId: msg.channelId,
+        author: msg.author,
+        content: msg.content,
+        signalType: "unknown",
+        sourceTimestamp: msg.timestamp,
+      },
+    },
+    { upsert: true },
   );
 
   const autoDraft = await DraftTrade.findOne({
