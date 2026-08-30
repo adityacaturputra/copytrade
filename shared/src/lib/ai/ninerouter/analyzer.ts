@@ -21,13 +21,11 @@ export class NineRouterAnalyzer extends OpenAIAnalyzer {
     if (sseContent !== null) return sseContent;
 
     try {
-      const data = JSON.parse(text) as {
-        choices?: Array<{ message?: { content?: string } }>;
-      };
+      const data = parseCompletionJson(text);
       return data.choices?.[0]?.message?.content || "";
     } catch (error) {
       console.warn(
-        `[9router] Unparseable completion payload (content-type=${response.headers.get("content-type") || "unknown"}): ${text.slice(0, 300)}`,
+        `[9router] Unparseable completion payload (content-type=${response.headers?.get?.("content-type") || "unknown"}): ${text.slice(0, 300)}`,
       );
       throw error;
     }
@@ -40,11 +38,29 @@ export class NineRouterAnalyzer extends OpenAIAnalyzer {
   ): Record<string, unknown> {
     return {
       model: this.model,
+      stream: false,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userContent },
       ],
     };
+  }
+}
+
+function parseCompletionJson(text: string): {
+  choices?: Array<{ message?: { content?: string } }>;
+} {
+  try {
+    return JSON.parse(text);
+  } catch (initialError) {
+    // Handle payloads with trailing SSE chunks or stream artifacts (e.g. `}}da` or `}}\ndata: [DONE]`)
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+    if (start !== -1 && end !== -1 && end > start) {
+      const trimmedJson = text.slice(start, end + 1);
+      return JSON.parse(trimmedJson);
+    }
+    throw initialError;
   }
 }
 

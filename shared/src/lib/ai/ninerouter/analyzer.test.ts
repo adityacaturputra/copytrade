@@ -67,3 +67,23 @@ test("NineRouterAnalyzer tolerates done-only SSE payloads", async () => {
 
   assert.equal(raw, "");
 });
+
+test("NineRouterAnalyzer parses JSON completion payload with trailing SSE artifacts", async () => {
+  const payloadWithTrailing =
+    '{"object":"chat.completion","model":"auto (phantom/vibecode/glm-5.3)","choices":[{"index":0,"message":{"role":"assistant","content":"[{\\"messageId\\":\\"1543270789191573605\\",\\"signal\\":null}]"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3165,"completion_tokens":75,"total_tokens":3240}}da';
+
+  nineRouterMocks.fetch.mockResolvedValueOnce({
+    ok: true,
+    text: vi.fn().mockResolvedValueOnce(payloadWithTrailing),
+  });
+
+  const analyzer = new NineRouterAnalyzer();
+  const raw = await (analyzer as unknown as {
+    callTextCompletion(systemPrompt: string, userMessage: string): Promise<string>;
+  }).callTextCompletion("system", "message");
+
+  assert.equal(
+    raw,
+    '[{"messageId":"1543270789191573605","signal":null}]',
+  );
+});
