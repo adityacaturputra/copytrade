@@ -36,7 +36,16 @@ if command -v pm2 &>/dev/null; then
   echo "✅ PM2 already installed"
 else
   echo "📦 Installing PM2..."
-  sudo npm install -g pm2
+  if command -v npm &>/dev/null; then
+    GLOBAL_ROOT=$(npm root -g 2>/dev/null || true)
+    if [ -n "$GLOBAL_ROOT" ] && [ -w "$GLOBAL_ROOT" ] || [ "$(id -u)" -eq 0 ]; then
+      npm install -g pm2
+    else
+      sudo env "PATH=$PATH" npm install -g pm2
+    fi
+  else
+    sudo env "PATH=$PATH" npm install -g pm2
+  fi
   echo "✅ PM2 installed"
 fi
 

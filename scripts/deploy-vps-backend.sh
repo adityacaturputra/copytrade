@@ -156,6 +156,22 @@ ensure_node20() {
   $SUDO apt-get install -y nodejs
 }
 
+install_npm_global() {
+  local pkg="$1"
+  if command -v npm >/dev/null 2>&1; then
+    local global_root
+    global_root="$(npm root -g 2>/dev/null || true)"
+    if [[ -n "$global_root" && -w "$global_root" ]] || [[ "$EUID" -eq 0 ]]; then
+      npm install -g "$pkg"
+    else
+      # Preserve user PATH so sudo can find node and npm (handles NVM / custom paths)
+      $SUDO env "PATH=$PATH" npm install -g "$pkg"
+    fi
+  else
+    die "npm command not found. Please install npm or add it to PATH."
+  fi
+}
+
 ensure_pnpm() {
   if command -v pnpm >/dev/null 2>&1; then
     log "pnpm $(pnpm -v) already installed. Skipping."
@@ -164,12 +180,15 @@ ensure_pnpm() {
 
   if command -v corepack >/dev/null 2>&1; then
     log "Installing pnpm via corepack..."
-    corepack enable
-    corepack prepare pnpm@10.33.0 --activate
-  else
-    log "Installing pnpm globally via npm..."
-    $SUDO npm install -g pnpm@10.33.0
+    corepack enable || true
+    corepack prepare pnpm@10.33.0 --activate || true
+    if command -v pnpm >/dev/null 2>&1; then
+      return
+    fi
   fi
+
+  log "Installing pnpm globally via npm..."
+  install_npm_global "pnpm@10.33.0"
 }
 
 ensure_pm2() {
@@ -178,7 +197,7 @@ ensure_pm2() {
     return
   fi
   log "Installing pm2 globally..."
-  $SUDO npm install -g pm2
+  install_npm_global "pm2"
 }
 
 is_valid_ipv4() {
